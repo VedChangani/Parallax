@@ -2,7 +2,8 @@
 
 ## Current Milestone
 
-V1 engine architecture approved and documented. No engine code written yet.
+`Bar` and `BarSeries` implemented in `engine.data`, with focused validation
+tests.
 
 ## Completed
 
@@ -28,15 +29,48 @@ V1 engine architecture approved and documented. No engine code written yet.
   reproducibility, testing strategy, engine boundary.
 - Recorded the frozen decisions as D-4 to D-16 in `docs/decisions.md`.
 
+### Engine implementation batch 1: `Bar` and `BarSeries`
+
+- `in.vedchangani.parallax.engine.data.Bar`: immutable record (`LocalDate
+  date`, `BigDecimal open, high, low, close`, `long volume`). Validates at
+  construction: date non-null; all prices > 0; `low <= min(open, close)`;
+  `high >= max(open, close)`; `volume >= 0`. No symbol, provider, ID, or
+  persistence annotation; matches D-4.
+- `in.vedchangani.parallax.engine.data.BarSeries`: immutable value type
+  (`String symbol`, `List<Bar> bars`). Validates symbol non-null/non-blank,
+  bars non-null/non-empty, and strictly ascending dates (rejects duplicate
+  or out-of-order dates rather than sorting or deduplicating). Takes a
+  defensive copy via `List.copyOf` and exposes an unmodifiable list.
+  `BarSeries` has no knowledge of `BacktestConfig`, date ranges,
+  strategies, indicators, execution, or persistence — those are engine
+  run-loop and backend concerns per the approved architecture.
+- 22 new tests: `BarTest` (13 cases — valid bar, zero-volume flat bar, null
+  date, zero/negative price on each OHLC field, low above open/close, high
+  below open/close, negative volume) and `BarSeriesTest` (9 cases — valid
+  ascending series, null/blank symbol, null/empty bar list, duplicate date,
+  out-of-order date, unmodifiable returned list, defensive copy of a
+  mutable input list).
+
+### Namespace consistency correction
+
+- The engine's approved root package is `in.vedchangani.parallax.engine`.
+  `Bar`/`BarSeries`/`BarTest`/`BarSeriesTest` were moved to this root in an
+  earlier pass, but `package-info.java` and `EngineSmokeTest` had been left
+  under the old root `in.vedchangani.engine`. Both were moved and their
+  package declarations updated to `in.vedchangani.parallax.engine`. No
+  behavior, field, or validation rule was changed; nothing else referenced
+  the old package, so no other files needed updating.
+
 ## Current Architecture
 
 ```
 Parallax/
 ├── pom.xml                  # root Maven aggregator (packaging=pom)
 ├── mvnw, mvnw.cmd, .mvn/    # Maven wrapper
-├── engine/                  # plain Java engine module (skeleton only)
+├── engine/                  # plain Java engine module
 │   ├── pom.xml
-│   └── src/{main,test}/java/in/vedchangani/engine/
+│   └── src/{main,test}/java/in/vedchangani/parallax/engine/
+│       └── data/            # Bar, BarSeries (implemented)
 ├── backend/                 # Spring Boot application module
 ├── frontend/                # React/Vite application
 ├── docs/
@@ -57,14 +91,19 @@ engine root.
 
 ## Verification
 
-Run from `C:\Parallax` after the documentation update:
+Run from `C:\Parallax`:
 
 - `./mvnw clean install`: BUILD SUCCESS. Reactor: Parallax (pom), Parallax
-  Engine, backend. Engine 1/1 tests pass (`EngineSmokeTest`); backend 1/1
-  tests pass (`BackendApplicationTests`).
-- Docs consistency check: every D-n reference resolves to a heading in
-  `decisions.md`; all progress references point to `docs/progress.md`; no
-  terms from the superseded draft design remain.
+  Engine, backend.
+- `./mvnw -pl engine test`: `Tests run: 23, Failures: 0, Errors: 0, Skipped:
+  0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1), all now
+  under `in.vedchangani.parallax.engine`.
+- `git status --short`: only files under `engine/src/.../parallax/` changed
+  (moves plus package declaration edits); `backend/` and `frontend/` are
+  unchanged.
+- Docs consistency check (prior milestone): every D-n reference resolves to
+  a heading in `decisions.md`; all progress references point to
+  `docs/progress.md`; no terms from the superseded draft design remain.
 
 ## Decisions
 
@@ -84,7 +123,6 @@ See [decisions.md](decisions.md).
 
 - Root `README.md` written during bootstrap is no longer in the repository.
   Confirm whether that was intended.
-- Nothing is committed yet; the repository has no commits.
 
 ## Open Questions (edge cases not specified by the approved design)
 
@@ -101,4 +139,6 @@ See [decisions.md](decisions.md).
 
 ## Next Milestone
 
-`Bar` + `BarSeries` + focused validation tests. Nothing else.
+`IndicatorSpec` + `Indicator` foundation (SMA/EMA/RSI runtime contract from
+D-11: `update(BigDecimal close)`, `isReady()`, `value()`). No strategy,
+execution, or portfolio logic in that batch.
