@@ -1,4 +1,4 @@
-package in.vedchangani.engine;
+package in.vedchangani.parallax.engine;
 
 import org.junit.jupiter.api.Test;
 
