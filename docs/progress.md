@@ -2,8 +2,8 @@
 
 ## Current Milestone
 
-`Bar` and `BarSeries` implemented in `engine.data`, with focused validation
-tests.
+`IndicatorType`, `IndicatorSpec`, and the `Indicator` runtime interface
+implemented in `engine.indicator`, with focused tests.
 
 ## Completed
 
@@ -61,6 +61,39 @@ tests.
   behavior, field, or validation rule was changed; nothing else referenced
   the old package, so no other files needed updating.
 
+### Engine implementation batch 2: `IndicatorType`, `IndicatorSpec`, `Indicator`
+
+- `in.vedchangani.parallax.engine.indicator.IndicatorType`: enum with
+  exactly `SMA`, `EMA`, `RSI`.
+- `in.vedchangani.parallax.engine.indicator.IndicatorSpec`: immutable
+  record (`IndicatorType type`, `int period`). Validates type non-null,
+  `period >= 1`, and `period >= 2` for `RSI`. Carries no runtime state, no
+  calculated value, no symbol, timeframe, date range, or persistence
+  concern — it is the definition of what is calculated, not the
+  calculation. Records compare by value, so two specs with the same type
+  and period are equal.
+- `in.vedchangani.parallax.engine.indicator.Indicator`: the runtime
+  interface — `void update(BigDecimal close)`, `boolean isReady()`,
+  `double value()`. Deliberately minimal: no `calculate(BarSeries)`, no
+  `update(List)`, no history accessor, no listeners, no `reset()` (no
+  concrete V1 need demonstrated). One instance is created per backtest run
+  from an `IndicatorSpec`; instances are never shared across runs.
+- Not-ready contract: calling `value()` before `isReady()` is `true` must
+  throw `IllegalStateException`. No `IndicatorValue` wrapper, no
+  `Optional`-based result — fail-fast on misuse rather than a sentinel like
+  `0` or `NaN`. Documented in the interface's Javadoc; no concrete
+  implementation exists yet to unit test this, since SMA/EMA/RSI are the
+  next batch.
+- Factory: not created. No concrete `Indicator` implementation exists yet,
+  so there is nothing for a factory to select between. Revisit once
+  SMA/EMA/RSI exist and it's clear whether construction logic is shared.
+- 12 new tests in `IndicatorSpecTest`: valid SMA/EMA/RSI specs, null type,
+  zero period, negative period, RSI period 1 rejected, RSI period 2 and
+  SMA period 1 accepted, equals/hashCode across equal and differing specs.
+  The `Indicator` interface itself was not given a test double, since the
+  only implementations that would exercise it (SMA/EMA/RSI) are a
+  deliberately separate batch and a throwaway fake would test nothing real.
+
 ## Current Architecture
 
 ```
@@ -70,7 +103,8 @@ Parallax/
 ├── engine/                  # plain Java engine module
 │   ├── pom.xml
 │   └── src/{main,test}/java/in/vedchangani/parallax/engine/
-│       └── data/            # Bar, BarSeries (implemented)
+│       ├── data/            # Bar, BarSeries (implemented)
+│       └── indicator/       # IndicatorType, IndicatorSpec, Indicator (implemented)
 ├── backend/                 # Spring Boot application module
 ├── frontend/                # React/Vite application
 ├── docs/
@@ -93,14 +127,15 @@ engine root.
 
 Run from `C:\Parallax`:
 
+- `./mvnw -pl engine test`: `Tests run: 35, Failures: 0, Errors: 0, Skipped:
+  0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1),
+  `IndicatorSpecTest` (12, new this batch).
 - `./mvnw clean install`: BUILD SUCCESS. Reactor: Parallax (pom), Parallax
-  Engine, backend.
-- `./mvnw -pl engine test`: `Tests run: 23, Failures: 0, Errors: 0, Skipped:
-  0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1), all now
-  under `in.vedchangani.parallax.engine`.
-- `git status --short`: only files under `engine/src/.../parallax/` changed
-  (moves plus package declaration edits); `backend/` and `frontend/` are
-  unchanged.
+  Engine, backend; same 35 engine tests plus 1 backend test.
+- `git status --short`: only the new `engine/src/.../indicator/` files are
+  added; `backend/` and `frontend/` are unchanged. `.gitignore` shows a
+  pending modification (adding `CLAUDE.md`) from outside this batch — not
+  touched here.
 - Docs consistency check (prior milestone): every D-n reference resolves to
   a heading in `decisions.md`; all progress references point to
   `docs/progress.md`; no terms from the superseded draft design remain.
@@ -139,6 +174,6 @@ See [decisions.md](decisions.md).
 
 ## Next Milestone
 
-`IndicatorSpec` + `Indicator` foundation (SMA/EMA/RSI runtime contract from
-D-11: `update(BigDecimal close)`, `isReady()`, `value()`). No strategy,
-execution, or portfolio logic in that batch.
+SMA implementation with hand-calculated tests (the first concrete
+`Indicator`). No EMA, RSI, strategy, execution, or portfolio logic in that
+batch.
