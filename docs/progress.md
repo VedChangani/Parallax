@@ -2,8 +2,9 @@
 
 ## Current Milestone
 
-`IndicatorType`, `IndicatorSpec`, and the `Indicator` runtime interface
-implemented in `engine.indicator`, with focused tests.
+`RelativeStrengthIndex` (RSI, Wilder smoothing) implemented in
+`engine.indicator`, with hand-calculated tests. All three V1 indicators
+(SMA, EMA, RSI) are now implemented.
 
 ## Completed
 
@@ -94,6 +95,99 @@ implemented in `engine.indicator`, with focused tests.
   only implementations that would exercise it (SMA/EMA/RSI) are a
   deliberately separate batch and a throwaway fake would test nothing real.
 
+### Engine implementation batch 3: `SimpleMovingAverage`
+
+- `in.vedchangani.parallax.engine.indicator.SimpleMovingAverage`: the first
+  concrete `Indicator`. Maintains a fixed-size `double[period]` circular
+  buffer plus a running sum — O(period) memory, O(1) per `update`. No
+  `BarSeries`, no unbounded history, no static/shared state; each instance
+  is independent.
+- Numerical policy followed exactly: `update(BigDecimal close)` converts
+  once via `close.doubleValue()`; the running sum and the returned average
+  are `double` throughout; no `BigDecimal` arithmetic and no rounding
+  inside the indicator.
+- Readiness: not ready until `period` closes have been received; ready
+  immediately on the `period`-th close. `value()` before readiness throws
+  `IllegalStateException`, per the `Indicator` contract.
+- The constructor also rejects `period < 1` directly (defense in depth;
+  `IndicatorSpec` already enforces this before an `SMA` is ever
+  constructed from a spec).
+- 9 new tests in `SimpleMovingAverageTest`: the hand-calculated SMA(3)
+  sequence on closes 1..6 (not ready, not ready, 2, 3, 4, 5); becomes
+  ready exactly on the 3rd close; the window keeps rolling correctly past
+  ten updates (last three of 1..10 average to 9); `value()` before
+  readiness throws at every point before the period is filled; period-1
+  tracks the latest close exactly; repeated identical values return that
+  value; decimal closes (1.1, 2.2, 3.3 → 2.2) within a `1e-9` tolerance;
+  two same-period instances are independent; period 0 is rejected.
+
+### Engine implementation batch 4: `ExponentialMovingAverage`
+
+- `in.vedchangani.parallax.engine.indicator.ExponentialMovingAverage`: not
+  ready until `period` closes are received; on the `period`-th close, seeds
+  from the SMA of those closes (per D-11) — not the first close, not the
+  last, and not a recurrence applied from the start. `alpha = 2 /
+  (period + 1)`; each close after the seed applies
+  `ema = alpha * close + (1 - alpha) * previousEma`.
+- Memory: a `double[period]` buffer plus a running sum during warm-up
+  (O(period)); once seeded, the buffer is discarded (set to `null`) and
+  only the scalar `ema` is kept (O(1) thereafter).
+- Numerical policy followed exactly: `close.doubleValue()` is the only
+  conversion; the seed sum, alpha, and EMA are all `double`; no
+  `BigDecimal` in the calculation path.
+- Constructor rejects `period < 1` directly, as defense in depth
+  alongside `IndicatorSpec`'s existing validation.
+- 11 new tests in `ExponentialMovingAverageTest`: the hand-calculated
+  EMA(3) sequence on closes 1..6 (not ready, not ready, seed 2, then 3, 4,
+  5); readiness exactly on the Nth close; the seed independently checked
+  against SMA(2,4,6,8)=5 (period 4); a targeted correctness test using
+  closes 0, 0, 30 (SMA seed 10) followed by three 100s — the wrong-seed
+  alternatives (first close 0, or last close 30) diverge to 50 or 65
+  instead of the correct 55, and the sequence is carried three steps
+  further to also catch a wrong *recurrence* that would resync with the
+  correct trajectory after one step; the recurrence checked independently
+  with period 2 against `previous + alpha*(close-previous)` computed
+  inline; period 1 (`alpha = 1`, reduces to the latest close); repeated
+  identical values; decimal closes within `1e-9` tolerance; `value()`
+  before readiness throwing `IllegalStateException` at every warm-up step;
+  two same-period instances independent; period 0 rejected.
+
+### Engine implementation batch 5: `RelativeStrengthIndex`
+
+- `in.vedchangani.parallax.engine.indicator.RelativeStrengthIndex`: Wilder
+  RSI. The first close only establishes `previousClose` and is never
+  counted as a change, so RSI(period) becomes ready after `period + 1`
+  closes — one close to establish `previousClose`, then `period` price
+  changes. Initial `averageGain`/`averageLoss` are the simple means of the
+  first `period` gains/losses; every change after that applies Wilder
+  smoothing: `avg = (previousAvg * (period - 1) + current) / period`.
+  `RSI = 100 - 100 / (1 + averageGain / averageLoss)`.
+- Edge cases: `averageLoss = 0` is handled explicitly — 100 if
+  `averageGain > 0`, else 50 (flat market). The remaining approved case,
+  `averageGain = 0` and `averageLoss > 0`, needed no special branch: the
+  formula already yields exactly 0 (`RS = 0` → `100 - 100/1 = 0`).
+- State/memory: only `previousClose`, the warm-up gain/loss running sums
+  (or, after seeding, the running averages), and a change counter — O(1)
+  throughout. No buffer of individual gains/losses is needed even during
+  warm-up, since Wilder's initial average only needs their sum. No
+  `BarSeries`, no static/shared state.
+- Constructor rejects `period < 1` directly; `IndicatorSpec` already
+  rejects `RSI` with `period < 2` before an `RSI` instance is ever
+  constructed from a spec, so period 1 is not separately re-validated
+  here (per the batch instructions).
+- 10 new tests in `RelativeStrengthIndexTest`, matching the fixtures in
+  the batch instructions exactly: readiness boundary (not ready through
+  the 3rd close on closes 100/101/102, ready after the 4th at 103);
+  monotonic increase → RSI 100; flat market → RSI 50; monotonic decrease →
+  RSI 0; the mixed fixture 100/102/101/103 → hand-calculated RSI 80
+  (avgGain 4/3, avgLoss 1/3, RS 4); one further close (105) verifying
+  Wilder smoothing continues correctly → RSI 87.5 (avgGain 14/9, avgLoss
+  2/9, RS 7); `value()` throwing `IllegalStateException` at every
+  pre-readiness point; period 0 rejected; two same-period instances
+  independent (one trending up, one flat); repeated/flat values during
+  warm-up followed by a real gain, confirming no spurious gain/loss
+  carried over from the flat run.
+
 ## Current Architecture
 
 ```
@@ -104,7 +198,9 @@ Parallax/
 │   ├── pom.xml
 │   └── src/{main,test}/java/in/vedchangani/parallax/engine/
 │       ├── data/            # Bar, BarSeries (implemented)
-│       └── indicator/       # IndicatorType, IndicatorSpec, Indicator (implemented)
+│       └── indicator/       # IndicatorType, IndicatorSpec, Indicator,
+│                             #   SimpleMovingAverage, ExponentialMovingAverage,
+│                             #   RelativeStrengthIndex (implemented)
 ├── backend/                 # Spring Boot application module
 ├── frontend/                # React/Vite application
 ├── docs/
@@ -127,15 +223,16 @@ engine root.
 
 Run from `C:\Parallax`:
 
-- `./mvnw -pl engine test`: `Tests run: 35, Failures: 0, Errors: 0, Skipped:
+- `./mvnw -pl engine test`: `Tests run: 65, Failures: 0, Errors: 0, Skipped:
   0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1),
-  `IndicatorSpecTest` (12, new this batch).
+  `IndicatorSpecTest` (12), `SimpleMovingAverageTest` (9),
+  `ExponentialMovingAverageTest` (11), `RelativeStrengthIndexTest` (10, new
+  this batch).
 - `./mvnw clean install`: BUILD SUCCESS. Reactor: Parallax (pom), Parallax
-  Engine, backend; same 35 engine tests plus 1 backend test.
-- `git status --short`: only the new `engine/src/.../indicator/` files are
-  added; `backend/` and `frontend/` are unchanged. `.gitignore` shows a
-  pending modification (adding `CLAUDE.md`) from outside this batch — not
-  touched here.
+  Engine, backend; same 65 engine tests plus 1 backend test.
+- `git status --short`: only `RelativeStrengthIndex.java` and
+  `RelativeStrengthIndexTest.java` are new; `backend/` and `frontend/` are
+  unchanged.
 - Docs consistency check (prior milestone): every D-n reference resolves to
   a heading in `decisions.md`; all progress references point to
   `docs/progress.md`; no terms from the superseded draft design remain.
@@ -174,6 +271,10 @@ See [decisions.md](decisions.md).
 
 ## Next Milestone
 
-SMA implementation with hand-calculated tests (the first concrete
-`Indicator`). No EMA, RSI, strategy, execution, or portfolio logic in that
-batch.
+Consolidated indicator review and `IndicatorSnapshot` design: with SMA,
+EMA, and RSI all implemented, decide how a strategy is handed a read-only
+view of indicator values as of bar N close (per the approved architecture,
+`IndicatorSnapshot` is the only market-derived input visible to strategy
+evaluation — it must not expose the indicators themselves, `BarSeries`, or
+any mutable run state). No `Strategy`, `Condition`, `Backtester`,
+execution, or portfolio logic in that batch.
