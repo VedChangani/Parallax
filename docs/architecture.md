@@ -94,14 +94,32 @@ See [decisions.md](decisions.md).
 
 # Engine Architecture (V1 — approved design, partially implemented)
 
-Status: approved design. `data`, `indicator` (including `IndicatorSnapshot`),
-`strategy` (`Operand`, `Operator`, `Condition`, `PositionSizing`,
-`StrategyDefinition`, `SignalType`, `SignalEvent`), `execution`
-(`OrderSide`, `Order`, `Fill`, `RejectionReason`, `OrderRejection`), and
-`portfolio` (`Portfolio`, `EquityPoint`) are implemented; `Backtester` and
-the remaining packages below are not yet implemented. Decisions
-referenced as D-n are in [decisions.md](decisions.md); project state is
-tracked in [docs/progress.md](progress.md).
+Status: approved design, partially implemented — see "Implementation
+status" below. Decisions referenced as D-n are in
+[decisions.md](decisions.md).
+
+## Implementation status
+
+Implemented (all packages below `engine`):
+
+- `data`: `Bar`, `BarSeries`
+- `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator`,
+  `SimpleMovingAverage`, `ExponentialMovingAverage`,
+  `RelativeStrengthIndex`, `IndicatorSnapshot`
+- `strategy`: `Operand`, `Operator`, `Condition`, `PositionSizing`,
+  `StrategyDefinition`, `SignalType`, `SignalEvent`
+- `execution`: `OrderSide`, `Order`, `Fill`, `RejectionReason`,
+  `OrderRejection`
+- `portfolio`: `Portfolio`, `EquityPoint`
+- `result`: `BacktestConfig`, `Trade`, `BacktestResult`
+
+Not yet implemented: the `IndicatorSpec -> Indicator` factory,
+`Backtester` itself, performance metrics, backend integration, and
+frontend. Nothing else stands between the current state and
+`Backtester.run(...)` — every type the loop assembles already exists.
+
+This section reflects current state only; see Git history for how it was
+reached.
 
 ## 1. Shape
 
@@ -586,26 +604,92 @@ There is no `PortfolioState` type. The architecture's earlier sketch of
 one would have exactly duplicated the last `EquityPoint`'s fields; the
 result's final state is simply that last point.
 
-### Trade
+### BacktestConfig, Trade and BacktestResult (package `result`, see D-24)
 
-Immutable, derived after the run from fills. A closed trade has an entry
-fill, an exit fill, and net realized P&L. An open trade has an entry fill
-and no exit fill. Signal reasons are recovered from the fills. There is no
-mutable open-trade tracker.
+```
+record BacktestConfig(BigDecimal initialCapital, BigDecimal commissionPerFill,
+                      BigDecimal slippageRate, LocalDate startDate, LocalDate endDate)
+  initialCapital > 0; commissionPerFill >= 0; 0 <= slippageRate < 1; startDate <= endDate
+  every BigDecimal canonicalized (stripTrailingZeros, scale clamped to >= 0) — exact, no rounding
 
-### BacktestConfig
+sealed interface Trade { Fill entry(); default long quantity() { return entry().quantity(); } }
+  record Open(Fill entry)                 // entry BUY; position still held at run end
+  record Closed(Fill entry, Fill exit)    // entry BUY, exit SELL, same quantity, exit after entry
+    BigDecimal realizedPnl()        -> (q*f_exit - c_exit) - (q*f_entry + c_entry)   // derived, matches Portfolio exactly
+    BigDecimal totalCommission()    -> c_entry + c_exit                              // derived
+    BigDecimal totalSlippageCost()  -> entry.slippageCost() + exit.slippageCost()    // derived
+  static List<Trade> fromFills(List<Fill> fills)   // parses an ordered fill sequence; does not sort/repair
 
-`BigDecimal initialCapital`, `BigDecimal commissionPerFill`,
-`BigDecimal slippageRate`, `LocalDate startDate`, `LocalDate endDate`.
+record BacktestResult(String symbol, StrategyDefinition strategy, BacktestConfig config,
+                      Optional<LocalDate> firstEvaluableDate,
+                      List<EquityPoint> equityCurve, List<Fill> fills, List<OrderRejection> rejections)
+  List<Trade> trades()      -> Trade.fromFills(fills)      // derived, not stored
+  EquityPoint finalPoint()  -> equityCurve.getLast()        // derived; no PortfolioState type
+```
 
-Both `startDate` and `endDate` are inclusive. The engine owns the semantic
-meaning of this evaluation range. There is no lookback-count field: the
-lookback is whatever the supplied series contains before `startDate`.
+**BacktestConfig** is the immutable input to one run.
+`initialCapital` must be strictly positive — a zero-capital run could
+never trade, and it is the denominator for every future return
+calculation; `Portfolio` itself still allows a zero starting balance as a
+runtime value (D-22), so this is a stricter requirement on what a
+meaningful backtest *request* looks like, not a change to `Portfolio`.
+`commissionPerFill` is a fixed monetary amount charged once per `Fill`,
+identical for BUY and SELL — never a percentage or a per-share charge.
+`slippageRate` is the adverse fraction applied to a bar's open
+(`BUY -> open×(1+rate)`, `SELL -> open×(1−rate)`); it must be strictly
+less than 1 so a SELL fill price is always positive for any valid
+(positive) open — see D-23 for why this bound alone is not sufficient to
+guarantee SELL cash-safety. Every `BigDecimal` field is canonicalized at
+construction (following the `CashFraction` precedent, D-19) so equal
+configurations — `10000` and `10000.00`, or `0.001` and `0.0010` — are
+equal values. `startDate`/`endDate` remain the existing inclusive range;
+same-day ranges are valid; there is still no time-of-day or timezone
+concept and no lookback-count field.
 
-### BacktestResult
+**Trade** is derived after the run from the executed fills, never from
+signals or Portfolio state directly. A sealed interface with `Open` and
+`Closed` was chosen over one record with a nullable exit field: the
+distinction is then explicit and exhaustively matchable, with no
+ambiguous null. `Open` holds only its entry `Fill`; it is never
+force-liquidated (D-8), and its mark-to-market is the run's final
+`EquityPoint`, not anything stored on the trade. `Closed` holds only its
+entry and exit fills and derives everything else — `realizedPnl()` is
+built from exactly the two expressions `Portfolio` itself computes
+(`costBasis` at the BUY, `proceeds − costBasis` at the SELL), so the sum
+of every closed trade's realized P&L equals `Portfolio`'s final
+`realizedPnl` exactly. There is no trade ID: `entry().orderId()` already
+identifies a trade uniquely, since one entry order produces at most one
+fill. `Trade.fromFills` is a parser of an already-chronological,
+already-valid fill sequence (BUY, SELL, BUY, SELL, ... optionally
+trailing an unpaired BUY) — it never sorts, repairs, or silently skips a
+malformed sequence.
 
-Config echo, symbol, `firstEvaluableDate`, fills, rejections, trades,
-equity curve, final `PortfolioState`. All output is immutable.
+**BacktestResult** is the complete immutable output. It keeps `symbol`,
+`strategy` and `config` — not the supplied `BarSeries` — so the result
+explains what was run without duplicating the dataset; dataset
+identity/provenance remains a backend concern (D-15). `firstEvaluableDate`
+is an `Optional<LocalDate>`: empty is a valid historical fact (the
+required indicators never became ready inside the range), not an error,
+so there is no sentinel or nullable field. `trades()` and `finalPoint()`
+are derived on every call rather than stored, so there is no duplicate
+state to keep in sync with `fills`/`equityCurve`; construction validates
+that both lists are internally consistent (ascending dates,
+BUY/SELL-alternating fills starting with BUY), so `trades()` can never
+throw for a successfully constructed result. There is no `PortfolioState`
+type — `finalPoint()` already is the final state (D-22). Every list is
+defensively copied (`List.copyOf`) and exposed as unmodifiable.
+`equityCurve` must be non-empty (a valid run always has at least one
+in-range bar); `fills` and `rejections` may be empty. No `Portfolio`,
+runtime `Indicator`, pending `Order`, or `Backtester` reference is
+reachable from a `BacktestResult`.
+
+Ordering is chronological and deterministic throughout: one `EquityPoint`
+per in-range bar in ascending date order; `fills` in execution order
+(strictly ascending dates, since V1 has at most one fill per bar); and
+`rejections` in the order they were appended within the run — an
+`InsufficientCash` from a bar's open phase before a `ZeroQuantity` from
+that same bar's close phase, when both occur on the same date. No
+timestamp is introduced; `LocalDate` plus execution phase is enough.
 
 ### Rejected and deferred abstractions
 
@@ -640,7 +724,18 @@ price, unrealized P&L, or equity on `Portfolio`; a mutating
 `markToMarket`; stored `marketValue`/`equity`/`unrealizedPnl` on
 `EquityPoint`; a `PortfolioState` type (it would duplicate the last
 `EquityPoint`); a `Portfolio` interface or service layer; the Backtester
-keeping its own cash/position copy alongside `Portfolio`'s; limit orders; stop
+keeping its own cash/position copy alongside `Portfolio`'s; a SELL
+rejection type to solve OQ2 (the position would become permanently
+unexitable — D-23 rejects this in favor of an exit-commission reserve at
+entry); dataset-aware preflight validation of `BacktestConfig` against a
+specific `BarSeries` (path-dependent and complex; the exit-commission
+reserve makes it unnecessary); a nullable exit field on a single `Trade`
+record (the sealed `Open`/`Closed` split is explicit instead); a `Trade`
+ID (`entry().orderId()` is already sufficient); storing `Trade`'s derived
+P&L/commission/slippage figures; a `PortfolioState`-shaped duplicate field
+on `BacktestResult`; storing the supplied `BarSeries` on `BacktestResult`
+(only `symbol` is kept; D-15); a nullable/sentinel `firstEvaluableDate`
+(an `Optional` instead); storing `trades()` on `BacktestResult`; limit orders; stop
 orders; order book; broker model; event bus;
 partial strategy exits; multiple simultaneous positions;
 metrics inside the loop.
@@ -673,12 +768,18 @@ For each bar N in chronological order:
 
 1. Execute the pending order at N.open, if one exists.
      BUY:  fillPrice    = open × (1 + slippageRate)
-           requiredCash = quantity × fillPrice + commission
+           requiredCash = quantity × fillPrice + commission + commission
+                          (entry commission + one reserved exit commission — D-23)
            if requiredCash > available cash: reject the entire order
            (OrderRejection.InsufficientCash, carrying the order's id).
-           Do NOT reduce quantity.
+           Do NOT reduce quantity. The reserved second commission is
+           NOT charged: Portfolio.apply(BUY) still deducts only
+           quantity × fillPrice + commission (D-22 unchanged); the
+           reserve exists only in this affordability check.
      SELL: fillPrice = open × (1 − slippageRate)
            sell the full held position.
+           (D-23 guarantees this can never leave cash negative, given a
+           valid BacktestConfig — see decisions.md D-23 for the proof.)
 
 2. On a successful fill: apply the Fill to the Portfolio, append the
    Fill, clear the pending order.
@@ -699,8 +800,10 @@ For each bar N in chronological order:
 
 7. If flat and the entry condition is true:
      create an ENTER SignalEvent.
-     quantity = floor( (cash × fraction − commission)
-                       / (close_N × (1 + slippageRate)) )
+     spendable = min(cash × fraction, cash − commission)   (D-23: reserve
+                 one commission in cash for the future exit)
+     quantity  = floor( (spendable − commission)
+                        / (close_N × (1 + slippageRate)) )
      if quantity <= 0: record OrderRejection.ZeroQuantity (no order id consumed).
      otherwise:        create a pending BUY order (assign the next order id).
 
@@ -727,7 +830,10 @@ For each bar N in chronological order:
 - An open position at the end is not forcibly liquidated. It is marked to
   the last in-range close.
 - `firstEvaluableDate` is the first in-range bar at which all referenced
-  indicators are ready.
+  indicators are ready, represented as `Optional<LocalDate>` on
+  `BacktestResult` (D-24) — empty when they never become ready in range,
+  which is a valid historical fact and not an error. With no required
+  indicators it is the first in-range bar.
 
 ## 5. Look-ahead protection
 
@@ -820,6 +926,11 @@ strategy activity.
 - whole shares, long-only, no leverage
 - insufficient cash: reject the whole order; no partial fill
 - zero quantity: record a rejection rather than creating an order
+- exit-commission reserve (D-23): sizing an ENTER reserves one
+  `commissionPerFill` in cash for the eventual exit, and BUY
+  affordability checks for that reserve on top of the entry commission —
+  this closes OQ2 (a SELL can now never leave cash negative given a
+  valid `BacktestConfig`); the reserve is never itself charged to the BUY
 - invalid OHLC and invalid series ordering: rejected before the run starts
 - zero-volume bars execute normally in V1; there is no liquidity model yet
 
@@ -883,6 +994,9 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
 - Closed-trade net P&L equals the portfolio's realized P&L contribution for
   that exit.
 - Trade explanations come from `entry.fill.signal` and `exit.fill.signal`.
+- Implemented as `Trade.fromFills(List<Fill>)` (D-24): a sealed
+  `Trade.Open`/`Trade.Closed` parsed from the result's `fills`, called
+  fresh by `BacktestResult.trades()` rather than stored.
 
 ## 12. Numerical policy
 
@@ -984,13 +1098,30 @@ Small hand-calculable fixtures, not only external market data.
   long-basis consistency checks; a reflection check that `Portfolio`'s
   declared fields are exactly its four owned values with no static state,
   and that `EquityPoint` stores no derived value.
+- **BacktestConfig / Trade / BacktestResult** (implemented;
+  `engine.result`, D-24): every `BacktestConfig` bound at its edges
+  (smallest positive capital, zero commission, slippage at 0 and just
+  below 1, a same-day range) and just outside them; canonical-scale
+  equality (`10000` = `10000.00`, `0.001` = `0.0010`); `Trade.Closed`'s
+  `realizedPnl()`/`totalCommission()`/`totalSlippageCost()` matching the
+  same winning/losing/round-trip figures as `PortfolioTest`; every
+  `Trade` construction invariant (wrong side, mismatched quantity, exit
+  not after entry, exit order id not greater); `Trade.fromFills` over
+  empty/single-BUY/BUY-SELL/BUY-SELL-BUY sequences and its rejection of
+  SELL-first or BUY-BUY sequences, without sorting or repairing;
+  `BacktestResult`'s list immutability and defensive copying, its
+  ascending/in-range equity-date and alternating-fill validation, its
+  derived `trades()` and `finalPoint()` including for a trailing open
+  trade, and an empty vs. present `firstEvaluableDate`; a whitelist
+  reflection check that none of these types holds a `Portfolio`, `Order`,
+  `BarSeries`, or runtime `Indicator`.
 - **Execution** (Backtester-level, not yet implemented): signal at bar N close, fill at bar N+1 open, no same-bar
   fill, no signal on the last in-range bar, commission, slippage,
-  insufficient-cash rejection, zero-quantity rejection.
+  insufficient-cash rejection, zero-quantity rejection, the D-23
+  exit-commission reserve including its worked counterexample.
 - **Lookback/range**: pre-start bars warm indicators, pre-start bars create
   no trading activity, `endDate` inclusive, bars after `endDate` ignored,
   `endDate` on a non-trading day, series ending before `endDate`.
-- **Trade**: closed trade, open trade, explanation recovered from fills.
 - **Determinism**: identical input twice produces an identical result.
 
 ## 15. Engine boundary
@@ -1008,3 +1139,27 @@ Output: immutable `BacktestResult`.
 
 No callbacks. No I/O. No persistence. No HTTP. No Spring. Engine domain
 types must never become JPA entities.
+
+## 16. Future direction
+
+High-level path only — no speculative detailed design for unapproved
+subsystems:
+
+```
+current engine foundation (data -> indicator -> strategy -> execution -> portfolio -> result)
+        |
+        v
+Backtester (the chronological run loop, §3)
+        |
+        v
+Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5)
+        |
+        v
+Backend integration (Spring Boot: persistence, REST, provider integration)
+        |
+        v
+Frontend (React: presenting strategies, experiments, results)
+```
+
+Each step is designed in its own checkpoint when work on it begins, not
+in advance.
