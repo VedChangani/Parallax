@@ -96,12 +96,12 @@ See [decisions.md](decisions.md).
 
 Status: approved design. `data`, `indicator` (including `IndicatorSnapshot`),
 `strategy` (`Operand`, `Operator`, `Condition`, `PositionSizing`,
-`StrategyDefinition`, `SignalType`, `SignalEvent`), and `execution`
-(`OrderSide`, `Order`, `Fill`, `RejectionReason`, `OrderRejection`) are
-implemented; `Backtester` and the remaining packages below are not yet
-implemented. Decisions referenced as D-n are in
-[decisions.md](decisions.md); project state is tracked in
-[docs/progress.md](progress.md).
+`StrategyDefinition`, `SignalType`, `SignalEvent`), `execution`
+(`OrderSide`, `Order`, `Fill`, `RejectionReason`, `OrderRejection`), and
+`portfolio` (`Portfolio`, `EquityPoint`) are implemented; `Backtester` and
+the remaining packages below are not yet implemented. Decisions
+referenced as D-n are in [decisions.md](decisions.md); project state is
+tracked in [docs/progress.md](progress.md).
 
 ## 1. Shape
 
@@ -133,7 +133,7 @@ in.vedchangani.parallax.engine.data        Bar, BarSeries
 in.vedchangani.parallax.engine.indicator   IndicatorType, IndicatorSpec, Indicator, IndicatorSnapshot
 in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operand, Operator, PositionSizing, SignalType, SignalEvent
 in.vedchangani.parallax.engine.execution   Order, OrderSide, Fill, RejectionReason, OrderRejection
-in.vedchangani.parallax.engine.portfolio   Portfolio, PortfolioState, EquityPoint
+in.vedchangani.parallax.engine.portfolio   Portfolio, EquityPoint
 in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
 ```
 
@@ -510,10 +510,81 @@ is expected, deterministic behavior, fully explained by the matching
 `InsufficientCash`, order 3 → `Fill`: fills show IDs 1 and 3, and the
 rejection shows ID 2.
 
-### Portfolio
+### Portfolio and EquityPoint (package `portfolio`, see D-22)
 
-Mutable per-run accounting state. Owns cash, position quantity, total cost
-basis, realized P&L. Mutated only through `Fill` application.
+```
+final class Portfolio                              // mutable, per run, never shared
+  BigDecimal cash; long quantity; BigDecimal costBasis; BigDecimal realizedPnl
+  Portfolio(BigDecimal initialCash)                 // >= 0; flat, basis 0, realized 0
+  void apply(Fill fill)                             // the ONLY mutator; all-or-nothing
+  EquityPoint markToMarket(LocalDate date, BigDecimal close)   // pure — does not mutate
+  cash(); quantity(); costBasis(); realizedPnl(); isFlat()
+
+record EquityPoint(LocalDate date, BigDecimal cash, long quantity,
+                   BigDecimal costBasis, BigDecimal realizedPnl, BigDecimal close)
+  BigDecimal marketValue()   -> close * quantity                     // derived
+  BigDecimal equity()        -> cash + marketValue()                 // derived
+  BigDecimal unrealizedPnl() -> marketValue() - costBasis             // derived
+```
+
+`Portfolio` is the engine's first mutable type and the single source of
+truth for financial state: cash, position quantity, total cost basis, and
+cumulative realized P&L — nothing else. It stores no last price, no
+unrealized P&L, no equity, and no average cost; average cost is
+deliberately not computed anywhere in the engine (D-13/D-22) — it would
+be the engine's only division, and it is display-only, so it is left to a
+later reporting layer. There is no `Position` object, lots, or FIFO/LIFO:
+one quantity and one cost basis fully describe V1's single position. The
+Backtester holds no cash or position copy of its own; it only calls
+`Portfolio`.
+
+V1 is long-only with no pyramiding (D-16), so `apply(Fill)` enforces a
+strict flat/long state machine: a BUY is accepted only while flat, and a
+SELL only for exactly the full held quantity. Every precondition is
+checked before any field changes, so a rejected `apply` leaves the
+portfolio completely unchanged:
+
+- **BUY**: rejected (`IllegalStateException`) if not flat, or if
+  `quantity × fillPrice + commission > cash` (an execution/Backtester
+  bug, since execution should already have produced an
+  `InsufficientCash` rejection). Otherwise: `cash -= totalCost`,
+  `quantity = fill.quantity()`, `costBasis = totalCost` — the BUY
+  commission is included in the basis.
+- **SELL**: rejected if flat, or if `fill.quantity() != quantity` (this
+  alone blocks partial exits, over-selling, and negative positions), or
+  if the resulting cash would go negative (the fail-fast guard for OQ2 —
+  V1 has no SELL-rejection type, so `BacktestConfig` validation must make
+  this unreachable). Otherwise: `proceeds = quantity × fillPrice −
+  commission`, `cash += proceeds`, `realizedPnl += proceeds − costBasis`,
+  `quantity = 0`, `costBasis = 0`.
+
+Because V1 exits the full position every time, D-13's `removedBasis =
+costBasis × q / currentQuantity` always reduces to `costBasis` exactly —
+**the reserved partial-basis `MathContext` (D-14) is unused in V1**, and
+nothing in `Portfolio`/`EquityPoint` divides or rounds.
+
+`markToMarket(date, close)` validates its arguments (null → NPE,
+non-positive close → IAE) and returns a new `EquityPoint` built from the
+current four fields plus `date`/`close`. It never mutates `Portfolio`,
+and the current close is never stored — repeated calls at different
+closes leave `cash`/`quantity`/`costBasis`/`realizedPnl` unchanged.
+
+`EquityPoint` is an immutable observation, not a log entry: it carries
+the four portfolio facts plus `date` and `close`, and derives
+`marketValue()`, `equity()` and `unrealizedPnl()` by exact arithmetic
+rather than storing them — a stored equity could disagree with `cash +
+close × quantity`. Keeping `costBasis` and `realizedPnl` on every point
+is what makes D-13's accounting identity checkable from the equity curve
+alone. It holds no `Order`, `Fill`, runtime `Indicator`, `BarSeries`, or
+`StrategyDefinition`. Validation mirrors `Portfolio`'s own invariants:
+`cash >= 0`, `quantity >= 0`, `close > 0`, and `quantity == 0` if and only
+if `costBasis == 0` (with `costBasis > 0` required when long). Equality
+is default record equality, scale-sensitive like `Fill` (D-21) — ledger
+values are never normalized.
+
+There is no `PortfolioState` type. The architecture's earlier sketch of
+one would have exactly duplicated the last `EquityPoint`'s fields; the
+result's final state is simply that last point.
 
 ### Trade
 
@@ -521,16 +592,6 @@ Immutable, derived after the run from fills. A closed trade has an entry
 fill, an exit fill, and net realized P&L. An open trade has an entry fill
 and no exit fill. Signal reasons are recovered from the fills. There is no
 mutable open-trade tracker.
-
-### EquityPoint
-
-Immutable record: date, cash, position quantity, close, position value,
-equity. One point per in-range bar.
-
-### PortfolioState
-
-Immutable final-state record: cash, position quantity, cost basis, realized
-P&L, last close, unrealized P&L, equity.
 
 ### BacktestConfig
 
@@ -571,7 +632,15 @@ values for `ZeroQuantity`; a generic `Outcome`/`SignalOutcome` wrapper
 type; a SELL rejection type; rejection reasons beyond `ZERO_QUANTITY` and
 `INSUFFICIENT_CASH` (invalid price, market closed, liquidity, broker
 error, and so on); execution-causality validation inside `Fill`/
-`OrderRejection` (covered by Backtester tests instead); limit orders; stop
+`OrderRejection` (covered by Backtester tests instead); a `Position`
+class, lots, or FIFO/LIFO cost-basis tracking; pyramiding / weighted-
+average cost basis (V1 enforces strict flat↔long instead); partial SELLs;
+a computed or stored `averageCost` anywhere in the engine; a stored last
+price, unrealized P&L, or equity on `Portfolio`; a mutating
+`markToMarket`; stored `marketValue`/`equity`/`unrealizedPnl` on
+`EquityPoint`; a `PortfolioState` type (it would duplicate the last
+`EquityPoint`); a `Portfolio` interface or service layer; the Backtester
+keeping its own cash/position copy alongside `Portfolio`'s; limit orders; stop
 orders; order book; broker model; event bus;
 partial strategy exits; multiple simultaneous positions;
 metrics inside the loop.
@@ -691,7 +760,10 @@ Single source of truth for each piece of state:
 | Trades | derived from fills after the run |
 | Equity | append-only `List<EquityPoint>` |
 
-`Backtester` itself holds no persistent fields and is therefore re-entrant.
+`Backtester` itself holds no persistent fields and is therefore
+re-entrant. It never keeps its own copy of cash or position — every read
+goes through `Portfolio`'s accessors, and the only mutation path is
+`Portfolio.apply(Fill)` (D-22).
 
 ## 7. Fill / signal / trade relationship
 
@@ -776,7 +848,22 @@ At a close P:
   equity        = cash + quantity × P
 ```
 
-Average cost is derived for display and is not separately stored.
+Average cost is not computed anywhere in the engine (D-22): it is
+display-only, and would be the engine's only division. A later reporting
+layer derives it from `costBasis / quantity` if it wants to show it.
+
+V1 has no partial exits (D-16): every SELL uses the full held quantity,
+so `removedBasis` always equals the entire `costBasis`, `quantity` always
+becomes exactly `0`, and `costBasis` always becomes exactly `0`. This is
+why `Portfolio` implements SELL without a division: `q == currentQuantity`
+always holds by construction (`apply` rejects any other quantity), so
+`removedBasis = costBasis`.
+
+`Portfolio.apply(Fill)` additionally enforces, before changing any state:
+a BUY only while flat and only if `q × f + c <= cash`; a SELL only while
+long, only for `q == currentQuantity`, and only if the resulting cash
+would stay `>= 0`. Any violation throws `IllegalStateException` and
+leaves the portfolio unchanged — see "Portfolio and EquityPoint" in §2.
 
 Accounting identity, tested for every in-range equity point:
 
@@ -808,8 +895,13 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
 
 - Use `compareTo` for `BigDecimal` comparisons.
 - Money is not rounded to cents inside the engine.
-- A fixed `MathContext` is used for the one partial-basis division if
-  required.
+- The partial-basis `MathContext` this policy once reserved is **unused
+  in V1** (D-22): V1 has no partial exits, so `removedBasis` always
+  equals the full `costBasis` exactly, with no division. `Portfolio` and
+  `EquityPoint` perform no division and no rounding anywhere.
+- Average cost is not computed in the engine (D-13/D-22) — it is the one
+  ledger quantity that would require division, and it is a display
+  concern for a later reporting layer.
 - This policy is not redesigned during the first implementation stages
   without a concrete correctness problem.
 
@@ -876,14 +968,28 @@ Small hand-calculable fixtures, not only external market data.
   `Indicator`, `Bar`/`BarSeries`, or a mutable collection. Order-ID gap
   behavior and the one-outcome-per-signal invariant are documented here
   and become Backtester-level tests, not tested at this layer.
+- **Portfolio / EquityPoint** (implemented; `engine.portfolio`, D-22):
+  initial state (flat, `cash == initialCapital`); BUY accounting including
+  the commission-in-basis figure at three different marked closes;
+  winning and losing full exits; zero-commission and non-zero-commission
+  round trips (commission counted exactly once, neither omitted nor
+  doubled); multiple round trips accumulating realized P&L; the
+  `equity == cash + marketValue` and `equity == initialCapital +
+  realizedPnl + unrealizedPnl` identities checked after every state
+  transition; every rejected operation (BUY while long, SELL while flat,
+  partial SELL, over-selling, unaffordable BUY, cash-negative SELL)
+  leaving every field provably unchanged; `markToMarket` never mutating
+  across repeated calls at different closes; every null/numeric
+  validation boundary on both types; `EquityPoint`'s flat-basis and
+  long-basis consistency checks; a reflection check that `Portfolio`'s
+  declared fields are exactly its four owned values with no static state,
+  and that `EquityPoint` stores no derived value.
 - **Execution** (Backtester-level, not yet implemented): signal at bar N close, fill at bar N+1 open, no same-bar
   fill, no signal on the last in-range bar, commission, slippage,
   insufficient-cash rejection, zero-quantity rejection.
 - **Lookback/range**: pre-start bars warm indicators, pre-start bars create
   no trading activity, `endDate` inclusive, bars after `endDate` ignored,
   `endDate` on a non-trading day, series ending before `endDate`.
-- **Portfolio**: buying, marking to market, selling, realized/unrealized
-  P&L, accounting identity.
 - **Trade**: closed trade, open trade, explanation recovered from fills.
 - **Determinism**: identical input twice produces an identical result.
 

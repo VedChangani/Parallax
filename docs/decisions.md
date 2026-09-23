@@ -751,3 +751,144 @@ This resolves D-20's three open questions and progress.md's OQ1 and OQ3:
 `Fill` or `OrderRejection.InsufficientCash`. Every value in the chain is
 immutable, holds no transient runtime object, and the full explanation
 for any outcome is recoverable through `signal()` alone.
+
+## D-22 Portfolio enforces strict flat/long accounting; EquityPoint derives its P&L figures
+
+**Decision:** `engine.portfolio` adds:
+
+- `final class Portfolio`: mutable, per-run, never shared, with exactly
+  four private fields — `BigDecimal cash`, `long quantity`,
+  `BigDecimal costBasis`, `BigDecimal realizedPnl`.
+  `Portfolio(BigDecimal initialCash)` requires non-null and `>= 0`
+  (NPE / IAE), starting flat with `costBasis = 0` and
+  `realizedPnl = 0`. `apply(Fill fill)` is the **only** mutator, and is
+  all-or-nothing: every precondition is checked before any field changes.
+  - **BUY**: rejected (`IllegalStateException`) unless the portfolio is
+    flat, and unless `quantity × fillPrice + commission <= cash`.
+    Otherwise: `cash -= totalCost`, `quantity = fill.quantity()`,
+    `costBasis = totalCost` — the BUY commission is included in the
+    basis, per D-13.
+  - **SELL**: rejected unless the portfolio is long and
+    `fill.quantity() == quantity` (V1 has no partial exits, D-16 — this
+    single check also blocks over-selling and any negative position),
+    and unless `cash + quantity × fillPrice − commission >= 0`. Otherwise:
+    `proceeds = quantity × fillPrice − commission`, `cash += proceeds`,
+    `realizedPnl += proceeds − costBasis`, `quantity = 0`,
+    `costBasis = 0`.
+  - `markToMarket(LocalDate date, BigDecimal close)` validates its
+    arguments (null → NPE, `close <= 0` → IAE), does **not** mutate the
+    portfolio, and returns a new `EquityPoint` built from the current
+    four fields plus `date`/`close`. The current close is never stored.
+  - Accessors: `cash()`, `quantity()`, `costBasis()`, `realizedPnl()`,
+    `isFlat()`. No `averageCost()`.
+- `record EquityPoint(LocalDate date, BigDecimal cash, long quantity,
+  BigDecimal costBasis, BigDecimal realizedPnl, BigDecimal close)`:
+  `date`/`cash`/`costBasis`/`realizedPnl`/`close` non-null (NPE);
+  `cash >= 0`, `quantity >= 0`, `close > 0`, and `quantity == 0` if and
+  only if `costBasis == 0` (with `costBasis > 0` required when
+  `quantity > 0`) (IAE). Derives `marketValue()` (`close × quantity`),
+  `equity()` (`cash + marketValue()`), and `unrealizedPnl()`
+  (`marketValue() − costBasis`) — none of the three is stored. Default
+  record equality, not scale-normalized (consistent with `Fill`, D-21).
+- **`PortfolioState` is removed** from the architecture. It would have
+  exactly duplicated the last `EquityPoint`'s fields; the result's final
+  state is simply that last point.
+
+**Why:**
+
+- **Exactly four owned fields, nothing derived stored alongside them:**
+  `Portfolio` is the single source of truth for financial state. A stored
+  last price, unrealized P&L, equity, or average cost would all be
+  redundant with what `markToMarket` can already compute, and each would
+  be one more place for state to drift out of sync.
+- **No `averageCost` anywhere in the engine:** `costBasis / quantity` is
+  the engine's only potential division. D-13 already calls average cost
+  "derived for display" — it is a reporting concern with its own
+  precision choices, not an accounting one, so the engine never computes
+  it and therefore never needs a `MathContext` or rounding rule for it.
+- **Strict flat/long instead of pyramiding:** D-16 already establishes
+  one position at a time with no pyramiding. Accepting a second BUY while
+  long would need a weighted-average cost basis, which the engine has
+  deliberately never needed to define. Rejecting it is not a
+  simplification made for this batch — it is what D-16 already requires,
+  now enforced structurally.
+- **`fill.quantity() == quantity` as the one SELL precondition:** this
+  single check is sufficient to block partial exits, over-selling, and a
+  negative position all at once, which is simpler than three separate
+  checks for three views of the same requirement (D-16: full exits only).
+- **Full exits make the D-13 partial-basis formula exact, with no
+  division:** `removedBasis = costBasis × q / currentQuantity` only ever
+  needs evaluating at `q == currentQuantity`, where it equals `costBasis`
+  exactly. D-14's reserved partial-basis `MathContext` is therefore
+  unused in V1 — recorded here rather than by touching D-14 itself, since
+  D-14's policy is still correct, just currently unexercised.
+- **The cash-`>= 0`-after-SELL check:** V1's `OrderRejection` model
+  (D-21) has no SELL-rejection type, so a SELL that would leave cash
+  negative must never reach `Portfolio` in the first place. This check is
+  the fail-fast backstop for that: `IllegalStateException` here means a
+  `BacktestConfig` (commission, slippage) that should have been rejected
+  at configuration time, not a condition `Portfolio` is expected to
+  recover from.
+- **All-or-nothing `apply`:** every precondition is validated into local
+  reasoning before any field is written, so a thrown exception is
+  provable to leave the portfolio byte-for-byte unchanged — never a
+  partially-applied fill.
+- **`markToMarket` is pure:** it has nothing to mutate — the current
+  close is transient information belonging to one `EquityPoint`, not
+  portfolio state that persists across bars.
+- **`EquityPoint` derives `marketValue`/`equity`/`unrealizedPnl`:** the
+  same no-duplicate-state principle as `Fill.side()`/`slippageCost()`
+  (D-21) and `Order.side()` (D-20) — a stored equity could disagree with
+  `cash + close × quantity`.
+- **`costBasis` and `realizedPnl` kept on every `EquityPoint`, not just
+  `cash`/`quantity`/`close`:** without them, D-13's identity (`equity ==
+  initialCapital + realizedPnl + unrealizedPnl`) could not be checked
+  from the equity curve alone — a minimal point would only support the
+  weaker `equity == cash + marketValue` identity.
+- **No `PortfolioState`:** once every in-range bar has an `EquityPoint`,
+  the last one already *is* the final state; a separate type would exist
+  only to hold the same six values again.
+- **The Backtester keeps no cash/position copy:** the state-ownership
+  table (architecture §6) already names `Portfolio` as sole owner; this
+  decision makes that concrete by giving the Backtester no field that
+  could disagree with it.
+
+**Rejected:**
+
+- **Pyramiding with a weighted-average cost basis:** contradicts D-16;
+  the user confirmed flat/long enforcement over this option.
+- **A computed or exposed `averageCost()`:** the user confirmed omitting
+  it from the engine over adding the engine's only division/`MathContext`.
+- **A `Position` object, tax lots, or FIFO/LIFO:** V1 has one symbol and
+  one position; a lot abstraction has nothing to track.
+- **A stored last price, unrealized P&L, or equity on `Portfolio`:**
+  redundant, disagreement-prone mutable state.
+- **A mutating `markToMarket`:** would give `Portfolio` state that
+  persists for no accounting reason.
+- **Storing `marketValue`/`equity`/`unrealizedPnl` on `EquityPoint`:**
+  duplicates values derivable from already-stored fields.
+- **A minimal `EquityPoint`** (`date`, `cash`, `quantity`, `close` only,
+  without `costBasis`/`realizedPnl`): would lose the ability to check
+  D-13's full three-term identity from the curve.
+- **`PortfolioState`:** an exact duplicate of the last `EquityPoint`.
+- **Normalizing `EquityPoint`'s `BigDecimal` scale:** ledger values stay
+  as computed, consistent with `Fill` (D-21).
+- **A `Portfolio` interface, or a service layer wrapping `apply`/
+  `markToMarket`:** two methods do not need an abstraction layer; a
+  single concrete `final class` is the whole requirement.
+- **Letting `Portfolio` construct or check against `BacktestConfig`:**
+  config validation belongs to `BacktestConfig` itself; `Portfolio` only
+  fails fast on the *symptom* (negative resulting cash) if that
+  validation was skipped.
+- **Silently repairing invalid financial state** (clamping cash to zero,
+  reducing an over-sized SELL): CLAUDE.md's "never silently invent
+  financial assumptions" rule; every violation throws instead.
+
+**Consequence:** the full non-strategy V1 accounting core is now frozen.
+`Portfolio` is the engine's first mutable type, and it is the only one:
+every other implemented type through D-21 is immutable. OQ2 (a
+degenerate `BacktestConfig` that could force a negative-cash SELL)
+remains open and tied to future `BacktestConfig` validation, as before —
+`Portfolio.apply` now documents the exact fail-fast symptom
+(`IllegalStateException`) that validation must prevent from ever being
+reached.

@@ -2,15 +2,15 @@
 
 ## Current Milestone
 
-D-21 implementation: `Fill` and `OrderRejection`. Implemented: `Bar`,
+D-22 implementation: `Portfolio` and `EquityPoint`. Implemented: `Bar`,
 `BarSeries`, `IndicatorType`, `IndicatorSpec`, `Indicator`,
 `SimpleMovingAverage`, `ExponentialMovingAverage`, `RelativeStrengthIndex`,
 `IndicatorSnapshot`, `Operand`, `Operator`, `Condition`, `PositionSizing`,
 `StrategyDefinition`, `SignalType`, `SignalEvent`, `OrderSide`, `Order`,
-`Fill`, `RejectionReason`, `OrderRejection`. The full V1 outcome model
-(`SignalEvent` -> `Order` -> `Fill`/`OrderRejection`) is now frozen and
-implemented. Not yet implemented: `Portfolio`, `Trade`, `Equity`,
-`BacktestConfig`/`BacktestResult`, and `Backtester`.
+`Fill`, `RejectionReason`, `OrderRejection`, `Portfolio`, `EquityPoint`.
+`Portfolio` is the engine's first mutable type; every type before it is
+immutable. Not yet implemented: `Trade`, `BacktestConfig`/
+`BacktestResult`, and `Backtester`.
 
 ## Completed
 
@@ -512,6 +512,69 @@ Design only, recorded before implementation. Full design is in
   before it could assert anything. Corrected to collect component types
   into a `Set` via a stream collector, which tolerates duplicates.
 
+### Engine implementation batch: `Portfolio` and `EquityPoint` (D-22)
+
+- `in.vedchangani.parallax.engine.portfolio.Portfolio`: the engine's
+  **first mutable type** — a `final class` with exactly four private
+  fields (`cash`, `quantity`, `costBasis`, `realizedPnl`), per-run, never
+  shared. `Portfolio(BigDecimal initialCash)` requires non-null and
+  `>= 0`; starts flat. `apply(Fill)` is the only mutator, all-or-nothing:
+  every precondition is checked before any field changes, so a rejected
+  operation is provably a no-op.
+  - **BUY**: rejected unless flat and unless affordable
+    (`q×f + c <= cash`); otherwise `cash -= totalCost`,
+    `quantity = q`, `costBasis = totalCost` (BUY commission included,
+    per D-13).
+  - **SELL**: rejected unless long and `fill.quantity() == quantity`
+    exactly (V1's single full-exit rule, which alone blocks partial
+    exits, over-selling, and negative positions — D-16), and unless the
+    resulting cash would stay `>= 0` (the fail-fast backstop for OQ2);
+    otherwise `proceeds = q×f − c`, `cash += proceeds`,
+    `realizedPnl += proceeds − costBasis`, `quantity = 0`,
+    `costBasis = 0`.
+  - `markToMarket(date, close)` validates its arguments and returns a new
+    `EquityPoint` from the current state — it never mutates, and the
+    close is never stored.
+  - No `averageCost()`: per your explicit choice, average cost stays out
+    of the engine entirely, since `costBasis / quantity` would be the
+    engine's only division.
+- `in.vedchangani.parallax.engine.portfolio.EquityPoint`: immutable
+  record `(LocalDate date, BigDecimal cash, long quantity, BigDecimal
+  costBasis, BigDecimal realizedPnl, BigDecimal close)`. Derives
+  `marketValue()` (`close × quantity`), `equity()`
+  (`cash + marketValue()`), and `unrealizedPnl()`
+  (`marketValue() − costBasis`) — none stored, so none can disagree with
+  the four owned fields. Validates non-null fields, `cash >= 0`,
+  `quantity >= 0`, `close > 0`, and flat ⇔ zero cost basis.
+- **`PortfolioState` removed** from the architecture: it would have
+  exactly duplicated the last `EquityPoint`'s fields.
+- Because V1 has no partial exits, `removedBasis` (D-13) always equals
+  the full `costBasis` exactly — **D-14's reserved partial-basis
+  `MathContext` is unused in V1**, and nothing in `Portfolio`/
+  `EquityPoint` divides or rounds.
+- 41 new tests across three files (311 engine tests total):
+  `PortfolioTest` (22 — initial state; BUY accounting at three marked
+  closes; winning and losing exits; zero- and non-zero-commission round
+  trips; two accumulated round trips; six rejected-operation cases each
+  asserting the state is byte-for-byte unchanged afterwards; invalid
+  constructor/`apply`/`markToMarket` arguments; `markToMarket`
+  non-mutation across repeated calls); `EquityPointTest` (15 — derived
+  values when long and when flat, every validation boundary, negative
+  `realizedPnl` accepted, equality); `PortfolioStructureTest` (4 — exact
+  field types with no static state, exact record component shapes, no
+  stored derived value on `EquityPoint`). Every test that produces an
+  `EquityPoint` also asserts both accounting identities
+  (`equity == cash + marketValue` and
+  `equity == initialCapital + realizedPnl + unrealizedPnl`) via
+  `compareTo`.
+- Two design conflicts with already-approved rules were resolved with you
+  before this batch, both via `AskUserQuestion`: (1) the checkpoint's
+  "additional BUY while long" weighted-average scenario conflicts with
+  D-16's no-pyramiding rule — you chose strict flat/long enforcement, so
+  that scenario became a rejected-operation test instead; (2) whether to
+  expose `averageCost()` — you chose to keep it out of the engine
+  entirely, avoiding the engine's only division.
+
 ## Current Architecture
 
 ```
@@ -529,8 +592,9 @@ Parallax/
 │       ├── strategy/        # Operand, Operator, Condition, PositionSizing,
 │       │                     #   StrategyDefinition, SignalType, SignalEvent
 │       │                     #   (implemented)
-│       └── execution/       # OrderSide, Order, Fill, RejectionReason,
-│                             #   OrderRejection (implemented)
+│       ├── execution/       # OrderSide, Order, Fill, RejectionReason,
+│       │                     #   OrderRejection (implemented)
+│       └── portfolio/       # Portfolio, EquityPoint (implemented)
 ├── backend/                 # Spring Boot application module
 ├── frontend/                # React/Vite application
 ├── docs/
@@ -545,19 +609,20 @@ Approved but not yet implemented — the run loop: stateless
 BacktestResult`; single-pass loop per bar: stop after `endDate` → execute
 pending order at open → update indicators at close → skip lookback bars →
 record equity point → evaluate strategy (ready, not last in-range bar) →
-size at close and queue order. Still to build: `Portfolio`, `Trade`,
-`Equity` (in `portfolio`), `BacktestConfig`/`BacktestResult` (in
-`result`), and `Backtester` at the engine root. The full outcome model
-(`SignalEvent`/`Order`/`Fill`/`OrderRejection`) is now implemented.
+size at close and queue order. Still to build: `Trade` (in `portfolio`),
+`BacktestConfig`/`BacktestResult` (in `result`), and `Backtester` at the
+engine root. The full non-strategy accounting core
+(`SignalEvent`/`Order`/`Fill`/`OrderRejection`/`Portfolio`/`EquityPoint`)
+is now implemented.
 
 ## Verification
 
-Run from `C:\Parallax` (current state, after the D-21 implementation
+Run from `C:\Parallax` (current state, after the D-22 implementation
 batch):
 
-- New tests (`FillTest`, `FillStructureTest`, `OrderRejectionTest`,
-  `OrderRejectionStructureTest`): 54 tests, 0 failures.
-- `./mvnw -pl engine test`: `Tests run: 270, Failures: 0, Errors: 0,
+- New tests (`PortfolioTest`, `EquityPointTest`, `PortfolioStructureTest`):
+  41 tests, 0 failures.
+- `./mvnw -pl engine test`: `Tests run: 311, Failures: 0, Errors: 0,
   Skipped: 0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1),
   `IndicatorSpecTest` (12), `SimpleMovingAverageTest` (9),
   `ExponentialMovingAverageTest` (11), `RelativeStrengthIndexTest` (11),
@@ -567,11 +632,13 @@ batch):
   `StrategyDefinitionTest` (25), `StrategyDefinitionStructureTest` (4),
   `SignalEventTest` (10), `SignalEventStructureTest` (1), `OrderTest`
   (15), `OrderStructureTest` (2), `FillTest` (22), `FillStructureTest`
-  (3), `OrderRejectionTest` (24), `OrderRejectionStructureTest` (5).
+  (3), `OrderRejectionTest` (24), `OrderRejectionStructureTest` (5),
+  `PortfolioTest` (22), `EquityPointTest` (15), `PortfolioStructureTest`
+  (4).
 - `./mvnw clean install`: BUILD SUCCESS. Reactor: Parallax (pom), Parallax
-  Engine, backend; 270 engine tests plus 1 backend test.
+  Engine, backend; 311 engine tests plus 1 backend test.
 - `backend/` and `frontend/` unchanged.
-- Docs consistency check: every `D-n` reference (`D-1` through `D-21`)
+- Docs consistency check: every `D-n` reference (`D-1` through `D-22`)
   resolves to a heading in `decisions.md`.
 
 ## Decisions
@@ -612,6 +679,13 @@ batch):
   rejection records require an `ENTER` signal, since V1 has no SELL
   rejection; order-ID gaps in the fills are documented as expected,
   deterministic behavior (implemented).
+- D-22: `Portfolio` enforces strict flat/long accounting (no pyramiding,
+  full exits only) and owns exactly four fields (cash, quantity, cost
+  basis, realized P&L), with no stored/computed `averageCost` anywhere in
+  the engine; `apply(Fill)` is the only mutator and is all-or-nothing;
+  `markToMarket` is pure; `EquityPoint` derives `marketValue`/`equity`/
+  `unrealizedPnl` rather than storing them; `PortfolioState` is removed
+  as a duplicate of the last `EquityPoint` (implemented).
 
 See [decisions.md](decisions.md).
 
@@ -630,7 +704,11 @@ None currently open.
    with degenerate commission settings; config validation could forbid it.
    **Still open** — V1's `OrderRejection` model has no way to represent a
    SELL rejection (D-21), so this must be prevented by `BacktestConfig`
-   validation, not solved by widening the outcome model.
+   validation, not solved by widening the outcome model. **D-22 adds the
+   concrete fail-fast backstop:** `Portfolio.apply` now throws
+   `IllegalStateException` if a SELL would leave cash negative, so the
+   symptom `BacktestConfig` validation must prevent from ever being
+   reached is now precisely named.
 3. ~~Rejection date convention: `ZERO_QUANTITY` is dated at the signal
    bar, `INSUFFICIENT_CASH` at the execution bar.~~ **Resolved by D-21:**
    confirmed exactly as stated — `ZeroQuantity.date()` derives
@@ -666,11 +744,15 @@ None currently open.
 12. ~~Whether `Fill` copies `orderId` + `signal` or references the
     `Order` itself.~~ **Resolved by D-21:** copies, per D-12; the `Order`
     object is never referenced.
+13. Where average cost is shown: confirmed to stay entirely out of the
+    engine (D-22, your explicit choice). A later backend/reporting layer
+    computes `costBasis / quantity` and chooses its own display precision.
 
 ## Next Milestone
 
-`Portfolio` design — the mutable per-run accounting state that applies
-`Fill`s (cash, position quantity, cost basis, realized P&L, per D-13),
-and `EquityPoint`. This is the first mutable runtime type in the engine;
-everything implemented so far (`SignalEvent` through `OrderRejection`) is
-immutable. No `Backtester`, `Trade`, or metrics logic in that batch.
+`Trade` design — the immutable, derived-after-the-run record pairing an
+entry fill and an exit fill (D-12), including how open trades (an entry
+fill with no exit) are represented. Also where `BacktestConfig` finally
+gets designed, since it owns the OQ2 fix (forbidding a `commission`/
+`slippageRate` combination that could force `Portfolio` to reject a SELL
+for negative cash). No `Backtester` or metrics logic in that batch.
