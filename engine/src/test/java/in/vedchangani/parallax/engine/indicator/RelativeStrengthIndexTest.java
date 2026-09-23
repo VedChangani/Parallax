@@ -123,10 +123,25 @@ class RelativeStrengthIndexTest {
         assertThrows(IllegalStateException.class, rsi::value);
     }
 
-    // H. Period validation: 0 is rejected by the RSI runtime itself.
+    // H. Period validation: the RSI runtime itself enforces period >= 2
+    // (not only IndicatorSpec), so RSI(0) and RSI(1) are rejected directly
+    // at construction.
     @Test
-    void rejectsAPeriodBelowOne() {
+    void rejectsAPeriodBelowTwo() {
         assertThrows(IllegalArgumentException.class, () -> new RelativeStrengthIndex(0));
+        assertThrows(IllegalArgumentException.class, () -> new RelativeStrengthIndex(1));
+    }
+
+    // H2. Period validation: 2 is the minimum accepted period.
+    @Test
+    void acceptsAPeriodOfTwo() {
+        RelativeStrengthIndex rsi = new RelativeStrengthIndex(2);
+
+        rsi.update(price("100"));
+        rsi.update(price("101"));
+        rsi.update(price("102"));
+
+        assertTrue(rsi.isReady());
     }
 
     // I. Instance independence.

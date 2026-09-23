@@ -2,9 +2,11 @@
 
 ## Current Milestone
 
-`RelativeStrengthIndex` (RSI, Wilder smoothing) implemented in
-`engine.indicator`, with hand-calculated tests. All three V1 indicators
-(SMA, EMA, RSI) are now implemented.
+D-18 strategy grammar hardening. Implemented: `Bar`, `BarSeries`,
+`IndicatorType`, `IndicatorSpec`, `Indicator`, `SimpleMovingAverage`,
+`ExponentialMovingAverage`, `RelativeStrengthIndex`, `IndicatorSnapshot`,
+`Operand`, `Operator`, `Condition`. Not yet implemented: `StrategyDefinition`
+and everything after it. All of this work is still uncommitted.
 
 ## Completed
 
@@ -188,6 +190,174 @@
   warm-up followed by a real gain, confirming no spurious gain/loss
   carried over from the flat run.
 
+### Engine implementation batch 6: `IndicatorSnapshot`
+
+- `in.vedchangani.parallax.engine.indicator.IndicatorSnapshot`: immutable
+  record (`LocalDate date`, `BigDecimal close`,
+  `Map<IndicatorSpec, Double> values`), implementing the frozen design from
+  the prior checkpoint. It is the only market-derived input visible to
+  strategy evaluation: no `Bar`, symbol, OHLV, `Portfolio` state, pending
+  order, or clock timestamp; no runtime `Indicator` object can be stored,
+  since the type has no field or constructor parameter that accepts one.
+- A snapshot holds only ready indicator values (option A from the design
+  checkpoint); "not ready" has no representation in this type. Building a
+  snapshot is the caller's (later, the Backtester's) responsibility, once
+  every referenced indicator is ready.
+- Compact constructor validation: `date`, `close`, and `values` non-null;
+  every key and value non-null; every value finite (`Double.isFinite`),
+  rejecting NaN, +Infinity, and -Infinity with `IllegalArgumentException`
+  naming the offending spec. `NullPointerException` for null
+  date/close/map/key/value, matching the existing convention in
+  `Bar`/`BarSeries`/`IndicatorSpec`.
+- Canonical immutable map: the caller's map is copied into a fresh
+  `TreeMap` ordered by a private `Comparator<IndicatorSpec>`
+  (`IndicatorType` declaration order, then period ascending), then wrapped
+  with `Collections.unmodifiableMap`. `IndicatorSpec` was not made
+  `Comparable`, per the approved design — the comparator stays private to
+  the snapshot. An empty map is valid.
+- Lookup: `double value(IndicatorSpec spec)`. Null spec throws
+  `NullPointerException`; an absent spec throws `IllegalArgumentException`
+  naming the missing spec and the available keys; a present spec returns
+  the stored `double`. Never null, 0, NaN, or `Optional`.
+- Equality/hashCode/toString: default record semantics, no overrides.
+  Because the stored map is always normalized to canonical order first,
+  two snapshots built from equal content in different insertion order are
+  `.equals()`, hash-equal, and print identically. `BigDecimal` scale is not
+  normalized (100.0 and 100.00 are unequal), matching `Bar`.
+- 25 new tests in `IndicatorSnapshotTest`: valid snapshot exposure; SMA(5)
+  vs SMA(20) lookup; equal-but-separately-constructed spec as a key;
+  missing-spec and null-spec lookup; empty map validity; null
+  date/close/map/key/value rejection; NaN/+Infinity/-Infinity rejection
+  (parameterized); defensive copy (mutating the caller's source map after
+  construction does not affect the snapshot); `values()` unmodifiability
+  (put/remove/clear); runtime isolation (updating a real
+  `SimpleMovingAverage` after snapshot creation leaves the snapshot's
+  stored value unchanged); insertion order not affecting equality,
+  hashCode, or `toString()`; canonical iteration order; snapshots differing
+  by date, close, or one indicator value; `BigDecimal` scale equality
+  semantics; and a reflection check that the record's components are
+  exactly `(LocalDate, BigDecimal, Map)`, with no `Indicator`-assignable
+  component type.
+
+### Documentation cleanup
+
+- `docs/architecture.md`: corrected the stale `in.vedchangani.engine.*`
+  future-package listing to `in.vedchangani.parallax.engine.*` (the actual
+  root package, corrected earlier for the implemented classes but not yet
+  updated in this listing), and corrected the stale "no engine code exists
+  yet" status line under "Engine Architecture (V1..." to reflect that
+  `data` and `indicator` (including `IndicatorSnapshot`) are implemented.
+
+### Strategy grammar design checkpoint: `Operand` and `Condition` (design)
+
+Design only, recorded before implementation. Full design is in
+`docs/architecture.md` ("Operand and Condition") and D-18.
+
+- Docs corrections made at this checkpoint:
+  - Added the approved `IndicatorSnapshot` decision as D-17 to
+    `decisions.md`. It had been missed in the earlier checkpoint.
+  - Added a short `IndicatorSnapshot` summary to `architecture.md`.
+  - Changed the `decisions.md` header, which said D-4 onward were "not
+    yet implemented", to point to this file for implementation status.
+
+### Engine implementation batch 7: `Operand`, `Operator`, `Condition`
+
+`in.vedchangani.parallax.engine.strategy`, implementing D-18:
+
+- `sealed interface Operand { double resolve(IndicatorSnapshot) }` with
+  nested records `IndicatorRef(IndicatorSpec)`, `Close()` and
+  `Constant(double)`. `IndicatorRef` resolves via `snapshot.value(spec)`
+  and holds nothing but the spec — no runtime `Indicator`. `Close` holds no
+  fields, so it exposes nothing but the snapshot's close. `Constant` is
+  `double`, per the existing numerical policy (D-14); it rejects
+  non-finite values and normalizes `-0.0` to `0.0`.
+- `enum Operator { GT, LT }`.
+- `sealed interface Condition { boolean evaluate(IndicatorSnapshot) }` with
+  nested records `Compare(Operand, Operator, Operand)`,
+  `All(List<Condition>)` and `Any(List<Condition>)`. `All`/`Any` nest,
+  short-circuit (verified with a "poison" child that throws if evaluated,
+  since `Condition` is sealed and cannot be mocked), and evaluate in list
+  order.
+- Evaluation is pure and snapshot-only: every method takes only an
+  `IndicatorSnapshot`, so nothing in the grammar can reach a `Bar`,
+  `BarSeries`, runtime `Indicator`, `Portfolio`, order, or the clock.
+- Construction validation, exactly as D-18 specifies: null components
+  throw NPE; a non-finite `Constant` throws IAE; an empty `All`/`Any`
+  throws IAE and a null child throws NPE (via `List.copyOf`); single-child
+  groups are allowed.
+  - **`Compare` does not reject constant-vs-constant or identical
+    operands.** The design checkpoint had rejected both; the
+    implementation batch removed that restriction, since both are valid,
+    deterministic expressions whose result simply does not depend on the
+    snapshot — see the D-18 "Implementation update" and
+    `docs/architecture.md`.
+- A missing spec propagates the snapshot's `IllegalArgumentException`
+  unchanged; the grammar does not duplicate that lookup validation.
+- Equality is default structural record equality; `All`/`Any` child order
+  is significant and is never canonicalized.
+- 53 new tests across six files: `OperandTest` (10), `CompareTest` (16,
+  including constant-vs-constant and identical-operand cases),
+  `AllTest` (9), `AnyTest` (9), `ConditionPurityAndEqualityTest` (5,
+  purity, snapshot non-mutation, structural equality including nested
+  trees, order-sensitivity), `StrategyGrammarStructureTest` (4, a
+  reflection check that no `Operand`/`Condition` record component is
+  assignable from `Bar`, `BarSeries`, or `Indicator`, plus a check that
+  both interfaces are sealed).
+- Docs updated to match the implemented (not the originally rejected)
+  behavior: `architecture.md`'s validation table and its status line;
+  `decisions.md` D-18's validation list, "Why", and "Rejected" sections,
+  with an explicit "Implementation update" note; this file.
+
+### Cleanup: RSI runtime hardening and stale documentation
+
+- `RelativeStrengthIndex`'s constructor now rejects `period < 2` directly,
+  matching D-11/`IndicatorSpec`'s existing `RSI period >= 2` rule. Before
+  this, only `IndicatorSpec` enforced the minimum; the concrete runtime
+  class itself accepted `period == 1`. The RSI algorithm, readiness, and
+  Wilder calculations are unchanged.
+- `RelativeStrengthIndexTest`: `rejectsAPeriodBelowOne` renamed to
+  `rejectsAPeriodBelowTwo` and extended to assert `RSI(1)` is rejected
+  (previously only `RSI(0)` was tested at the runtime level); added
+  `acceptsAPeriodOfTwo` to prove `RSI(2)` is accepted by the concrete
+  class itself, not only by `IndicatorSpec`.
+- `docs/architecture.md`: the "Engine Architecture" heading still read
+  "not yet implemented" despite its own status line correctly listing
+  `data`, `indicator`, and `strategy` as implemented; corrected to
+  "partially implemented".
+- `docs/progress.md`: removed the stale "Known Problems" entry about the
+  root `README.md` — its removal was a deliberate choice by the project
+  owner, not an open problem. Current Milestone rewritten to list the full
+  set of implemented types instead of naming only the most recent batch.
+
+### D-18 strategy grammar hardening
+
+- `Condition.Compare.evaluate` now rejects a null snapshot with
+  `NullPointerException`, even when neither operand reads it (for example
+  constant vs constant). `Compare` is the only leaf of the sealed
+  hierarchy, and a non-empty `All`/`Any` always evaluates its first child,
+  so this single check covers every condition tree. Behavior for non-null
+  snapshots is unchanged.
+- Tests strengthened (5 new, 149 engine tests total):
+  - `StrategyGrammarStructureTest`:
+    - asserts the exact permitted subclasses of `Operand`
+      (`IndicatorRef`, `Close`, `Constant`) and `Condition` (`Compare`,
+      `All`, `Any`), and `Operator.values() == [GT, LT]`
+    - replaces the blacklist check with a whitelist: every record component
+      must be `IndicatorSpec`, `double`, `Operand`, `Operator` or `List`,
+      and every `List` must be `List<Condition>`
+  - `AllTest`/`AnyTest`: a new test proves `POISON` really throws when
+    reached (`All(TRUE, POISON)` and `Any(FALSE, POISON)` both throw), so
+    the short-circuit tests (`All(FALSE, POISON)` → false,
+    `Any(TRUE, POISON)` → true) can't pass vacuously.
+  - `CompareTest`:
+    - close `100.10` vs `Constant(100.1)`: both GT and LT are false, which
+      pins D-18's double-comparison boundary
+    - null snapshot with constant vs constant throws NPE
+  - `OperandTest`:
+    - a missing spec's exception message names the spec, proving the
+      snapshot's exception passes through untranslated
+    - `Constant(-0.0)` and `Constant(0.0)` have equal hash codes
+
 ## Current Architecture
 
 ```
@@ -198,9 +368,11 @@ Parallax/
 │   ├── pom.xml
 │   └── src/{main,test}/java/in/vedchangani/parallax/engine/
 │       ├── data/            # Bar, BarSeries (implemented)
-│       └── indicator/       # IndicatorType, IndicatorSpec, Indicator,
-│                             #   SimpleMovingAverage, ExponentialMovingAverage,
-│                             #   RelativeStrengthIndex (implemented)
+│       ├── indicator/       # IndicatorType, IndicatorSpec, Indicator,
+│       │                     #   SimpleMovingAverage, ExponentialMovingAverage,
+│       │                     #   RelativeStrengthIndex, IndicatorSnapshot
+│       │                     #   (implemented)
+│       └── strategy/        # Operand, Operator, Condition (implemented)
 ├── backend/                 # Spring Boot application module
 ├── frontend/                # React/Vite application
 ├── docs/
@@ -210,32 +382,34 @@ Parallax/
 └── CLAUDE.md
 ```
 
-Approved engine (not implemented): stateless
+Approved but not yet implemented — the run loop: stateless
 `Backtester.run(BarSeries, StrategyDefinition, BacktestConfig) ->
 BacktestResult`; single-pass loop per bar: stop after `endDate` → execute
 pending order at open → update indicators at close → skip lookback bars →
 record equity point → evaluate strategy (ready, not last in-range bar) →
-size at close and queue order. Future packages: `data`, `indicator`,
-`strategy`, `execution`, `portfolio`, `result`, with `Backtester` at the
-engine root.
+size at close and queue order. Still to build: `StrategyDefinition` (in
+`strategy`), the `execution`, `portfolio` and `result` packages, and
+`Backtester` at the engine root.
 
 ## Verification
 
-Run from `C:\Parallax`:
+Run from `C:\Parallax` (current state, after the D-18 hardening batch):
 
-- `./mvnw -pl engine test`: `Tests run: 65, Failures: 0, Errors: 0, Skipped:
-  0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1),
+- Strategy tests (`OperandTest`, `CompareTest`, `AllTest`, `AnyTest`,
+  `ConditionPurityAndEqualityTest`, `StrategyGrammarStructureTest`): 58
+  tests, 0 failures.
+- `./mvnw -pl engine test`: `Tests run: 149, Failures: 0, Errors: 0,
+  Skipped: 0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1),
   `IndicatorSpecTest` (12), `SimpleMovingAverageTest` (9),
-  `ExponentialMovingAverageTest` (11), `RelativeStrengthIndexTest` (10, new
-  this batch).
+  `ExponentialMovingAverageTest` (11), `RelativeStrengthIndexTest` (11),
+  `IndicatorSnapshotTest` (25), `OperandTest` (10), `CompareTest` (18),
+  `AllTest` (10), `AnyTest` (10), `ConditionPurityAndEqualityTest` (5),
+  `StrategyGrammarStructureTest` (5).
 - `./mvnw clean install`: BUILD SUCCESS. Reactor: Parallax (pom), Parallax
-  Engine, backend; same 65 engine tests plus 1 backend test.
-- `git status --short`: only `RelativeStrengthIndex.java` and
-  `RelativeStrengthIndexTest.java` are new; `backend/` and `frontend/` are
-  unchanged.
-- Docs consistency check (prior milestone): every D-n reference resolves to
-  a heading in `decisions.md`; all progress references point to
-  `docs/progress.md`; no terms from the superseded draft design remain.
+  Engine, backend; 149 engine tests plus 1 backend test.
+- `backend/` and `frontend/` unchanged.
+- Docs consistency check: every `D-n` reference (`D-1` through `D-18`)
+  resolves to a heading in `decisions.md`.
 
 ## Decisions
 
@@ -248,13 +422,19 @@ Run from `C:\Parallax`:
   Fill and derived trades; average-cost accounting with the equity
   identity; BigDecimal ledger / double indicators; determinism and lookback
   provenance; long-only without an Instrument abstraction.
+- D-17: `IndicatorSnapshot` is an immutable value that holds only ready
+  values, in canonical order, with finite values and fail-fast lookup
+  (implemented).
+- D-18: `Operand`/`Condition` are sealed interfaces of nested records with
+  GT/LT only, nestable `All`/`Any`, no empty groups, `double` constants,
+  constant-vs-constant and identical operands permitted, and pure
+  snapshot-only evaluation (implemented).
 
 See [decisions.md](decisions.md).
 
 ## Known Problems
 
-- Root `README.md` written during bootstrap is no longer in the repository.
-  Confirm whether that was intended.
+None currently open.
 
 ## Open Questions (edge cases not specified by the approved design)
 
@@ -269,12 +449,22 @@ See [decisions.md](decisions.md).
 4. Price adjustment basis (raw vs split/dividend adjusted) for datasets:
    to decide with the data layer; must be part of dataset provenance.
 
+5. `SignalEvent(date, type, snapshot)` as sketched in `architecture.md`
+   would duplicate `snapshot.date()`. Not decided in the
+   `IndicatorSnapshot` batch; revisit when `SignalEvent` is designed.
+
+6. Where the set of referenced `IndicatorSpec`s is collected (on
+   `StrategyDefinition`, or as a static traversal used by the Backtester).
+   Its iteration order must be deterministic. To decide with
+   `StrategyDefinition`.
+7. Persisting `Constant(double)` in the backend: store it in a form that
+   round-trips exactly (for example `Double.toString`) so that reloaded
+   strategy versions stay equal.
+
 ## Next Milestone
 
-Consolidated indicator review and `IndicatorSnapshot` design: with SMA,
-EMA, and RSI all implemented, decide how a strategy is handed a read-only
-view of indicator values as of bar N close (per the approved architecture,
-`IndicatorSnapshot` is the only market-derived input visible to strategy
-evaluation — it must not expose the indicators themselves, `BarSeries`, or
-any mutable run state). No `Strategy`, `Condition`, `Backtester`,
-execution, or portfolio logic in that batch.
+`StrategyDefinition` — an immutable configuration object composing an
+entry `Condition`, an exit `Condition`, and (once designed) a
+`PositionSizing`. Also where the set of referenced `IndicatorSpec`s
+(Open Question 6) is decided. No `SignalEvent`, `Backtester`, execution,
+or portfolio logic in that batch.

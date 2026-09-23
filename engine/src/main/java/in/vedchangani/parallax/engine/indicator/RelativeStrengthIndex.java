@@ -45,8 +45,8 @@ public final class RelativeStrengthIndex implements Indicator {
     private double averageLoss;
 
     public RelativeStrengthIndex(int period) {
-        if (period < 1) {
-            throw new IllegalArgumentException("period must be >= 1, was " + period);
+        if (period < 2) {
+            throw new IllegalArgumentException("period must be >= 2, was " + period);
         }
         this.period = period;
     }

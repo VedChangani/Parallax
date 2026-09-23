@@ -92,11 +92,14 @@ See [decisions.md](decisions.md).
 
 ---
 
-# Engine Architecture (V1 — approved design, not yet implemented)
+# Engine Architecture (V1 — approved design, partially implemented)
 
-Status: approved design. No engine code exists yet beyond the module
-skeleton. Decisions referenced as D-n are in [decisions.md](decisions.md);
-project state is tracked in [docs/progress.md](progress.md).
+Status: approved design. `data`, `indicator` (including `IndicatorSnapshot`)
+and `strategy` (`Operand`, `Operator`, `Condition`) are implemented;
+`StrategyDefinition`, `Backtester` and the remaining packages below are not
+yet implemented. Decisions referenced as D-n are in
+[decisions.md](decisions.md); project state is tracked in
+[docs/progress.md](progress.md).
 
 ## 1. Shape
 
@@ -123,13 +126,13 @@ PerformanceMetrics.of(result)      [later]
 Future packages (created only when code for them is written):
 
 ```
-in.vedchangani.engine             Backtester
-in.vedchangani.engine.data        Bar, BarSeries
-in.vedchangani.engine.indicator   IndicatorType, IndicatorSpec, Indicator, IndicatorSnapshot
-in.vedchangani.engine.strategy    StrategyDefinition, Condition, Operand, PositionSizing, SignalEvent
-in.vedchangani.engine.execution   Order, Fill, OrderRejection
-in.vedchangani.engine.portfolio   Portfolio, PortfolioState, EquityPoint
-in.vedchangani.engine.result      BacktestConfig, BacktestResult, Trade
+in.vedchangani.parallax.engine             Backtester
+in.vedchangani.parallax.engine.data        Bar, BarSeries
+in.vedchangani.parallax.engine.indicator   IndicatorType, IndicatorSpec, Indicator, IndicatorSnapshot
+in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operand, Operator, PositionSizing, SignalEvent
+in.vedchangani.parallax.engine.execution   Order, Fill, OrderRejection
+in.vedchangani.parallax.engine.portfolio   Portfolio, PortfolioState, EquityPoint
+in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
 ```
 
 ## 2. Domain model
@@ -181,21 +184,124 @@ future data.
 Immutable snapshot of indicator values as of bar N close. It is the only
 market-derived input visible to strategy evaluation.
 
+Record `(LocalDate date, BigDecimal close, Map<IndicatorSpec, Double>
+values)`. It holds only ready, finite values, stored as a defensively
+copied, unmodifiable map in canonical order (type declaration order, then
+period). `value(spec)` fails fast for a missing spec. See D-17.
+
 ### StrategyDefinition
 
 Structured immutable definition: entry condition, exit condition, position
 sizing. No arbitrary executable user code.
 
-### Condition
+### Operand and Condition (package `strategy`, see D-18)
 
-`Compare(Operand, Operator, Operand)` with `Operator` ∈ {`GT`, `LT`};
-`All(List<Condition>)`; `Any(List<Condition>)`. Not a general-purpose
-expression language.
+The whole V1 strategy grammar is two sealed interfaces and one enum. Each
+permitted implementation is a record nested inside its interface:
 
-### Operand
+```
+sealed interface Operand   { double  resolve(IndicatorSnapshot s); }
+  record IndicatorRef(IndicatorSpec spec)    -> s.value(spec)
+  record Close()                             -> s.close().doubleValue()
+  record Constant(double value)              -> value
 
-`IndicatorRef(IndicatorSpec)`, `Constant`, `Close`. No arithmetic operands,
-equality operators, or crossover abstractions in V1.
+enum Operator { GT, LT }                     GT: left > right, LT: left < right
+
+sealed interface Condition { boolean evaluate(IndicatorSnapshot s); }
+  record Compare(Operand left, Operator operator, Operand right)
+  record All(List<Condition> conditions)     logical AND, short-circuit, list order
+  record Any(List<Condition> conditions)     logical OR,  short-circuit, list order
+```
+
+It is referenced as `Operand.Close`, `Condition.All` and so on.
+
+Examples:
+
+```
+SMA(20) > SMA(50):
+  Compare(IndicatorRef(SMA,20), GT, IndicatorRef(SMA,50))
+
+SMA(20) > SMA(50) AND RSI(14) < 70:
+  All([ Compare(IndicatorRef(SMA,20), GT, IndicatorRef(SMA,50)),
+        Compare(IndicatorRef(RSI,14), LT, Constant(70)) ])
+```
+
+Evaluation boundary:
+
+- Evaluation is a pure function of the condition tree and one
+  `IndicatorSnapshot`.
+- Nothing in the grammar can reach `BarSeries`, `Bar`, runtime
+  `Indicator`s, `Portfolio`, orders, the clock or I/O. The only input is
+  the snapshot, and no record holds any other state.
+- Every comparison is a `double` comparison (D-14). `Close` converts the
+  `BigDecimal` close with `doubleValue()` at resolve time.
+
+Composition:
+
+- `All` and `Any` hold `List<Condition>`, so they nest (for example
+  `A AND (B OR C)`).
+- Trees are built bottom-up from immutable records, so they are finite and
+  acyclic, and evaluation always terminates.
+- There is no depth limit, no variables, no arithmetic and no functions.
+
+Construction-time validation (fail fast):
+
+| Type | Rule | Exception |
+|---|---|---|
+| `IndicatorRef` | `spec` non-null (spec validity is already guaranteed by `IndicatorSpec`) | NPE |
+| `Constant` | value finite (no NaN / ±Infinity); `-0.0` normalized to `0.0` | IAE |
+| `Compare` | `left`, `operator`, `right` non-null | NPE |
+| `All` / `Any` | list non-null; no null elements (`List.copyOf`) | NPE |
+| `All` / `Any` | list non-empty | IAE |
+
+`Compare` does **not** reject a `Constant` vs `Constant` comparison or
+`left.equals(right)`. Both are accepted, well-defined, deterministic
+expressions — their evaluated result just never depends on the snapshot.
+Rejecting them would be extra validation for a case that is harmless to
+evaluate and costs nothing to allow; the grammar does not try to detect
+"this condition happens to always be true/false" in general, and singling
+out these two shapes would be arbitrary.
+
+Rules for `All` and `Any`:
+
+- An empty `All` or `Any` is rejected. `All([])` would be vacuously true
+  and enter on every bar. `Any([])` would never trade. Either one is almost
+  certainly a configuration error, so neither is given an arbitrary
+  meaning.
+- A single-child `All`/`Any` is allowed. It is logically the child itself.
+
+Missing indicator:
+
+- An `IndicatorRef` whose spec is absent from the snapshot propagates the
+  snapshot's `IllegalArgumentException` unchanged. It is not translated or
+  pre-validated in the grammar.
+- Prevention is structural. The Backtester creates one runtime indicator
+  per spec referenced by the `StrategyDefinition`, so a miss inside the
+  engine means an engine bug, not bad user data.
+- Collecting the referenced specs (an exhaustive traversal over the sealed
+  types) is designed with `StrategyDefinition`.
+
+Non-finite values:
+
+- NaN cannot reach a comparison. Snapshot values are finite (D-17),
+  `Constant` rejects non-finite values, and a positive `BigDecimal` close
+  converts to a positive finite double or at worst `+Infinity`, never NaN.
+
+Equality is structural record equality:
+
+- `All([A, B])` ≠ `All([B, A])` even though they are logically
+  equivalent. Order is part of the definition and is never canonicalized.
+- Duplicate children are allowed.
+- Record `toString()` is deterministic, because the trees contain no maps.
+
+V1 semantics to keep in mind:
+
+- Conditions are **state** conditions, not **events**.
+  `SMA(20) > SMA(50)` means "is above", not "crossed above".
+- Because entry is evaluated whenever the strategy is flat, a strategy may
+  enter on the first evaluable bar of a trend that was already in
+  progress.
+- There are no `>=`, `<=`, `==`, `NOT` or crossover operators.
 
 ### PositionSizing
 
@@ -272,7 +378,8 @@ engine; `IndicatorValue` wrapper; `Strategy` interface; `StrategyContext`
 service; general expression language; separate persisted signal list;
 order list in the result; mutable open-trade tracker; crossover
 abstraction; `NOT` operator; arithmetic operands; `>=` / `<=` / `==`;
-limit orders; stop orders; order book; broker model; event bus;
+`BigDecimal` constants; external condition evaluator/visitor; condition
+canonicalization (reordering `All`/`Any` children); limit orders; stop orders; order book; broker model; event bus;
 pyramiding; partial strategy exits; multiple simultaneous positions;
 metrics inside the loop.
 
@@ -527,8 +634,15 @@ Small hand-calculable fixtures, not only external market data.
   duplicate date, out-of-order date, empty series, immutability.
 - **Indicators**: SMA warm-up and values, EMA warm-up and seeded values,
   RSI Wilder calculations, RSI edge cases, readiness.
-- **Strategy**: condition comparisons, AND/OR, no evaluation before
-  readiness.
+- **Strategy** (implemented; `engine.strategy`): operand resolution
+  (indicator, close, constant), GT/LT including equal operands (both
+  false), constant-vs-constant and identical-operand comparisons (both
+  permitted), AND/OR with nesting and short-circuiting, construction
+  validation (empty `All`/`Any`, non-finite constant), missing spec
+  propagating the snapshot's exception, structural equality, purity, and a
+  reflection check that the grammar's records hold no `Bar`, `BarSeries`,
+  or runtime `Indicator`. No evaluation before readiness is a `Backtester`
+  concern, not tested here.
 - **Execution**: signal at bar N close, fill at bar N+1 open, no same-bar
   fill, no signal on the last in-range bar, commission, slippage,
   insufficient-cash rejection, zero-quantity rejection.

@@ -2,7 +2,7 @@
 
 D-1 to D-3 cover the repository bootstrap. D-4 onward are the approved V1
 engine design. They are frozen unless a concrete correctness issue is
-discovered, and are not yet implemented. Full design:
+discovered. Implementation status is tracked in progress.md. Full design:
 [architecture.md](architecture.md), "Engine Architecture". Project state:
 [docs/progress.md](progress.md).
 
@@ -213,3 +213,169 @@ The instrument is identified by the `BarSeries` symbol only.
 
 **Why:** V1 scope in CLAUDE.md. An Instrument type would carry metadata V1
 does not use.
+## D-17 IndicatorSnapshot is an immutable, ready-only, canonically ordered value
+
+**Decision:** `IndicatorSnapshot` is a record `(LocalDate date, BigDecimal
+close, Map<IndicatorSpec, Double> values)` in `engine.indicator`. It
+represents what is known at bar N close:
+
+- `date` = N.date
+- `close` = N.close
+- each value = the indicator's value after `update(N.close)`
+
+It holds no `Bar`, symbol, open/high/low/volume, portfolio state, pending
+order, execution data, clock timestamp, or runtime `Indicator`.
+
+- **Readiness:** it holds only ready values. The Backtester builds one only
+  when every referenced indicator is ready, and "not ready" has no
+  representation. There is no `Optional` and no sentinel.
+- **Validation:** date, close, map, keys and values must be non-null
+  (NPE). Values must be finite (IAE for NaN or ±Infinity). The close's
+  positivity is already guaranteed by `Bar` and is not re-checked.
+- **Storage:** the caller's map is copied into a new `TreeMap` ordered by a
+  private comparator (`IndicatorType` declaration order, then period
+  ascending) and exposed as `Collections.unmodifiableMap`. `IndicatorSpec`
+  is not `Comparable`. An empty map is valid.
+- **Lookup:** `double value(IndicatorSpec)` throws NPE for a null spec and
+  IAE naming the spec when it is absent. It never returns null, 0, NaN or
+  `Optional`.
+- **Equality:** default record equality. Map equality ignores order.
+  `BigDecimal` equality depends on scale, as in `Bar`.
+
+**Why:**
+
+- Strategies must see frozen values. Runtime indicators are mutable and
+  keep changing after the signal bar.
+- The finite check is done once, at the boundary strategies read from, so
+  a NaN can never silently turn every comparison false. Each indicator
+  does not repeat it.
+- `Map.copyOf` was rejected because its iteration order varies between JVM
+  runs (D-15).
+- Canonical order means equal snapshots iterate and print identically.
+- The snapshot is the frozen output of indicator state and is keyed by
+  `IndicatorSpec`, so it lives in `indicator`. The `strategy` package
+  depends on it.
+
+**Rejected:**
+
+- **Passing `Indicator` instances:** they are mutable.
+- **`EnumMap`:** cannot hold two periods of the same type.
+- **A list of `IndicatorValue` wrappers:** that wrapper is already
+  rejected.
+- **Positional arrays:** couple conditions to the Backtester's indicator
+  ordering.
+- **Optional or NaN for not-ready values:** unnecessary with ready-only
+  snapshots.
+- **Carrying the whole `Bar`:** exposes fields no V1 operand uses.
+
+## D-18 Operand and Condition: two sealed interfaces of nested records, GT/LT only, no empty groups
+
+**Decision:** The V1 strategy grammar lives in `engine.strategy`:
+
+- `sealed interface Operand { double resolve(IndicatorSnapshot) }` with
+  nested records:
+  - `IndicatorRef(IndicatorSpec spec)` resolves to `snapshot.value(spec)`.
+  - `Close()` resolves to `snapshot.close().doubleValue()`.
+  - `Constant(double value)` resolves to `value`.
+- `enum Operator { GT, LT }`.
+- `sealed interface Condition { boolean evaluate(IndicatorSnapshot) }` with
+  nested records:
+  - `Compare(Operand left, Operator operator, Operand right)`
+  - `All(List<Condition>)`, a short-circuit AND in list order
+  - `Any(List<Condition>)`, a short-circuit OR in list order
+
+`All` and `Any` nest, so `A AND (B OR C)` can be expressed.
+
+Evaluation is a pure function of the condition and one snapshot.
+
+Construction-time validation:
+
+- Null components throw NPE.
+- `Constant` must be finite (IAE). `-0.0` is normalized to `0.0`.
+- `All` and `Any` copy their list with `List.copyOf`, which throws NPE for
+  a null element, and reject an empty list (IAE).
+
+`Compare` does **not** reject a `Constant` vs `Constant` comparison, nor
+`left.equals(right)`. Both are valid, deterministic expressions whose
+result happens not to depend on the snapshot; this was revised during
+implementation from the design checkpoint, which had rejected them (see
+**Implementation update** below).
+
+A missing spec at evaluation time propagates the snapshot's
+`IllegalArgumentException` unchanged.
+
+Equality is structural record equality. `All`/`Any` child order is
+significant and is never canonicalized.
+
+**Why:**
+
+- **Pure, snapshot-only evaluation:** it takes exactly one snapshot, so
+  there is no path to future bars, the `BarSeries`, runtime indicators,
+  the portfolio or the clock. Look-ahead protection comes from the method
+  signature, not from discipline.
+- **`double` constants:** D-14 already makes condition comparisons
+  `double`, so a `BigDecimal` constant would be converted at comparison
+  time anyway and would only add scale-sensitive equality (`70` ≠ `70.0`)
+  to strategy definitions. A decimal string such as `"101.5"` and a
+  `BigDecimal` close with the same value both round to the same nearest
+  double, so boundary comparisons between them are consistent.
+- **Finite-constant check:** it closes the last way a NaN could reach a
+  comparison. Snapshot values are already finite, and a positive close can
+  never become NaN.
+- **`-0.0` normalization:** it keeps two definitions that behave the same
+  from comparing unequal. Evaluation is unaffected.
+- **Rejecting empty groups:** `All([])` would be vacuously true and enter
+  every bar; `Any([])` would never trade. Neither is a meaningful strategy,
+  and rejecting them avoids an arbitrary convention.
+- **Permitting constant-vs-constant and identical operands:** both are
+  well-defined, deterministic expressions; their evaluated result simply
+  never depends on the snapshot. See **Implementation update** below.
+- **Single-child groups:** allowed, because they are logically well
+  defined.
+- **Missing specs:** handled structurally. The Backtester creates
+  indicators from the specs the strategy references, so the grammar does
+  not repeat the snapshot's lookup validation.
+- **Sealed interfaces with nested records:** the whole grammar sits in
+  three small files and gives exhaustive pattern matching. That matching
+  is used later to collect referenced specs (designed with
+  `StrategyDefinition`).
+
+**Rejected:**
+
+- **`BigDecimal` constants:** they add nothing at comparison time and make
+  equality depend on scale.
+- **An external evaluator or visitor:** adds a class for no V1 benefit.
+- **Operator-as-strategy objects or lambdas:** not value types, so no
+  reliable equality.
+- **A `StrategyContext`:** already rejected.
+- **Vacuous-truth semantics for empty groups:** see the empty-group
+  reasoning above.
+- **Canonicalizing child order:** logical equivalence is not definitional
+  identity.
+- **Depth limits:** immutable trees are finite and acyclic.
+- **Translating the missing-spec exception:** it would only duplicate the
+  snapshot's validation.
+- **Rejecting `Compare(Constant, op, Constant)` and `Compare(x, op, x)`:**
+  see **Implementation update**.
+
+Also rejected, as in D-10: `NOT`, `>=`, `<=` and `==`, crossover, and
+arithmetic or function operands.
+
+**Consequence:** Conditions are *state* conditions, not events.
+`SMA(20) > SMA(50)` means "is above", not "crossed above". Because entry
+is evaluated whenever flat, a strategy may enter on the first evaluable
+bar of a trend already in progress. This is intended V1 behavior and must
+be clear in results and UI.
+
+**Implementation update:** the design checkpoint had `Compare` reject a
+`Constant` vs `Constant` comparison and `left.equals(right)`, reasoning
+that such comparisons can never depend on the market and are likely
+configuration mistakes. The implementation batch removed both
+restrictions: a constant-vs-constant or self comparison is a valid,
+deterministic boolean expression — evaluating it costs nothing, and its
+fixed result is not a defect in the grammar. Flagging a "this condition
+happens to always evaluate the same way" pattern in general is not
+something V1 attempts, so singling out these two shapes for rejection
+would have been an arbitrary special case rather than a real correctness
+rule. `IndicatorSpec` equality, snapshot lookup, and every other validation
+rule in this decision are unchanged.
