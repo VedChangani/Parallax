@@ -92,11 +92,34 @@ See [decisions.md](decisions.md).
 
 ---
 
-# Engine Architecture (V1 — approved design, not yet implemented)
+# Engine Architecture (V1 — approved design, partially implemented)
 
-Status: approved design. No engine code exists yet beyond the module
-skeleton. Decisions referenced as D-n are in [decisions.md](decisions.md);
-project state is tracked in [docs/progress.md](progress.md).
+Status: approved design, partially implemented — see "Implementation
+status" below. Decisions referenced as D-n are in
+[decisions.md](decisions.md).
+
+## Implementation status
+
+Implemented (all packages below `engine`):
+
+- `data`: `Bar`, `BarSeries`
+- `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator`,
+  `SimpleMovingAverage`, `ExponentialMovingAverage`,
+  `RelativeStrengthIndex`, `IndicatorSnapshot`
+- `strategy`: `Operand`, `Operator`, `Condition`, `PositionSizing`,
+  `StrategyDefinition`, `SignalType`, `SignalEvent`
+- `execution`: `OrderSide`, `Order`, `Fill`, `RejectionReason`,
+  `OrderRejection`
+- `portfolio`: `Portfolio`, `EquityPoint`
+- `result`: `BacktestConfig`, `Trade`, `BacktestResult`
+
+Not yet implemented: the `IndicatorSpec -> Indicator` factory,
+`Backtester` itself, performance metrics, backend integration, and
+frontend. Nothing else stands between the current state and
+`Backtester.run(...)` — every type the loop assembles already exists.
+
+This section reflects current state only; see Git history for how it was
+reached.
 
 ## 1. Shape
 
@@ -123,13 +146,13 @@ PerformanceMetrics.of(result)      [later]
 Future packages (created only when code for them is written):
 
 ```
-in.vedchangani.engine             Backtester
-in.vedchangani.engine.data        Bar, BarSeries
-in.vedchangani.engine.indicator   IndicatorType, IndicatorSpec, Indicator, IndicatorSnapshot
-in.vedchangani.engine.strategy    StrategyDefinition, Condition, Operand, PositionSizing, SignalEvent
-in.vedchangani.engine.execution   Order, Fill, OrderRejection
-in.vedchangani.engine.portfolio   Portfolio, PortfolioState, EquityPoint
-in.vedchangani.engine.result      BacktestConfig, BacktestResult, Trade
+in.vedchangani.parallax.engine             Backtester
+in.vedchangani.parallax.engine.data        Bar, BarSeries
+in.vedchangani.parallax.engine.indicator   IndicatorType, IndicatorSpec, Indicator, IndicatorSnapshot
+in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operand, Operator, PositionSizing, SignalType, SignalEvent
+in.vedchangani.parallax.engine.execution   Order, OrderSide, Fill, RejectionReason, OrderRejection
+in.vedchangani.parallax.engine.portfolio   Portfolio, EquityPoint
+in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
 ```
 
 ## 2. Domain model
@@ -181,89 +204,492 @@ future data.
 Immutable snapshot of indicator values as of bar N close. It is the only
 market-derived input visible to strategy evaluation.
 
+Record `(LocalDate date, BigDecimal close, Map<IndicatorSpec, Double>
+values)`. It holds only ready, finite values, stored as a defensively
+copied, unmodifiable map in canonical order (type declaration order, then
+period). `value(spec)` fails fast for a missing spec. See D-17.
+
 ### StrategyDefinition
 
 Structured immutable definition: entry condition, exit condition, position
-sizing. No arbitrary executable user code.
+sizing. No arbitrary executable user code. Full design after Operand and
+Condition below, since it is built from them (see D-19).
 
-### Condition
+### Operand and Condition (package `strategy`, see D-18)
 
-`Compare(Operand, Operator, Operand)` with `Operator` ∈ {`GT`, `LT`};
-`All(List<Condition>)`; `Any(List<Condition>)`. Not a general-purpose
-expression language.
+The whole V1 strategy grammar is two sealed interfaces and one enum. Each
+permitted implementation is a record nested inside its interface:
 
-### Operand
+```
+sealed interface Operand   { double  resolve(IndicatorSnapshot s); }
+  record IndicatorRef(IndicatorSpec spec)    -> s.value(spec)
+  record Close()                             -> s.close().doubleValue()
+  record Constant(double value)              -> value
 
-`IndicatorRef(IndicatorSpec)`, `Constant`, `Close`. No arithmetic operands,
-equality operators, or crossover abstractions in V1.
+enum Operator { GT, LT }                     GT: left > right, LT: left < right
 
-### PositionSizing
+sealed interface Condition { boolean evaluate(IndicatorSnapshot s); }
+  record Compare(Operand left, Operator operator, Operand right)
+  record All(List<Condition> conditions)     logical AND, short-circuit, list order
+  record Any(List<Condition> conditions)     logical OR,  short-circuit, list order
+```
 
-V1 supports only `CashFraction(BigDecimal fraction)` with
-`0 < fraction <= 1`.
+It is referenced as `Operand.Close`, `Condition.All` and so on.
 
-### SignalEvent
+Examples:
 
-Immutable: date, type (`ENTER` / `EXIT`), relevant `IndicatorSnapshot`.
-It preserves the explanation for why an order was generated.
+```
+SMA(20) > SMA(50):
+  Compare(IndicatorRef(SMA,20), GT, IndicatorRef(SMA,50))
 
-### Order
+SMA(20) > SMA(50) AND RSI(14) < 70:
+  All([ Compare(IndicatorRef(SMA,20), GT, IndicatorRef(SMA,50)),
+        Compare(IndicatorRef(RSI,14), LT, Constant(70)) ])
+```
 
-Transient runtime object: sequential per-run order ID, side (`BUY` /
-`SELL`), whole-share quantity, `SignalEvent`. Market order only, executed
-at the next bar's open. Orders are not part of the result.
+Evaluation boundary:
 
-### Fill
+- Evaluation is a pure function of the condition tree and one
+  `IndicatorSnapshot`.
+- Nothing in the grammar can reach `BarSeries`, `Bar`, runtime
+  `Indicator`s, `Portfolio`, orders, the clock or I/O. The only input is
+  the snapshot, and no record holds any other state.
+- Every comparison is a `double` comparison (D-14). `Close` converts the
+  `BigDecimal` close with `doubleValue()` at resolve time.
 
-Immutable source of truth for executed trading activity: order ID, fill
-date, side, quantity, reference open, fill price, commission, slippage
-cost, `SignalEvent`. The `SignalEvent` travels on the fill so that trade
-derivation recovers the reason for each trade without duplicate state.
+Composition:
 
-### OrderRejection
+- `All` and `Any` hold `List<Condition>`, so they nest (for example
+  `A AND (B OR C)`).
+- Trees are built bottom-up from immutable records, so they are finite and
+  acyclic, and evaluation always terminates.
+- There is no depth limit, no variables, no arithmetic and no functions.
 
-Immutable outcome for a signal that does not result in a fill:
-`SignalEvent`, date, rejection reason, quantity, required cash, available
-cash. Initial reasons: `INSUFFICIENT_CASH`, `ZERO_QUANTITY`.
+Construction-time validation (fail fast):
 
-Every generated `SignalEvent` has exactly one outcome: a `Fill` or an
-`OrderRejection`. No separate signal list is stored.
+| Type | Rule | Exception |
+|---|---|---|
+| `IndicatorRef` | `spec` non-null (spec validity is already guaranteed by `IndicatorSpec`) | NPE |
+| `Constant` | value finite (no NaN / ±Infinity); `-0.0` normalized to `0.0` | IAE |
+| `Compare` | `left`, `operator`, `right` non-null | NPE |
+| `All` / `Any` | list non-null; no null elements (`List.copyOf`) | NPE |
+| `All` / `Any` | list non-empty | IAE |
 
-### Portfolio
+`Compare` does **not** reject a `Constant` vs `Constant` comparison or
+`left.equals(right)`. Both are accepted, well-defined, deterministic
+expressions — their evaluated result just never depends on the snapshot.
+Rejecting them would be extra validation for a case that is harmless to
+evaluate and costs nothing to allow; the grammar does not try to detect
+"this condition happens to always be true/false" in general, and singling
+out these two shapes would be arbitrary.
 
-Mutable per-run accounting state. Owns cash, position quantity, total cost
-basis, realized P&L. Mutated only through `Fill` application.
+Rules for `All` and `Any`:
 
-### Trade
+- An empty `All` or `Any` is rejected. `All([])` would be vacuously true
+  and enter on every bar. `Any([])` would never trade. Either one is almost
+  certainly a configuration error, so neither is given an arbitrary
+  meaning.
+- A single-child `All`/`Any` is allowed. It is logically the child itself.
 
-Immutable, derived after the run from fills. A closed trade has an entry
-fill, an exit fill, and net realized P&L. An open trade has an entry fill
-and no exit fill. Signal reasons are recovered from the fills. There is no
-mutable open-trade tracker.
+Missing indicator:
 
-### EquityPoint
+- An `IndicatorRef` whose spec is absent from the snapshot propagates the
+  snapshot's `IllegalArgumentException` unchanged. It is not translated or
+  pre-validated in the grammar.
+- Prevention is structural. The Backtester creates one runtime indicator
+  per spec referenced by the `StrategyDefinition`, so a miss inside the
+  engine means an engine bug, not bad user data.
+- Collecting the referenced specs (an exhaustive traversal over the sealed
+  types) is designed with `StrategyDefinition`.
 
-Immutable record: date, cash, position quantity, close, position value,
-equity. One point per in-range bar.
+Non-finite values:
 
-### PortfolioState
+- NaN cannot reach a comparison. Snapshot values are finite (D-17),
+  `Constant` rejects non-finite values, and a positive `BigDecimal` close
+  converts to a positive finite double or at worst `+Infinity`, never NaN.
 
-Immutable final-state record: cash, position quantity, cost basis, realized
-P&L, last close, unrealized P&L, equity.
+Equality is structural record equality:
 
-### BacktestConfig
+- `All([A, B])` ≠ `All([B, A])` even though they are logically
+  equivalent. Order is part of the definition and is never canonicalized.
+- Duplicate children are allowed.
+- Record `toString()` is deterministic, because the trees contain no maps.
 
-`BigDecimal initialCapital`, `BigDecimal commissionPerFill`,
-`BigDecimal slippageRate`, `LocalDate startDate`, `LocalDate endDate`.
+V1 semantics to keep in mind:
 
-Both `startDate` and `endDate` are inclusive. The engine owns the semantic
-meaning of this evaluation range. There is no lookback-count field: the
-lookback is whatever the supplied series contains before `startDate`.
+- Conditions are **state** conditions, not **events**.
+  `SMA(20) > SMA(50)` means "is above", not "crossed above".
+- Because entry is evaluated whenever the strategy is flat, a strategy may
+  enter on the first evaluable bar of a trend that was already in
+  progress.
+- There are no `>=`, `<=`, `==`, `NOT` or crossover operators.
 
-### BacktestResult
+### PositionSizing and StrategyDefinition (package `strategy`, see D-19)
 
-Config echo, symbol, `firstEvaluableDate`, fills, rejections, trades,
-equity curve, final `PortfolioState`. All output is immutable.
+```
+sealed interface PositionSizing
+  record CashFraction(BigDecimal fraction)   0 < fraction <= 1; stripTrailingZeros() normalized
+
+record StrategyDefinition(Condition entryCondition, Condition exitCondition,
+                          PositionSizing positionSizing)
+  List<IndicatorSpec> requiredIndicatorSpecs()   derived, not stored; canonical order
+```
+
+**PositionSizing.CashFraction** requests using `fraction` of the cash
+available when the entry signal is created, at the signal bar's close. It
+is a configuration value only — it says nothing about whole-share order
+quantity, commission, slippage, or next-bar affordability. Translating a
+sizing request into an executable order is a Backtester/execution
+concern (D-7); `PositionSizing` never gains quantity-calculation logic.
+`BigDecimal.compareTo` validates the bounds; the stored value is
+`stripTrailingZeros()`-normalized so `0.5` and `0.50` are the same value
+(consistent with D-18's `Constant` `-0.0` normalization).
+
+**StrategyDefinition** pairs an entry condition, an exit condition, and a
+sizing rule. It describes intent only:
+
+- `entryCondition`: flat → long intent, evaluated when flat.
+- `exitCondition`: long → flat intent, evaluated when long.
+
+It holds no runtime state — no current position, pending order, cash,
+price, or portfolio; whether the strategy is flat or long, whether an
+order can execute, and cash availability are Backtester/Execution/
+Portfolio concerns, not this type's. Validation is structural only (the
+three components are non-null); this is not a strategy-quality validator.
+All of the following are legal:
+
+- Close-only or Constant-only conditions
+- conditions with no indicators at all
+- identical entry and exit conditions
+- the same `IndicatorSpec` referenced by both conditions
+- several periods of one indicator type
+
+**`requiredIndicatorSpecs()`** returns every `IndicatorSpec` referenced by
+`entryCondition` or `exitCondition` — distinct, and in the same canonical
+order `IndicatorSnapshot` uses (indicator type declaration order, then
+period ascending). It is computed on demand by a private recursive walk
+over the sealed `Condition`/`Operand` types (`Compare` → its operands,
+`All`/`Any` → each child, `IndicatorRef` → its spec, `Close`/`Constant` →
+nothing), collected into a `TreeSet` ordered by a private comparator and
+returned as `List.copyOf(...)`. It is **not** stored as a record
+component and does **not** participate in `StrategyDefinition` equality:
+equality is default record equality over `(entryCondition, exitCondition,
+positionSizing)` alone, so it stays exactly as reproducible as the
+conditions and sizing that define it. Both traversal switches are
+exhaustive over the sealed hierarchies with no `default` branch, so a
+future grammar addition fails to compile here until discovery is
+explicitly updated for it.
+
+### SignalEvent and Order (packages `strategy` / `execution`, see D-20)
+
+```
+enum SignalType { ENTER, EXIT }
+
+record SignalEvent(SignalType type, IndicatorSnapshot snapshot)
+  LocalDate date()   -> snapshot.date()          // derived, not stored
+
+enum OrderSide { BUY, SELL }
+
+record Order(int id, long quantity, SignalEvent signal)
+  OrderSide side()   -> ENTER -> BUY, EXIT -> SELL   // derived, not stored
+```
+
+**SignalEvent** means: "at this bar's close, the strategy condition
+evaluated to an actionable ENTER/EXIT intent." It is not an order, a fill,
+a trade, or a portfolio mutation, and it carries no quantity, price, or
+guarantee of execution. It preserves the exact immutable snapshot that
+caused it, so a later `Fill`/`OrderRejection` can recover the explanation.
+Its date is **derived** from the snapshot rather than stored separately —
+a signal has no meaningful date other than the bar close that produced
+it, and storing a second copy would let it disagree with the snapshot's
+own date. `SignalEvent` holds no `StrategyDefinition`, `PositionSizing`,
+position/portfolio state, `Order`, or runtime `Indicator`.
+
+**Order** is an immutable queued command, created from a `SignalEvent` at
+that signal's bar close, that executes no earlier than the next available
+in-range bar's open. It carries only what it needs and nothing
+recoverable from the signal or from the future:
+
+| Excluded field | Why |
+|---|---|
+| creation date | equals `signal.date()` |
+| reference close | equals `signal.snapshot().close()` |
+| execution date, fill/requested price | unknown at N close — future information |
+| status (`PENDING`/`FILLED`/`REJECTED`) | the eventual `Fill`/`OrderRejection` *is* the outcome; pending-ness is the Backtester's local variable |
+| `OrderSide` as a stored field | derived from `signal.type()`, so an order can never disagree with the signal that produced it (V1 is long-only, D-16, so the mapping is fixed and one-to-one) |
+
+`id` is a run-local, sequential, per-backtest `int` (`>= 1`), assigned by
+the Backtester only when an `Order` is actually created — a
+`ZERO_QUANTITY` rejection consumes no id:
+
+```
+int id = nextOrderId;
+Order order = new Order(id, quantity, signal);
+nextOrderId++;
+```
+
+`Order` itself validates only `id >= 1`; sequentiality is a Backtester
+property. `quantity` is not computed by `Order` — the Backtester sizes
+ENTER orders at N close (D-7) and EXIT orders as the full held position;
+`Order` validates only that it is positive. Orders are not part of the
+result (D-12).
+
+Lifecycle and ownership:
+
+```
+bar N close: signal decided (strategy) -> sized (Backtester, D-7) -> Order created (Backtester assigns id) -> pendingOrder
+bar N+1 open: execution step decides affordability -> Fill or INSUFFICIENT_CASH OrderRejection; pendingOrder cleared
+```
+
+| Concern | Owner |
+|---|---|
+| deciding a signal | Backtester, using `StrategyDefinition` conditions |
+| computing quantity | Backtester sizing step (D-7) |
+| validating quantity > 0 | `Order` constructor (Backtester routes `<= 0` to a rejection first) |
+| assigning order ID | Backtester run-local counter |
+| holding pending state | Backtester's `pendingOrder` |
+| affordability, slippage, commission | execution step at N+1 open |
+
+### Fill and OrderRejection (package `execution`, see D-21)
+
+```
+record Fill(int orderId, LocalDate date, long quantity, BigDecimal referenceOpen,
+           BigDecimal fillPrice, BigDecimal commission, SignalEvent signal)
+  OrderSide side()          -> OrderSide.forSignal(signal.type())              // derived
+  BigDecimal slippageCost() -> |fillPrice - referenceOpen| * quantity          // derived, exact
+
+enum RejectionReason { ZERO_QUANTITY, INSUFFICIENT_CASH }
+
+sealed interface OrderRejection { SignalEvent signal(); LocalDate date(); RejectionReason reason(); }
+  record ZeroQuantity(SignalEvent signal)
+    date() -> signal.date()                          // no Order ever existed
+  record InsufficientCash(int orderId, LocalDate date, long quantity,
+                          BigDecimal requiredCash, BigDecimal availableCash, SignalEvent signal)
+    requires requiredCash > availableCash
+```
+
+**Fill** is the executed result of an `Order` at the next in-range bar's
+open. `date` is that execution bar's date, `referenceOpen` its actual
+open, and `fillPrice` the open already adjusted for slippage by the
+execution step — `Fill` performs none of that calculation itself; it
+represents an already-computed result immutably. `orderId` and `signal`
+are copied from the originating `Order`; the `Order` object itself is
+never referenced (D-12: orders are not part of the result). Everything
+the order's explanation needs is still recoverable without it: order ID
+via `fill.orderId()`, signal type via `fill.signal().type()`, the
+triggering snapshot via `fill.signal().snapshot()`, and the signal date
+via `fill.signal().date()`. `side()` and `slippageCost()` are derived,
+not stored, so a `Fill` can never disagree with the signal that produced
+it or record an inconsistent slippage figure; `slippageCost()` is exact
+bookkeeping over the already-recorded prices, not the execution
+calculation that derives `fillPrice` from the configured slippage rate.
+`commission == 0` and a `fillPrice` equal to `referenceOpen` (zero
+slippage cost) are both valid. `Fill` validates only its own fields
+(positive prices, non-negative commission, and so on) — not that the
+price matches the configured slippage rate, that cash was sufficient, or
+that execution occurred after the signal; those are execution/Backtester
+concerns.
+
+**OrderRejection** is a sealed interface with exactly two shapes for the
+two genuinely different rejection cases:
+
+- **`ZeroQuantity`**: at signal time, sizing produced a non-positive
+  quantity. No `Order` was ever created, so no order ID was consumed and
+  there is nothing order-derived to carry — no `requiredCash`, no
+  `availableCash`, no sentinel values. Its date equals the signal date,
+  derived rather than duplicated, since nothing happens between the
+  signal and this rejection.
+- **`InsufficientCash`**: an `Order` existed, but at the execution bar's
+  open the whole BUY (`quantity × fillPrice + commission`) exceeded
+  available cash, so the entire order is rejected — no partial fills.
+  `orderId` is the id that order had already been assigned; carrying it
+  is what explains a gap in the fill IDs. `date` is the execution bar's
+  date, genuinely different from the signal date and therefore stored,
+  not derived. `requiredCash` and `availableCash` are supplied
+  already-computed by the execution step; the constructor only checks
+  `requiredCash > availableCash`, so an instance can never claim
+  insufficiency while showing enough cash.
+
+Both records require an `ENTER` signal: a SELL always sells the full held
+position and needs no cash, so neither rejection case can happen for one,
+and V1 has no SELL-rejection type. `reason()` is derived per record
+(`ZERO_QUANTITY` / `INSUFFICIENT_CASH`), not stored, giving a flat
+discriminator without duplicated state.
+
+Every generated `SignalEvent` has exactly one terminal outcome: a `Fill`,
+a `ZeroQuantity`, or an `InsufficientCash`. This is a documented
+invariant, tested at the Backtester level, not a generic `Outcome`
+wrapper type — the result's `fills` and `rejections` lists already
+express it. Because only created orders consume IDs, and each one ends in
+exactly one `Fill` or one `InsufficientCash`, `{fill IDs} ∪
+{InsufficientCash IDs}` is always exactly `{1..n}`: a gap in the fill IDs
+is expected, deterministic behavior, fully explained by the matching
+`InsufficientCash` rejection. For example, order 1 → `Fill`, order 2 →
+`InsufficientCash`, order 3 → `Fill`: fills show IDs 1 and 3, and the
+rejection shows ID 2.
+
+### Portfolio and EquityPoint (package `portfolio`, see D-22)
+
+```
+final class Portfolio                              // mutable, per run, never shared
+  BigDecimal cash; long quantity; BigDecimal costBasis; BigDecimal realizedPnl
+  Portfolio(BigDecimal initialCash)                 // >= 0; flat, basis 0, realized 0
+  void apply(Fill fill)                             // the ONLY mutator; all-or-nothing
+  EquityPoint markToMarket(LocalDate date, BigDecimal close)   // pure — does not mutate
+  cash(); quantity(); costBasis(); realizedPnl(); isFlat()
+
+record EquityPoint(LocalDate date, BigDecimal cash, long quantity,
+                   BigDecimal costBasis, BigDecimal realizedPnl, BigDecimal close)
+  BigDecimal marketValue()   -> close * quantity                     // derived
+  BigDecimal equity()        -> cash + marketValue()                 // derived
+  BigDecimal unrealizedPnl() -> marketValue() - costBasis             // derived
+```
+
+`Portfolio` is the engine's first mutable type and the single source of
+truth for financial state: cash, position quantity, total cost basis, and
+cumulative realized P&L — nothing else. It stores no last price, no
+unrealized P&L, no equity, and no average cost; average cost is
+deliberately not computed anywhere in the engine (D-13/D-22) — it would
+be the engine's only division, and it is display-only, so it is left to a
+later reporting layer. There is no `Position` object, lots, or FIFO/LIFO:
+one quantity and one cost basis fully describe V1's single position. The
+Backtester holds no cash or position copy of its own; it only calls
+`Portfolio`.
+
+V1 is long-only with no pyramiding (D-16), so `apply(Fill)` enforces a
+strict flat/long state machine: a BUY is accepted only while flat, and a
+SELL only for exactly the full held quantity. Every precondition is
+checked before any field changes, so a rejected `apply` leaves the
+portfolio completely unchanged:
+
+- **BUY**: rejected (`IllegalStateException`) if not flat, or if
+  `quantity × fillPrice + commission > cash` (an execution/Backtester
+  bug, since execution should already have produced an
+  `InsufficientCash` rejection). Otherwise: `cash -= totalCost`,
+  `quantity = fill.quantity()`, `costBasis = totalCost` — the BUY
+  commission is included in the basis.
+- **SELL**: rejected if flat, or if `fill.quantity() != quantity` (this
+  alone blocks partial exits, over-selling, and negative positions), or
+  if the resulting cash would go negative (the fail-fast guard for OQ2 —
+  V1 has no SELL-rejection type, so `BacktestConfig` validation must make
+  this unreachable). Otherwise: `proceeds = quantity × fillPrice −
+  commission`, `cash += proceeds`, `realizedPnl += proceeds − costBasis`,
+  `quantity = 0`, `costBasis = 0`.
+
+Because V1 exits the full position every time, D-13's `removedBasis =
+costBasis × q / currentQuantity` always reduces to `costBasis` exactly —
+**the reserved partial-basis `MathContext` (D-14) is unused in V1**, and
+nothing in `Portfolio`/`EquityPoint` divides or rounds.
+
+`markToMarket(date, close)` validates its arguments (null → NPE,
+non-positive close → IAE) and returns a new `EquityPoint` built from the
+current four fields plus `date`/`close`. It never mutates `Portfolio`,
+and the current close is never stored — repeated calls at different
+closes leave `cash`/`quantity`/`costBasis`/`realizedPnl` unchanged.
+
+`EquityPoint` is an immutable observation, not a log entry: it carries
+the four portfolio facts plus `date` and `close`, and derives
+`marketValue()`, `equity()` and `unrealizedPnl()` by exact arithmetic
+rather than storing them — a stored equity could disagree with `cash +
+close × quantity`. Keeping `costBasis` and `realizedPnl` on every point
+is what makes D-13's accounting identity checkable from the equity curve
+alone. It holds no `Order`, `Fill`, runtime `Indicator`, `BarSeries`, or
+`StrategyDefinition`. Validation mirrors `Portfolio`'s own invariants:
+`cash >= 0`, `quantity >= 0`, `close > 0`, and `quantity == 0` if and only
+if `costBasis == 0` (with `costBasis > 0` required when long). Equality
+is default record equality, scale-sensitive like `Fill` (D-21) — ledger
+values are never normalized.
+
+There is no `PortfolioState` type. The architecture's earlier sketch of
+one would have exactly duplicated the last `EquityPoint`'s fields; the
+result's final state is simply that last point.
+
+### BacktestConfig, Trade and BacktestResult (package `result`, see D-24)
+
+```
+record BacktestConfig(BigDecimal initialCapital, BigDecimal commissionPerFill,
+                      BigDecimal slippageRate, LocalDate startDate, LocalDate endDate)
+  initialCapital > 0; commissionPerFill >= 0; 0 <= slippageRate < 1; startDate <= endDate
+  every BigDecimal canonicalized (stripTrailingZeros, scale clamped to >= 0) — exact, no rounding
+
+sealed interface Trade { Fill entry(); default long quantity() { return entry().quantity(); } }
+  record Open(Fill entry)                 // entry BUY; position still held at run end
+  record Closed(Fill entry, Fill exit)    // entry BUY, exit SELL, same quantity, exit after entry
+    BigDecimal realizedPnl()        -> (q*f_exit - c_exit) - (q*f_entry + c_entry)   // derived, matches Portfolio exactly
+    BigDecimal totalCommission()    -> c_entry + c_exit                              // derived
+    BigDecimal totalSlippageCost()  -> entry.slippageCost() + exit.slippageCost()    // derived
+  static List<Trade> fromFills(List<Fill> fills)   // parses an ordered fill sequence; does not sort/repair
+
+record BacktestResult(String symbol, StrategyDefinition strategy, BacktestConfig config,
+                      Optional<LocalDate> firstEvaluableDate,
+                      List<EquityPoint> equityCurve, List<Fill> fills, List<OrderRejection> rejections)
+  List<Trade> trades()      -> Trade.fromFills(fills)      // derived, not stored
+  EquityPoint finalPoint()  -> equityCurve.getLast()        // derived; no PortfolioState type
+```
+
+**BacktestConfig** is the immutable input to one run.
+`initialCapital` must be strictly positive — a zero-capital run could
+never trade, and it is the denominator for every future return
+calculation; `Portfolio` itself still allows a zero starting balance as a
+runtime value (D-22), so this is a stricter requirement on what a
+meaningful backtest *request* looks like, not a change to `Portfolio`.
+`commissionPerFill` is a fixed monetary amount charged once per `Fill`,
+identical for BUY and SELL — never a percentage or a per-share charge.
+`slippageRate` is the adverse fraction applied to a bar's open
+(`BUY -> open×(1+rate)`, `SELL -> open×(1−rate)`); it must be strictly
+less than 1 so a SELL fill price is always positive for any valid
+(positive) open — see D-23 for why this bound alone is not sufficient to
+guarantee SELL cash-safety. Every `BigDecimal` field is canonicalized at
+construction (following the `CashFraction` precedent, D-19) so equal
+configurations — `10000` and `10000.00`, or `0.001` and `0.0010` — are
+equal values. `startDate`/`endDate` remain the existing inclusive range;
+same-day ranges are valid; there is still no time-of-day or timezone
+concept and no lookback-count field.
+
+**Trade** is derived after the run from the executed fills, never from
+signals or Portfolio state directly. A sealed interface with `Open` and
+`Closed` was chosen over one record with a nullable exit field: the
+distinction is then explicit and exhaustively matchable, with no
+ambiguous null. `Open` holds only its entry `Fill`; it is never
+force-liquidated (D-8), and its mark-to-market is the run's final
+`EquityPoint`, not anything stored on the trade. `Closed` holds only its
+entry and exit fills and derives everything else — `realizedPnl()` is
+built from exactly the two expressions `Portfolio` itself computes
+(`costBasis` at the BUY, `proceeds − costBasis` at the SELL), so the sum
+of every closed trade's realized P&L equals `Portfolio`'s final
+`realizedPnl` exactly. There is no trade ID: `entry().orderId()` already
+identifies a trade uniquely, since one entry order produces at most one
+fill. `Trade.fromFills` is a parser of an already-chronological,
+already-valid fill sequence (BUY, SELL, BUY, SELL, ... optionally
+trailing an unpaired BUY) — it never sorts, repairs, or silently skips a
+malformed sequence.
+
+**BacktestResult** is the complete immutable output. It keeps `symbol`,
+`strategy` and `config` — not the supplied `BarSeries` — so the result
+explains what was run without duplicating the dataset; dataset
+identity/provenance remains a backend concern (D-15). `firstEvaluableDate`
+is an `Optional<LocalDate>`: empty is a valid historical fact (the
+required indicators never became ready inside the range), not an error,
+so there is no sentinel or nullable field. `trades()` and `finalPoint()`
+are derived on every call rather than stored, so there is no duplicate
+state to keep in sync with `fills`/`equityCurve`; construction validates
+that both lists are internally consistent (ascending dates,
+BUY/SELL-alternating fills starting with BUY), so `trades()` can never
+throw for a successfully constructed result. There is no `PortfolioState`
+type — `finalPoint()` already is the final state (D-22). Every list is
+defensively copied (`List.copyOf`) and exposed as unmodifiable.
+`equityCurve` must be non-empty (a valid run always has at least one
+in-range bar); `fills` and `rejections` may be empty. No `Portfolio`,
+runtime `Indicator`, pending `Order`, or `Backtester` reference is
+reachable from a `BacktestResult`.
+
+Ordering is chronological and deterministic throughout: one `EquityPoint`
+per in-range bar in ascending date order; `fills` in execution order
+(strictly ascending dates, since V1 has at most one fill per bar); and
+`rejections` in the order they were appended within the run — an
+`InsufficientCash` from a bar's open phase before a `ZeroQuantity` from
+that same bar's close phase, when both occur on the same date. No
+timestamp is introduced; `LocalDate` plus execution phase is enough.
 
 ### Rejected and deferred abstractions
 
@@ -272,8 +698,46 @@ engine; `IndicatorValue` wrapper; `Strategy` interface; `StrategyContext`
 service; general expression language; separate persisted signal list;
 order list in the result; mutable open-trade tracker; crossover
 abstraction; `NOT` operator; arithmetic operands; `>=` / `<=` / `==`;
-limit orders; stop orders; order book; broker model; event bus;
-pyramiding; partial strategy exits; multiple simultaneous positions;
+`BigDecimal` constants; external condition evaluator/visitor; condition
+canonicalization (reordering `All`/`Any` children); discovery methods on
+`Operand`/`Condition` (D-19 keeps indicator-spec discovery out of the D-18
+evaluation grammar); a general visitor framework for the strategy grammar;
+an `IndicatorSpecCollector` class; storing `requiredIndicatorSpecs()` as a
+`StrategyDefinition` field; other position-sizing modes (fixed shares,
+fixed notional, percent-of-equity, volatility sizing, leverage,
+pyramiding); a stored `SignalEvent` date separate from the snapshot's; a
+stored `Order` side separate from the derived signal-type mapping; `Order`
+status fields (`PENDING`/`FILLED`/`REJECTED`); a mutable `Order`; UUID or
+database order IDs; a static/global order-id counter; a `Fill` holding its
+originating `Order` directly; a stored `Fill` side or stored
+`slippageCost`; a single `OrderRejection` record with a nullable order ID
+or nullable cash fields; sentinel/fake `requiredCash`/`availableCash`
+values for `ZeroQuantity`; a generic `Outcome`/`SignalOutcome` wrapper
+type; a SELL rejection type; rejection reasons beyond `ZERO_QUANTITY` and
+`INSUFFICIENT_CASH` (invalid price, market closed, liquidity, broker
+error, and so on); execution-causality validation inside `Fill`/
+`OrderRejection` (covered by Backtester tests instead); a `Position`
+class, lots, or FIFO/LIFO cost-basis tracking; pyramiding / weighted-
+average cost basis (V1 enforces strict flat↔long instead); partial SELLs;
+a computed or stored `averageCost` anywhere in the engine; a stored last
+price, unrealized P&L, or equity on `Portfolio`; a mutating
+`markToMarket`; stored `marketValue`/`equity`/`unrealizedPnl` on
+`EquityPoint`; a `PortfolioState` type (it would duplicate the last
+`EquityPoint`); a `Portfolio` interface or service layer; the Backtester
+keeping its own cash/position copy alongside `Portfolio`'s; a SELL
+rejection type to solve OQ2 (the position would become permanently
+unexitable — D-23 rejects this in favor of an exit-commission reserve at
+entry); dataset-aware preflight validation of `BacktestConfig` against a
+specific `BarSeries` (path-dependent and complex; the exit-commission
+reserve makes it unnecessary); a nullable exit field on a single `Trade`
+record (the sealed `Open`/`Closed` split is explicit instead); a `Trade`
+ID (`entry().orderId()` is already sufficient); storing `Trade`'s derived
+P&L/commission/slippage figures; a `PortfolioState`-shaped duplicate field
+on `BacktestResult`; storing the supplied `BarSeries` on `BacktestResult`
+(only `symbol` is kept; D-15); a nullable/sentinel `firstEvaluableDate`
+(an `Optional` instead); storing `trades()` on `BacktestResult`; limit orders; stop
+orders; order book; broker model; event bus;
+partial strategy exits; multiple simultaneous positions;
 metrics inside the loop.
 
 The provider abstraction belongs to the backend. The engine receives a
@@ -291,7 +755,8 @@ Setup:
 
 - validate the request
 - create `Portfolio(initialCapital)`
-- create one runtime `Indicator` per distinct `IndicatorSpec`
+- create one runtime `Indicator` per spec in
+  `strategy.requiredIndicatorSpecs()`, in that canonical order
 - pending order is initially null
 - sequential order ID starts at 1
 
@@ -303,11 +768,18 @@ For each bar N in chronological order:
 
 1. Execute the pending order at N.open, if one exists.
      BUY:  fillPrice    = open × (1 + slippageRate)
-           requiredCash = quantity × fillPrice + commission
+           requiredCash = quantity × fillPrice + commission + commission
+                          (entry commission + one reserved exit commission — D-23)
            if requiredCash > available cash: reject the entire order
-           (INSUFFICIENT_CASH). Do NOT reduce quantity.
+           (OrderRejection.InsufficientCash, carrying the order's id).
+           Do NOT reduce quantity. The reserved second commission is
+           NOT charged: Portfolio.apply(BUY) still deducts only
+           quantity × fillPrice + commission (D-22 unchanged); the
+           reserve exists only in this affordability check.
      SELL: fillPrice = open × (1 − slippageRate)
            sell the full held position.
+           (D-23 guarantees this can never leave cash negative, given a
+           valid BacktestConfig — see decisions.md D-23 for the proof.)
 
 2. On a successful fill: apply the Fill to the Portfolio, append the
    Fill, clear the pending order.
@@ -328,10 +800,12 @@ For each bar N in chronological order:
 
 7. If flat and the entry condition is true:
      create an ENTER SignalEvent.
-     quantity = floor( (cash × fraction − commission)
-                       / (close_N × (1 + slippageRate)) )
-     if quantity <= 0: record a ZERO_QUANTITY rejection.
-     otherwise:        create a pending BUY order.
+     spendable = min(cash × fraction, cash − commission)   (D-23: reserve
+                 one commission in cash for the future exit)
+     quantity  = floor( (spendable − commission)
+                        / (close_N × (1 + slippageRate)) )
+     if quantity <= 0: record OrderRejection.ZeroQuantity (no order id consumed).
+     otherwise:        create a pending BUY order (assign the next order id).
 
 8. If long and the exit condition is true:
      create an EXIT SignalEvent.
@@ -356,7 +830,10 @@ For each bar N in chronological order:
 - An open position at the end is not forcibly liquidated. It is marked to
   the last in-range close.
 - `firstEvaluableDate` is the first in-range bar at which all referenced
-  indicators are ready.
+  indicators are ready, represented as `Optional<LocalDate>` on
+  `BacktestResult` (D-24) — empty when they never become ready in range,
+  which is a valid historical fact and not an error. With no required
+  indicators it is the first in-range bar.
 
 ## 5. Look-ahead protection
 
@@ -389,22 +866,29 @@ Single source of truth for each piece of state:
 | Trades | derived from fills after the run |
 | Equity | append-only `List<EquityPoint>` |
 
-`Backtester` itself holds no persistent fields and is therefore re-entrant.
+`Backtester` itself holds no persistent fields and is therefore
+re-entrant. It never keeps its own copy of cash or position — every read
+goes through `Portfolio`'s accessors, and the only mutation path is
+`Portfolio.apply(Fill)` (D-22).
 
 ## 7. Fill / signal / trade relationship
 
 ```
-bar N close: condition true -> SignalEvent (date, ENTER|EXIT, IndicatorSnapshot)
+bar N close: condition true -> SignalEvent (ENTER|EXIT, IndicatorSnapshot); date = snapshot.date()
                                   |
                  +----------------+-----------------+
                  |                                  |
-     ZERO_QUANTITY at sizing              pending Order (id, side, qty, signal)
-     -> OrderRejection                                |
+     qty <= 0 at sizing                    Order(id, qty, signal); side derived
+     -> OrderRejection.ZeroQuantity                  |
+        (no id consumed; date = signal.date())        |
                                   bar N+1 open: execute
                                                       |
                                 +---------------------+-------------------+
                                 |                                         |
-                      Fill (carries SignalEvent)          INSUFFICIENT_CASH -> OrderRejection
+                Fill(orderId, date, qty,                    OrderRejection.InsufficientCash
+                    referenceOpen, fillPrice,                (orderId, date, qty, requiredCash,
+                    commission, signal);                      availableCash, signal)
+                    side/slippageCost derived                 date = execution bar's date
                                 |
                      after the run: fills -> Trades
 ```
@@ -435,10 +919,18 @@ strategy activity.
 - fixed commission per fill, applied to both BUY and SELL fills
 - adverse percentage slippage: BUY `open × (1 + rate)`,
   SELL `open × (1 − rate)`
-- slippage cost = `|fillPrice − referenceOpen| × quantity`
+- slippage cost = `|fillPrice − referenceOpen| × quantity`, computed by
+  the execution step and available on `Fill` as the derived
+  `slippageCost()` (D-21) — not stored, and not itself the calculation
+  that produces `fillPrice`
 - whole shares, long-only, no leverage
 - insufficient cash: reject the whole order; no partial fill
 - zero quantity: record a rejection rather than creating an order
+- exit-commission reserve (D-23): sizing an ENTER reserves one
+  `commissionPerFill` in cash for the eventual exit, and BUY
+  affordability checks for that reserve on top of the entry commission —
+  this closes OQ2 (a SELL can now never leave cash negative given a
+  valid `BacktestConfig`); the reserve is never itself charged to the BUY
 - invalid OHLC and invalid series ordering: rejected before the run starts
 - zero-volume bars execute normally in V1; there is no liquidity model yet
 
@@ -467,7 +959,22 @@ At a close P:
   equity        = cash + quantity × P
 ```
 
-Average cost is derived for display and is not separately stored.
+Average cost is not computed anywhere in the engine (D-22): it is
+display-only, and would be the engine's only division. A later reporting
+layer derives it from `costBasis / quantity` if it wants to show it.
+
+V1 has no partial exits (D-16): every SELL uses the full held quantity,
+so `removedBasis` always equals the entire `costBasis`, `quantity` always
+becomes exactly `0`, and `costBasis` always becomes exactly `0`. This is
+why `Portfolio` implements SELL without a division: `q == currentQuantity`
+always holds by construction (`apply` rejects any other quantity), so
+`removedBasis = costBasis`.
+
+`Portfolio.apply(Fill)` additionally enforces, before changing any state:
+a BUY only while flat and only if `q × f + c <= cash`; a SELL only while
+long, only for `q == currentQuantity`, and only if the resulting cash
+would stay `>= 0`. Any violation throws `IllegalStateException` and
+leaves the portfolio unchanged — see "Portfolio and EquityPoint" in §2.
 
 Accounting identity, tested for every in-range equity point:
 
@@ -487,6 +994,9 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
 - Closed-trade net P&L equals the portfolio's realized P&L contribution for
   that exit.
 - Trade explanations come from `entry.fill.signal` and `exit.fill.signal`.
+- Implemented as `Trade.fromFills(List<Fill>)` (D-24): a sealed
+  `Trade.Open`/`Trade.Closed` parsed from the result's `fills`, called
+  fresh by `BacktestResult.trades()` rather than stored.
 
 ## 12. Numerical policy
 
@@ -499,8 +1009,13 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
 
 - Use `compareTo` for `BigDecimal` comparisons.
 - Money is not rounded to cents inside the engine.
-- A fixed `MathContext` is used for the one partial-basis division if
-  required.
+- The partial-basis `MathContext` this policy once reserved is **unused
+  in V1** (D-22): V1 has no partial exits, so `removedBasis` always
+  equals the full `costBasis` exactly, with no division. `Portfolio` and
+  `EquityPoint` perform no division and no rounding anywhere.
+- Average cost is not computed in the engine (D-13/D-22) — it is the one
+  ledger quantity that would require division, and it is a display
+  concern for a later reporting layer.
 - This policy is not redesigned during the first implementation stages
   without a concrete correctness problem.
 
@@ -527,17 +1042,86 @@ Small hand-calculable fixtures, not only external market data.
   duplicate date, out-of-order date, empty series, immutability.
 - **Indicators**: SMA warm-up and values, EMA warm-up and seeded values,
   RSI Wilder calculations, RSI edge cases, readiness.
-- **Strategy**: condition comparisons, AND/OR, no evaluation before
-  readiness.
-- **Execution**: signal at bar N close, fill at bar N+1 open, no same-bar
+- **Strategy** (implemented; `engine.strategy`): operand resolution
+  (indicator, close, constant), GT/LT including equal operands (both
+  false), constant-vs-constant and identical-operand comparisons (both
+  permitted), AND/OR with nesting and short-circuiting, construction
+  validation (empty `All`/`Any`, non-finite constant), missing spec
+  propagating the snapshot's exception, structural equality, purity, and a
+  reflection check that the grammar's records hold no `Bar`, `BarSeries`,
+  or runtime `Indicator`. No evaluation before readiness is a `Backtester`
+  concern, not tested here.
+- **StrategyDefinition / PositionSizing** (implemented; `engine.strategy`,
+  D-19): `CashFraction` bounds (`0 < f <= 1`) and `-0.0`-style trailing-zero
+  normalization; null-component rejection; structural equality over
+  `(entry, exit, sizing)`; `requiredIndicatorSpecs()` discovery — single
+  and shared specs, multiple periods of one type, both `Compare` operands,
+  nesting several levels deep, `Close`/`Constant` contributing nothing, no
+  indicators at all, canonical ordering independent of authoring/traversal
+  order, an unmodifiable result, and cross-checked against
+  `IndicatorSnapshot`'s canonical order for the same specs.
+- **SignalEvent / Order** (implemented; `engine.strategy` /
+  `engine.execution`, D-20): null-component rejection; `date()` equals
+  `snapshot.date()`; structural equality; runtime isolation (a signal's
+  snapshot is unaffected by later updates to the runtime indicator that
+  produced it); `id >= 1` and `quantity > 0` validation; `side()` derived
+  correctly for both signal types; a reflection check that neither type
+  has a component beyond its approved shape (no stored date, price,
+  status, or `OrderSide`).
+- **Fill / OrderRejection** (implemented; `engine.execution`, D-21): every
+  stored field preserved; `side()` and `slippageCost()` derived correctly
+  (including a zero-slippage case); zero commission accepted; every
+  numeric/null validation boundary (`orderId >= 1`, `quantity > 0`,
+  positive prices, non-negative commission); `ZeroQuantity`'s date
+  equal to the signal date and its rejection of an EXIT signal;
+  `InsufficientCash`'s independent execution date, its `requiredCash >
+  availableCash` check (equal and lesser values both rejected), and its
+  rejection of an EXIT signal; the explanation recoverable from a `Fill`
+  without an `Order` object; structural equality; a whitelist reflection
+  check that neither type holds an `Order`, `Portfolio`, runtime
+  `Indicator`, `Bar`/`BarSeries`, or a mutable collection. Order-ID gap
+  behavior and the one-outcome-per-signal invariant are documented here
+  and become Backtester-level tests, not tested at this layer.
+- **Portfolio / EquityPoint** (implemented; `engine.portfolio`, D-22):
+  initial state (flat, `cash == initialCapital`); BUY accounting including
+  the commission-in-basis figure at three different marked closes;
+  winning and losing full exits; zero-commission and non-zero-commission
+  round trips (commission counted exactly once, neither omitted nor
+  doubled); multiple round trips accumulating realized P&L; the
+  `equity == cash + marketValue` and `equity == initialCapital +
+  realizedPnl + unrealizedPnl` identities checked after every state
+  transition; every rejected operation (BUY while long, SELL while flat,
+  partial SELL, over-selling, unaffordable BUY, cash-negative SELL)
+  leaving every field provably unchanged; `markToMarket` never mutating
+  across repeated calls at different closes; every null/numeric
+  validation boundary on both types; `EquityPoint`'s flat-basis and
+  long-basis consistency checks; a reflection check that `Portfolio`'s
+  declared fields are exactly its four owned values with no static state,
+  and that `EquityPoint` stores no derived value.
+- **BacktestConfig / Trade / BacktestResult** (implemented;
+  `engine.result`, D-24): every `BacktestConfig` bound at its edges
+  (smallest positive capital, zero commission, slippage at 0 and just
+  below 1, a same-day range) and just outside them; canonical-scale
+  equality (`10000` = `10000.00`, `0.001` = `0.0010`); `Trade.Closed`'s
+  `realizedPnl()`/`totalCommission()`/`totalSlippageCost()` matching the
+  same winning/losing/round-trip figures as `PortfolioTest`; every
+  `Trade` construction invariant (wrong side, mismatched quantity, exit
+  not after entry, exit order id not greater); `Trade.fromFills` over
+  empty/single-BUY/BUY-SELL/BUY-SELL-BUY sequences and its rejection of
+  SELL-first or BUY-BUY sequences, without sorting or repairing;
+  `BacktestResult`'s list immutability and defensive copying, its
+  ascending/in-range equity-date and alternating-fill validation, its
+  derived `trades()` and `finalPoint()` including for a trailing open
+  trade, and an empty vs. present `firstEvaluableDate`; a whitelist
+  reflection check that none of these types holds a `Portfolio`, `Order`,
+  `BarSeries`, or runtime `Indicator`.
+- **Execution** (Backtester-level, not yet implemented): signal at bar N close, fill at bar N+1 open, no same-bar
   fill, no signal on the last in-range bar, commission, slippage,
-  insufficient-cash rejection, zero-quantity rejection.
+  insufficient-cash rejection, zero-quantity rejection, the D-23
+  exit-commission reserve including its worked counterexample.
 - **Lookback/range**: pre-start bars warm indicators, pre-start bars create
   no trading activity, `endDate` inclusive, bars after `endDate` ignored,
   `endDate` on a non-trading day, series ending before `endDate`.
-- **Portfolio**: buying, marking to market, selling, realized/unrealized
-  P&L, accounting identity.
-- **Trade**: closed trade, open trade, explanation recovered from fills.
 - **Determinism**: identical input twice produces an identical result.
 
 ## 15. Engine boundary
@@ -555,3 +1139,27 @@ Output: immutable `BacktestResult`.
 
 No callbacks. No I/O. No persistence. No HTTP. No Spring. Engine domain
 types must never become JPA entities.
+
+## 16. Future direction
+
+High-level path only — no speculative detailed design for unapproved
+subsystems:
+
+```
+current engine foundation (data -> indicator -> strategy -> execution -> portfolio -> result)
+        |
+        v
+Backtester (the chronological run loop, §3)
+        |
+        v
+Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5)
+        |
+        v
+Backend integration (Spring Boot: persistence, REST, provider integration)
+        |
+        v
+Frontend (React: presenting strategies, experiments, results)
+```
+
+Each step is designed in its own checkpoint when work on it begins, not
+in advance.
