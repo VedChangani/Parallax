@@ -92,18 +92,21 @@ See [decisions.md](decisions.md).
 
 ---
 
-# Engine Architecture (V1 — approved design, partially implemented)
+# Engine Architecture (V1 — approved design, implemented)
 
-Status: approved design, partially implemented — see "Implementation
-status" below. Decisions referenced as D-n are in
-[decisions.md](decisions.md).
+Status: approved design, implemented — see "Implementation status" below.
+Decisions referenced as D-n are in [decisions.md](decisions.md).
 
 ## Implementation status
 
-Implemented (all packages below `engine`):
+Implemented (all packages below `engine`, plus `Backtester` at the engine
+root):
 
+- `Backtester`: the chronological run loop (`run(BarSeries,
+  StrategyDefinition, BacktestConfig) -> BacktestResult`), D-25
 - `data`: `Bar`, `BarSeries`
-- `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator`,
+- `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator` (including
+  its `Indicator.create(IndicatorSpec)` factory method),
   `SimpleMovingAverage`, `ExponentialMovingAverage`,
   `RelativeStrengthIndex`, `IndicatorSnapshot`
 - `strategy`: `Operand`, `Operator`, `Condition`, `PositionSizing`,
@@ -113,10 +116,9 @@ Implemented (all packages below `engine`):
 - `portfolio`: `Portfolio`, `EquityPoint`
 - `result`: `BacktestConfig`, `Trade`, `BacktestResult`
 
-Not yet implemented: the `IndicatorSpec -> Indicator` factory,
-`Backtester` itself, performance metrics, backend integration, and
-frontend. Nothing else stands between the current state and
-`Backtester.run(...)` — every type the loop assembles already exists.
+The V1 engine is now feature-complete for its scope: `Backtester.run(...)`
+is a working chronological simulation. Not yet implemented: performance
+metrics, backend integration, and frontend.
 
 This section reflects current state only; see Git history for how it was
 reached.
@@ -143,7 +145,7 @@ PerformanceMetrics.of(result)      [later]
 - Metrics are separate post-processing logic. They are not calculated
   inside the chronological loop.
 
-Future packages (created only when code for them is written):
+Package layout (all implemented):
 
 ```
 in.vedchangani.parallax.engine             Backtester
@@ -198,6 +200,14 @@ double  value()
 
 Indicators process one close at a time and cannot see the `BarSeries` or
 future data.
+
+`static Indicator Indicator.create(IndicatorSpec spec)` is the sole
+mapping from an `IndicatorSpec` definition to a fresh runtime instance —
+an exhaustive `switch` on `spec.type()` with no `default` branch (`SMA` →
+`SimpleMovingAverage`, `EMA` → `ExponentialMovingAverage`, `RSI` →
+`RelativeStrengthIndex`), so a new `IndicatorType` fails to compile here
+until handled. Every call returns a new, independent instance; there is
+no registry, no factory class, and no static state.
 
 ### IndicatorSnapshot
 
@@ -743,6 +753,31 @@ metrics inside the loop.
 The provider abstraction belongs to the backend. The engine receives a
 validated `BarSeries`.
 
+### Backtester (engine root, see D-25)
+
+```
+public final class Backtester           // no fields — stateless, re-entrant
+  BacktestResult run(BarSeries, StrategyDefinition, BacktestConfig)
+    -> new Run(series, strategy, config).execute()
+
+  static long enterQuantity(cash, fraction, close, commission, slippageRate)
+    // pure D-23 sizing arithmetic, package-private, independently testable
+
+  private static final class Run        // owns every mutable per-run value; discarded after execute()
+    Portfolio; Map<IndicatorSpec, Indicator> (LinkedHashMap, canonical order);
+    Order pendingOrder; int nextOrderId = 1; Optional<LocalDate> firstEvaluableDate;
+    List<EquityPoint>; List<Fill>; List<OrderRejection>
+```
+
+`Backtester` itself is stateless — every run creates its own `Run`, and
+nothing mutable escapes it; only the immutable values copied into the
+returned `BacktestResult` do. `enterQuantity` is a small pure static
+method rather than a class, since D-23's arithmetic has no state of its
+own and benefits from being unit-tested directly. There is no service
+layer, broker model, or execution framework — `Run` executes orders
+inline, which keeps the loop in one place, readable top to bottom (D-5).
+The exact bar-by-bar algorithm this runs is §3.
+
 ## 3. Chronological execution contract
 
 Definitions:
@@ -1115,10 +1150,23 @@ Small hand-calculable fixtures, not only external market data.
   trade, and an empty vs. present `firstEvaluableDate`; a whitelist
   reflection check that none of these types holds a `Portfolio`, `Order`,
   `BarSeries`, or runtime `Indicator`.
-- **Execution** (Backtester-level, not yet implemented): signal at bar N close, fill at bar N+1 open, no same-bar
-  fill, no signal on the last in-range bar, commission, slippage,
-  insufficient-cash rejection, zero-quantity rejection, the D-23
-  exit-commission reserve including its worked counterexample.
+- **Backtester / execution** (implemented; `engine.Backtester`, D-25):
+  signal at bar N close, fill at bar N+1 open, no same-bar fill, no
+  signal on the last in-range bar (both that a prior pending order still
+  executes there and that no new signal/order/rejection originates
+  there); commission and slippage in fills; the exact affordability
+  boundary (`requiredCash == availableCash` fills,
+  `requiredCash > availableCash` rejects); the D-23 exit-commission
+  reserve (cash left at exactly the commission after an accepted BUY, the
+  reserve never charged twice, cash-safety verified at an extreme low
+  exit price); zero-quantity and insufficient-cash rejections; order-ID
+  sequencing across a rejection; SMA/EMA/RSI warm-up and
+  `firstEvaluableDate` (including readiness reached during lookback, and
+  readiness that is never reached); paired-dataset proof that sizing
+  depends only on the signal bar's close, never the next bar's open; the
+  full accounting/trade-reconciliation identities on a multi-trade run;
+  determinism; and a structural check that `Backtester` is stateless and
+  leaks no mutable runtime object into `BacktestResult`.
 - **Lookback/range**: pre-start bars warm indicators, pre-start bars create
   no trading activity, `endDate` inclusive, bars after `endDate` ignored,
   `endDate` on a non-trading day, series ending before `endDate`.
@@ -1146,10 +1194,10 @@ High-level path only — no speculative detailed design for unapproved
 subsystems:
 
 ```
-current engine foundation (data -> indicator -> strategy -> execution -> portfolio -> result)
+engine foundation (data -> indicator -> strategy -> execution -> portfolio -> result)
         |
         v
-Backtester (the chronological run loop, §3)
+Backtester (the chronological run loop, §3) — implemented (D-25)
         |
         v
 Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5)

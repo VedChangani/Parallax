@@ -441,8 +441,74 @@ a `PortfolioState`-shaped result field; sorting/repairing fills; synthetic
 timestamps.
 
 **Consequence:** The full non-Backtester V1 domain model is frozen. The
-only remaining implementation gap is `Backtester.run(...)` itself and a
-small `IndicatorSpec -> Indicator` factory switch it needs.
+only remaining implementation gap is `Backtester.run(...)` itself; the
+`IndicatorSpec -> Indicator` construction it needs
+(`Indicator.create(IndicatorSpec)`, an exhaustive switch with no `default`
+branch) is implemented.
+
+## D-25 The V1 Backtester: stateless entry point, run-scoped Run, D-23 sizing as a pure function
+
+**Decision:** `engine.Backtester` is a stateless `public final class`
+(no fields). `run(series, strategy, config)` null-checks its arguments
+and delegates to a private, per-call `Run` (a `private static final`
+nested class) that owns every mutable value — `Portfolio`, a
+`LinkedHashMap<IndicatorSpec, Indicator>` (one instance per
+`requiredIndicatorSpecs()`, in canonical order), the single pending
+`Order`, the sequential order-id counter, `firstEvaluableDate`, and the
+three result lists. `Run` is discarded after `execute()`; nothing
+mutable escapes.
+
+Per bar, in order: execute a pending order at that bar's open (D-7) →
+update every indicator with that bar's close → skip further processing
+for a lookback bar → record one `EquityPoint` (after any open-time fill,
+marked to this bar's close) → note `firstEvaluableDate` the first time
+every required indicator is ready → evaluate exactly one condition
+(entry when flat, exit when long) unless indicators aren't ready yet or
+this is the last in-range bar (D-8, D-12) → on a true condition, size
+(ENTER) or fill-in-full (EXIT) and queue one `Order`. Bars after
+`endDate` stop the loop; before any bar is processed, the run rejects a
+series with no bar in `[startDate, endDate]`.
+
+ENTER sizing is `Backtester.enterQuantity(cash, fraction, close,
+commission, slippageRate)`, a package-private pure static method
+implementing D-23's reserve arithmetic exactly
+(`spendable = min(cash×fraction, cash−commission)`; whole shares via
+`BigDecimal.divideToIntegralValue`, never `MathContext` or a rounding
+mode). BUY affordability at execution charges
+`quantity×fillPrice + commission + commission` against available cash
+(entry commission plus the D-23 reserve) but `Portfolio.apply` still
+deducts only one commission — the reserve is never a second BUY fee. A
+SELL carries no affordability check, per D-23's proof; `Portfolio`'s own
+negative-cash guard remains a backstop, and if it fires, that exception
+is allowed to surface, not converted into a rejection.
+
+`ZeroQuantity` (sizing ≤ 0) and `InsufficientCash` (execution
+unaffordable) are recorded exactly as D-21 defines them; a `ZeroQuantity`
+consumes no order id, and an order that later becomes
+`InsufficientCash` keeps the id it was assigned. `Trade` derivation and
+`BacktestResult` construction use only the already-frozen D-24 APIs
+(`Trade.fromFills`, and the `BacktestResult` constructor's own ordering
+validation) — the loop keeps no trade state of its own.
+
+**Why:** A stateless `Backtester` plus one throwaway `Run` per call
+keeps D-5's re-entrancy trivially true, with nothing to reason about
+across calls. Executing orders inline inside `Run` (rather than a
+separate execution service) keeps the whole chronology in one
+readable, top-to-bottom method — the smallest structure that stays
+verifiable for look-ahead bias. `enterQuantity` as a pure function
+(rather than inline in the loop, or a class of its own) is directly
+unit-testable against D-23's formula without needing a full run.
+
+**Rejected:** an execution/broker service layer; a mutable `Backtester`;
+a static/global order-id counter (would leak state across runs); storing
+Trade state during the loop (D-24 already derives it from `fills`);
+converting a `Portfolio` invariant violation into a rejection (it must
+surface as an engine-bug signal, not be hidden).
+
+**Consequence:** The V1 engine is feature-complete for its scope.
+`Backtester.run(...)` is the last piece D-1 through D-24 were building
+toward; only performance metrics, backend integration, and frontend
+remain, none of which change engine behavior.
 
 ## Open questions
 
