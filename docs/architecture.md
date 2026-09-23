@@ -94,10 +94,12 @@ See [decisions.md](decisions.md).
 
 # Engine Architecture (V1 — approved design, partially implemented)
 
-Status: approved design. `data`, `indicator` (including `IndicatorSnapshot`)
-and `strategy` (`Operand`, `Operator`, `Condition`) are implemented;
-`StrategyDefinition`, `Backtester` and the remaining packages below are not
-yet implemented. Decisions referenced as D-n are in
+Status: approved design. `data`, `indicator` (including `IndicatorSnapshot`),
+`strategy` (`Operand`, `Operator`, `Condition`, `PositionSizing`,
+`StrategyDefinition`, `SignalType`, `SignalEvent`), and `execution`
+(`OrderSide`, `Order`, `Fill`, `RejectionReason`, `OrderRejection`) are
+implemented; `Backtester` and the remaining packages below are not yet
+implemented. Decisions referenced as D-n are in
 [decisions.md](decisions.md); project state is tracked in
 [docs/progress.md](progress.md).
 
@@ -129,8 +131,8 @@ Future packages (created only when code for them is written):
 in.vedchangani.parallax.engine             Backtester
 in.vedchangani.parallax.engine.data        Bar, BarSeries
 in.vedchangani.parallax.engine.indicator   IndicatorType, IndicatorSpec, Indicator, IndicatorSnapshot
-in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operand, Operator, PositionSizing, SignalEvent
-in.vedchangani.parallax.engine.execution   Order, Fill, OrderRejection
+in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operand, Operator, PositionSizing, SignalType, SignalEvent
+in.vedchangani.parallax.engine.execution   Order, OrderSide, Fill, RejectionReason, OrderRejection
 in.vedchangani.parallax.engine.portfolio   Portfolio, PortfolioState, EquityPoint
 in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
 ```
@@ -192,7 +194,8 @@ period). `value(spec)` fails fast for a missing spec. See D-17.
 ### StrategyDefinition
 
 Structured immutable definition: entry condition, exit condition, position
-sizing. No arbitrary executable user code.
+sizing. No arbitrary executable user code. Full design after Operand and
+Condition below, since it is built from them (see D-19).
 
 ### Operand and Condition (package `strategy`, see D-18)
 
@@ -303,37 +306,209 @@ V1 semantics to keep in mind:
   progress.
 - There are no `>=`, `<=`, `==`, `NOT` or crossover operators.
 
-### PositionSizing
+### PositionSizing and StrategyDefinition (package `strategy`, see D-19)
 
-V1 supports only `CashFraction(BigDecimal fraction)` with
-`0 < fraction <= 1`.
+```
+sealed interface PositionSizing
+  record CashFraction(BigDecimal fraction)   0 < fraction <= 1; stripTrailingZeros() normalized
 
-### SignalEvent
+record StrategyDefinition(Condition entryCondition, Condition exitCondition,
+                          PositionSizing positionSizing)
+  List<IndicatorSpec> requiredIndicatorSpecs()   derived, not stored; canonical order
+```
 
-Immutable: date, type (`ENTER` / `EXIT`), relevant `IndicatorSnapshot`.
-It preserves the explanation for why an order was generated.
+**PositionSizing.CashFraction** requests using `fraction` of the cash
+available when the entry signal is created, at the signal bar's close. It
+is a configuration value only — it says nothing about whole-share order
+quantity, commission, slippage, or next-bar affordability. Translating a
+sizing request into an executable order is a Backtester/execution
+concern (D-7); `PositionSizing` never gains quantity-calculation logic.
+`BigDecimal.compareTo` validates the bounds; the stored value is
+`stripTrailingZeros()`-normalized so `0.5` and `0.50` are the same value
+(consistent with D-18's `Constant` `-0.0` normalization).
 
-### Order
+**StrategyDefinition** pairs an entry condition, an exit condition, and a
+sizing rule. It describes intent only:
 
-Transient runtime object: sequential per-run order ID, side (`BUY` /
-`SELL`), whole-share quantity, `SignalEvent`. Market order only, executed
-at the next bar's open. Orders are not part of the result.
+- `entryCondition`: flat → long intent, evaluated when flat.
+- `exitCondition`: long → flat intent, evaluated when long.
 
-### Fill
+It holds no runtime state — no current position, pending order, cash,
+price, or portfolio; whether the strategy is flat or long, whether an
+order can execute, and cash availability are Backtester/Execution/
+Portfolio concerns, not this type's. Validation is structural only (the
+three components are non-null); this is not a strategy-quality validator.
+All of the following are legal:
 
-Immutable source of truth for executed trading activity: order ID, fill
-date, side, quantity, reference open, fill price, commission, slippage
-cost, `SignalEvent`. The `SignalEvent` travels on the fill so that trade
-derivation recovers the reason for each trade without duplicate state.
+- Close-only or Constant-only conditions
+- conditions with no indicators at all
+- identical entry and exit conditions
+- the same `IndicatorSpec` referenced by both conditions
+- several periods of one indicator type
 
-### OrderRejection
+**`requiredIndicatorSpecs()`** returns every `IndicatorSpec` referenced by
+`entryCondition` or `exitCondition` — distinct, and in the same canonical
+order `IndicatorSnapshot` uses (indicator type declaration order, then
+period ascending). It is computed on demand by a private recursive walk
+over the sealed `Condition`/`Operand` types (`Compare` → its operands,
+`All`/`Any` → each child, `IndicatorRef` → its spec, `Close`/`Constant` →
+nothing), collected into a `TreeSet` ordered by a private comparator and
+returned as `List.copyOf(...)`. It is **not** stored as a record
+component and does **not** participate in `StrategyDefinition` equality:
+equality is default record equality over `(entryCondition, exitCondition,
+positionSizing)` alone, so it stays exactly as reproducible as the
+conditions and sizing that define it. Both traversal switches are
+exhaustive over the sealed hierarchies with no `default` branch, so a
+future grammar addition fails to compile here until discovery is
+explicitly updated for it.
 
-Immutable outcome for a signal that does not result in a fill:
-`SignalEvent`, date, rejection reason, quantity, required cash, available
-cash. Initial reasons: `INSUFFICIENT_CASH`, `ZERO_QUANTITY`.
+### SignalEvent and Order (packages `strategy` / `execution`, see D-20)
 
-Every generated `SignalEvent` has exactly one outcome: a `Fill` or an
-`OrderRejection`. No separate signal list is stored.
+```
+enum SignalType { ENTER, EXIT }
+
+record SignalEvent(SignalType type, IndicatorSnapshot snapshot)
+  LocalDate date()   -> snapshot.date()          // derived, not stored
+
+enum OrderSide { BUY, SELL }
+
+record Order(int id, long quantity, SignalEvent signal)
+  OrderSide side()   -> ENTER -> BUY, EXIT -> SELL   // derived, not stored
+```
+
+**SignalEvent** means: "at this bar's close, the strategy condition
+evaluated to an actionable ENTER/EXIT intent." It is not an order, a fill,
+a trade, or a portfolio mutation, and it carries no quantity, price, or
+guarantee of execution. It preserves the exact immutable snapshot that
+caused it, so a later `Fill`/`OrderRejection` can recover the explanation.
+Its date is **derived** from the snapshot rather than stored separately —
+a signal has no meaningful date other than the bar close that produced
+it, and storing a second copy would let it disagree with the snapshot's
+own date. `SignalEvent` holds no `StrategyDefinition`, `PositionSizing`,
+position/portfolio state, `Order`, or runtime `Indicator`.
+
+**Order** is an immutable queued command, created from a `SignalEvent` at
+that signal's bar close, that executes no earlier than the next available
+in-range bar's open. It carries only what it needs and nothing
+recoverable from the signal or from the future:
+
+| Excluded field | Why |
+|---|---|
+| creation date | equals `signal.date()` |
+| reference close | equals `signal.snapshot().close()` |
+| execution date, fill/requested price | unknown at N close — future information |
+| status (`PENDING`/`FILLED`/`REJECTED`) | the eventual `Fill`/`OrderRejection` *is* the outcome; pending-ness is the Backtester's local variable |
+| `OrderSide` as a stored field | derived from `signal.type()`, so an order can never disagree with the signal that produced it (V1 is long-only, D-16, so the mapping is fixed and one-to-one) |
+
+`id` is a run-local, sequential, per-backtest `int` (`>= 1`), assigned by
+the Backtester only when an `Order` is actually created — a
+`ZERO_QUANTITY` rejection consumes no id:
+
+```
+int id = nextOrderId;
+Order order = new Order(id, quantity, signal);
+nextOrderId++;
+```
+
+`Order` itself validates only `id >= 1`; sequentiality is a Backtester
+property. `quantity` is not computed by `Order` — the Backtester sizes
+ENTER orders at N close (D-7) and EXIT orders as the full held position;
+`Order` validates only that it is positive. Orders are not part of the
+result (D-12).
+
+Lifecycle and ownership:
+
+```
+bar N close: signal decided (strategy) -> sized (Backtester, D-7) -> Order created (Backtester assigns id) -> pendingOrder
+bar N+1 open: execution step decides affordability -> Fill or INSUFFICIENT_CASH OrderRejection; pendingOrder cleared
+```
+
+| Concern | Owner |
+|---|---|
+| deciding a signal | Backtester, using `StrategyDefinition` conditions |
+| computing quantity | Backtester sizing step (D-7) |
+| validating quantity > 0 | `Order` constructor (Backtester routes `<= 0` to a rejection first) |
+| assigning order ID | Backtester run-local counter |
+| holding pending state | Backtester's `pendingOrder` |
+| affordability, slippage, commission | execution step at N+1 open |
+
+### Fill and OrderRejection (package `execution`, see D-21)
+
+```
+record Fill(int orderId, LocalDate date, long quantity, BigDecimal referenceOpen,
+           BigDecimal fillPrice, BigDecimal commission, SignalEvent signal)
+  OrderSide side()          -> OrderSide.forSignal(signal.type())              // derived
+  BigDecimal slippageCost() -> |fillPrice - referenceOpen| * quantity          // derived, exact
+
+enum RejectionReason { ZERO_QUANTITY, INSUFFICIENT_CASH }
+
+sealed interface OrderRejection { SignalEvent signal(); LocalDate date(); RejectionReason reason(); }
+  record ZeroQuantity(SignalEvent signal)
+    date() -> signal.date()                          // no Order ever existed
+  record InsufficientCash(int orderId, LocalDate date, long quantity,
+                          BigDecimal requiredCash, BigDecimal availableCash, SignalEvent signal)
+    requires requiredCash > availableCash
+```
+
+**Fill** is the executed result of an `Order` at the next in-range bar's
+open. `date` is that execution bar's date, `referenceOpen` its actual
+open, and `fillPrice` the open already adjusted for slippage by the
+execution step — `Fill` performs none of that calculation itself; it
+represents an already-computed result immutably. `orderId` and `signal`
+are copied from the originating `Order`; the `Order` object itself is
+never referenced (D-12: orders are not part of the result). Everything
+the order's explanation needs is still recoverable without it: order ID
+via `fill.orderId()`, signal type via `fill.signal().type()`, the
+triggering snapshot via `fill.signal().snapshot()`, and the signal date
+via `fill.signal().date()`. `side()` and `slippageCost()` are derived,
+not stored, so a `Fill` can never disagree with the signal that produced
+it or record an inconsistent slippage figure; `slippageCost()` is exact
+bookkeeping over the already-recorded prices, not the execution
+calculation that derives `fillPrice` from the configured slippage rate.
+`commission == 0` and a `fillPrice` equal to `referenceOpen` (zero
+slippage cost) are both valid. `Fill` validates only its own fields
+(positive prices, non-negative commission, and so on) — not that the
+price matches the configured slippage rate, that cash was sufficient, or
+that execution occurred after the signal; those are execution/Backtester
+concerns.
+
+**OrderRejection** is a sealed interface with exactly two shapes for the
+two genuinely different rejection cases:
+
+- **`ZeroQuantity`**: at signal time, sizing produced a non-positive
+  quantity. No `Order` was ever created, so no order ID was consumed and
+  there is nothing order-derived to carry — no `requiredCash`, no
+  `availableCash`, no sentinel values. Its date equals the signal date,
+  derived rather than duplicated, since nothing happens between the
+  signal and this rejection.
+- **`InsufficientCash`**: an `Order` existed, but at the execution bar's
+  open the whole BUY (`quantity × fillPrice + commission`) exceeded
+  available cash, so the entire order is rejected — no partial fills.
+  `orderId` is the id that order had already been assigned; carrying it
+  is what explains a gap in the fill IDs. `date` is the execution bar's
+  date, genuinely different from the signal date and therefore stored,
+  not derived. `requiredCash` and `availableCash` are supplied
+  already-computed by the execution step; the constructor only checks
+  `requiredCash > availableCash`, so an instance can never claim
+  insufficiency while showing enough cash.
+
+Both records require an `ENTER` signal: a SELL always sells the full held
+position and needs no cash, so neither rejection case can happen for one,
+and V1 has no SELL-rejection type. `reason()` is derived per record
+(`ZERO_QUANTITY` / `INSUFFICIENT_CASH`), not stored, giving a flat
+discriminator without duplicated state.
+
+Every generated `SignalEvent` has exactly one terminal outcome: a `Fill`,
+a `ZeroQuantity`, or an `InsufficientCash`. This is a documented
+invariant, tested at the Backtester level, not a generic `Outcome`
+wrapper type — the result's `fills` and `rejections` lists already
+express it. Because only created orders consume IDs, and each one ends in
+exactly one `Fill` or one `InsufficientCash`, `{fill IDs} ∪
+{InsufficientCash IDs}` is always exactly `{1..n}`: a gap in the fill IDs
+is expected, deterministic behavior, fully explained by the matching
+`InsufficientCash` rejection. For example, order 1 → `Fill`, order 2 →
+`InsufficientCash`, order 3 → `Fill`: fills show IDs 1 and 3, and the
+rejection shows ID 2.
 
 ### Portfolio
 
@@ -379,8 +554,26 @@ service; general expression language; separate persisted signal list;
 order list in the result; mutable open-trade tracker; crossover
 abstraction; `NOT` operator; arithmetic operands; `>=` / `<=` / `==`;
 `BigDecimal` constants; external condition evaluator/visitor; condition
-canonicalization (reordering `All`/`Any` children); limit orders; stop orders; order book; broker model; event bus;
-pyramiding; partial strategy exits; multiple simultaneous positions;
+canonicalization (reordering `All`/`Any` children); discovery methods on
+`Operand`/`Condition` (D-19 keeps indicator-spec discovery out of the D-18
+evaluation grammar); a general visitor framework for the strategy grammar;
+an `IndicatorSpecCollector` class; storing `requiredIndicatorSpecs()` as a
+`StrategyDefinition` field; other position-sizing modes (fixed shares,
+fixed notional, percent-of-equity, volatility sizing, leverage,
+pyramiding); a stored `SignalEvent` date separate from the snapshot's; a
+stored `Order` side separate from the derived signal-type mapping; `Order`
+status fields (`PENDING`/`FILLED`/`REJECTED`); a mutable `Order`; UUID or
+database order IDs; a static/global order-id counter; a `Fill` holding its
+originating `Order` directly; a stored `Fill` side or stored
+`slippageCost`; a single `OrderRejection` record with a nullable order ID
+or nullable cash fields; sentinel/fake `requiredCash`/`availableCash`
+values for `ZeroQuantity`; a generic `Outcome`/`SignalOutcome` wrapper
+type; a SELL rejection type; rejection reasons beyond `ZERO_QUANTITY` and
+`INSUFFICIENT_CASH` (invalid price, market closed, liquidity, broker
+error, and so on); execution-causality validation inside `Fill`/
+`OrderRejection` (covered by Backtester tests instead); limit orders; stop
+orders; order book; broker model; event bus;
+partial strategy exits; multiple simultaneous positions;
 metrics inside the loop.
 
 The provider abstraction belongs to the backend. The engine receives a
@@ -398,7 +591,8 @@ Setup:
 
 - validate the request
 - create `Portfolio(initialCapital)`
-- create one runtime `Indicator` per distinct `IndicatorSpec`
+- create one runtime `Indicator` per spec in
+  `strategy.requiredIndicatorSpecs()`, in that canonical order
 - pending order is initially null
 - sequential order ID starts at 1
 
@@ -412,7 +606,8 @@ For each bar N in chronological order:
      BUY:  fillPrice    = open × (1 + slippageRate)
            requiredCash = quantity × fillPrice + commission
            if requiredCash > available cash: reject the entire order
-           (INSUFFICIENT_CASH). Do NOT reduce quantity.
+           (OrderRejection.InsufficientCash, carrying the order's id).
+           Do NOT reduce quantity.
      SELL: fillPrice = open × (1 − slippageRate)
            sell the full held position.
 
@@ -437,8 +632,8 @@ For each bar N in chronological order:
      create an ENTER SignalEvent.
      quantity = floor( (cash × fraction − commission)
                        / (close_N × (1 + slippageRate)) )
-     if quantity <= 0: record a ZERO_QUANTITY rejection.
-     otherwise:        create a pending BUY order.
+     if quantity <= 0: record OrderRejection.ZeroQuantity (no order id consumed).
+     otherwise:        create a pending BUY order (assign the next order id).
 
 8. If long and the exit condition is true:
      create an EXIT SignalEvent.
@@ -501,17 +696,21 @@ Single source of truth for each piece of state:
 ## 7. Fill / signal / trade relationship
 
 ```
-bar N close: condition true -> SignalEvent (date, ENTER|EXIT, IndicatorSnapshot)
+bar N close: condition true -> SignalEvent (ENTER|EXIT, IndicatorSnapshot); date = snapshot.date()
                                   |
                  +----------------+-----------------+
                  |                                  |
-     ZERO_QUANTITY at sizing              pending Order (id, side, qty, signal)
-     -> OrderRejection                                |
+     qty <= 0 at sizing                    Order(id, qty, signal); side derived
+     -> OrderRejection.ZeroQuantity                  |
+        (no id consumed; date = signal.date())        |
                                   bar N+1 open: execute
                                                       |
                                 +---------------------+-------------------+
                                 |                                         |
-                      Fill (carries SignalEvent)          INSUFFICIENT_CASH -> OrderRejection
+                Fill(orderId, date, qty,                    OrderRejection.InsufficientCash
+                    referenceOpen, fillPrice,                (orderId, date, qty, requiredCash,
+                    commission, signal);                      availableCash, signal)
+                    side/slippageCost derived                 date = execution bar's date
                                 |
                      after the run: fills -> Trades
 ```
@@ -542,7 +741,10 @@ strategy activity.
 - fixed commission per fill, applied to both BUY and SELL fills
 - adverse percentage slippage: BUY `open × (1 + rate)`,
   SELL `open × (1 − rate)`
-- slippage cost = `|fillPrice − referenceOpen| × quantity`
+- slippage cost = `|fillPrice − referenceOpen| × quantity`, computed by
+  the execution step and available on `Fill` as the derived
+  `slippageCost()` (D-21) — not stored, and not itself the calculation
+  that produces `fillPrice`
 - whole shares, long-only, no leverage
 - insufficient cash: reject the whole order; no partial fill
 - zero quantity: record a rejection rather than creating an order
@@ -643,7 +845,38 @@ Small hand-calculable fixtures, not only external market data.
   reflection check that the grammar's records hold no `Bar`, `BarSeries`,
   or runtime `Indicator`. No evaluation before readiness is a `Backtester`
   concern, not tested here.
-- **Execution**: signal at bar N close, fill at bar N+1 open, no same-bar
+- **StrategyDefinition / PositionSizing** (implemented; `engine.strategy`,
+  D-19): `CashFraction` bounds (`0 < f <= 1`) and `-0.0`-style trailing-zero
+  normalization; null-component rejection; structural equality over
+  `(entry, exit, sizing)`; `requiredIndicatorSpecs()` discovery — single
+  and shared specs, multiple periods of one type, both `Compare` operands,
+  nesting several levels deep, `Close`/`Constant` contributing nothing, no
+  indicators at all, canonical ordering independent of authoring/traversal
+  order, an unmodifiable result, and cross-checked against
+  `IndicatorSnapshot`'s canonical order for the same specs.
+- **SignalEvent / Order** (implemented; `engine.strategy` /
+  `engine.execution`, D-20): null-component rejection; `date()` equals
+  `snapshot.date()`; structural equality; runtime isolation (a signal's
+  snapshot is unaffected by later updates to the runtime indicator that
+  produced it); `id >= 1` and `quantity > 0` validation; `side()` derived
+  correctly for both signal types; a reflection check that neither type
+  has a component beyond its approved shape (no stored date, price,
+  status, or `OrderSide`).
+- **Fill / OrderRejection** (implemented; `engine.execution`, D-21): every
+  stored field preserved; `side()` and `slippageCost()` derived correctly
+  (including a zero-slippage case); zero commission accepted; every
+  numeric/null validation boundary (`orderId >= 1`, `quantity > 0`,
+  positive prices, non-negative commission); `ZeroQuantity`'s date
+  equal to the signal date and its rejection of an EXIT signal;
+  `InsufficientCash`'s independent execution date, its `requiredCash >
+  availableCash` check (equal and lesser values both rejected), and its
+  rejection of an EXIT signal; the explanation recoverable from a `Fill`
+  without an `Order` object; structural equality; a whitelist reflection
+  check that neither type holds an `Order`, `Portfolio`, runtime
+  `Indicator`, `Bar`/`BarSeries`, or a mutable collection. Order-ID gap
+  behavior and the one-outcome-per-signal invariant are documented here
+  and become Backtester-level tests, not tested at this layer.
+- **Execution** (Backtester-level, not yet implemented): signal at bar N close, fill at bar N+1 open, no same-bar
   fill, no signal on the last in-range bar, commission, slippage,
   insufficient-cash rejection, zero-quantity rejection.
 - **Lookback/range**: pre-start bars warm indicators, pre-start bars create

@@ -379,3 +379,375 @@ something V1 attempts, so singling out these two shapes for rejection
 would have been an arbitrary special case rather than a real correctness
 rule. `IndicatorSpec` equality, snapshot lookup, and every other validation
 rule in this decision are unchanged.
+
+## D-19 StrategyDefinition, CashFraction sizing, and canonical IndicatorSpec discovery
+
+**Decision:** `engine.strategy` adds:
+
+- `sealed interface PositionSizing` with one implementation,
+  `record CashFraction(BigDecimal fraction)`: `fraction` non-null,
+  `0 < fraction <= 1` via `BigDecimal.compareTo`, and the stored value is
+  `stripTrailingZeros()`-normalized so `0.5` equals `0.50` and `1` equals
+  `1.00`. `CashFraction` requests using that fraction of the cash
+  available when the entry signal is created, at the signal bar's close.
+  It carries no quantity-calculation logic; translating the request into
+  a whole-share order (affordability, commission, slippage) is a
+  Backtester/execution concern (D-7).
+- `record StrategyDefinition(Condition entryCondition, Condition
+  exitCondition, PositionSizing positionSizing)`: the three components
+  must be non-null (NPE); nothing else is validated. `entryCondition` is a
+  flat-to-long intent, `exitCondition` a long-to-flat intent. It holds no
+  runtime state — no position, pending order, cash, price, portfolio, id,
+  name, symbol, timeframe, date range, or persistence field. It is
+  structural only, not a strategy-quality validator: Close-only or
+  Constant-only conditions, conditions with no indicators, identical entry
+  and exit conditions, a spec shared by both conditions, and several
+  periods of one indicator type are all legal.
+- `StrategyDefinition.requiredIndicatorSpecs()`: every `IndicatorSpec`
+  referenced by `entryCondition` or `exitCondition`, distinct, in
+  canonical order (indicator type declaration order, then period
+  ascending — the same order `IndicatorSnapshot`, D-17, uses). It is
+  computed on demand by a private recursive walk over the sealed
+  `Condition`/`Operand` types (`Compare` → both operands, `All`/`Any` →
+  every child, `IndicatorRef` → its spec, `Close`/`Constant` → nothing),
+  collected into a `TreeSet` ordered by a private comparator, and returned
+  as `List.copyOf(...)`. It is not stored as a record component and does
+  not participate in `StrategyDefinition` equality. Both traversal
+  switches are exhaustive over the sealed hierarchies with no `default`
+  branch.
+
+**Why:**
+
+- **`CashFraction` as the only V1 sizing mode:** matches D-10/CLAUDE.md's
+  V1 scope. Fixed shares, fixed notional, percent-of-equity, volatility
+  sizing, leverage, and pyramiding are out of scope.
+- **Sizing carries no execution logic:** it is a configuration value
+  resolved at the signal bar's close; affordability at the next bar's
+  open is decided where D-7 already puts that decision.
+- **`stripTrailingZeros()` normalization:** parallels D-18's `-0.0`
+  normalization — two configurations that mean the same fraction should
+  be the same value, which matters for later experiment reproducibility.
+- **Structural-only validation on `StrategyDefinition`:** economic
+  sensibility (for example identical entry/exit conditions producing
+  churn) is not this type's job. Turning it into a strategy-quality
+  validator would silently narrow what a user can express.
+- **Discovery as a private traversal inside `StrategyDefinition`, not on
+  the D-18 grammar (option A), and not a separate collector class
+  (option B):** discovery is a backtest-setup concern, not an evaluation
+  concern, so it does not belong on `Operand`/`Condition`, which stay
+  focused on D-18's pure `resolve`/`evaluate`. A separate class has
+  exactly one caller today and would only add a name to remember; its
+  mechanics live privately where the one caller is.
+- **No `default` branch in either traversal switch:** a future grammar
+  addition (for example a new `Operand` or `Condition` type) fails to
+  compile here until discovery is explicitly updated for it, rather than
+  silently omitting the new type's specs from every future backtest.
+- **Canonical order, matching `IndicatorSnapshot`:** the result is a
+  function of the *set* of referenced specs, never of tree shape,
+  authoring order, hashing, or object identity. Runtime indicator
+  creation order (D-15) and snapshot iteration order therefore agree.
+  `IndicatorSpec` is not made `Comparable`; the comparator is private to
+  `StrategyDefinition`, as `IndicatorSnapshot`'s already is to it — the
+  two are independent, deliberately identical two-line rules, not a
+  shared utility (see the open question below).
+- **Derived, not stored:** a record cannot hold a non-component derived
+  field without either duplicating state a caller could pass
+  inconsistently or abandoning the record. Deriving on demand keeps
+  `StrategyDefinition` equality exactly `(entryCondition, exitCondition,
+  positionSizing)` equality, with no way for cached specs to drift from
+  the conditions that produce them. The cost is one walk of a small tree
+  per call.
+
+**Rejected:**
+
+- **Discovery methods on `Operand`/`Condition` (option A):** couples D-18
+  evaluation types to Backtester setup.
+- **A dedicated `IndicatorSpecCollector` class (option B's naive form):**
+  one caller does not justify a new type; its logic lives as a private
+  static helper in `StrategyDefinition` instead.
+- **A general visitor framework:** over-engineering for a closed, six-type
+  grammar.
+- **First-encounter (tree-order) discovery:** deterministic, but depends
+  on how the tree happens to be authored, and would disagree with
+  `IndicatorSnapshot`'s order.
+- **`IndicatorSpec implements Comparable`:** rejected, as for D-17.
+- **Storing `requiredIndicatorSpecs()` as a `StrategyDefinition`
+  component:** would let stored specs drift from the conditions, and
+  would pull derived state into equality.
+- **Scale-sensitive `CashFraction` (no normalization):** would make `0.5`
+  and `0.50` count as different strategies.
+- **Other sizing modes, and a bare `CashFraction` without a
+  `PositionSizing` supertype:** out of V1 scope; the supertype keeps the
+  approved vocabulary (`PositionSizing`) as the typed component and gives
+  future sizing modes an exhaustive switch.
+- **ID, name, symbol, timeframe, date range, or metadata on
+  `StrategyDefinition`:** these belong to the backend/persistence layers
+  built around this type, not to the type itself.
+
+**Consequence:** `StrategyDefinition` → `requiredIndicatorSpecs()` →
+Backtester creates one runtime `Indicator` per spec, in that order (D-11,
+D-15) → per bar, update all at close; once every required indicator is
+ready, build an `IndicatorSnapshot` (D-17) → evaluate `entryCondition`
+(flat) or `exitCondition` (long) (D-18) → size via `CashFraction` at
+sizing time (D-7). A strategy with no indicators has an empty required
+list, so "all required indicators ready" is vacuously true from the first
+in-range bar.
+
+**Open question (not decided here):** whether to later consolidate the
+canonical-order comparator into one public `IndicatorSpec`-adjacent
+constant shared by `IndicatorSnapshot` and `StrategyDefinition`, instead
+of the current two independent private copies of the same two-line rule.
+That would touch D-17's implementation, not its substance, and is left
+for a future batch if the duplication becomes a real maintenance problem.
+
+## D-20 SignalEvent(type, snapshot) with derived date; Order(id, quantity, signal) with derived side
+
+**Decision:** `engine.strategy` adds:
+
+- `enum SignalType { ENTER, EXIT }`
+- `record SignalEvent(SignalType type, IndicatorSnapshot snapshot)`:
+  `type` and `snapshot` non-null (NPE); `date()` returns
+  `snapshot.date()`, **derived, not stored**.
+
+`engine.execution` (new package) adds:
+
+- `enum OrderSide { BUY, SELL }`
+- `record Order(int id, long quantity, SignalEvent signal)`: `id >= 1`
+  (IAE), `quantity > 0` (IAE), `signal` non-null (NPE); `side()` maps
+  `signal.type()` — `ENTER` → `BUY`, `EXIT` → `SELL` — **derived, not
+  stored**, via an exhaustive `switch`.
+
+A `SignalEvent` means: "at this bar's close, the strategy condition
+evaluated to an actionable ENTER/EXIT intent." It is not an order, fill,
+trade, or portfolio mutation, and carries no quantity, price, or
+execution guarantee.
+
+An `Order` is an immutable queued command created from a `SignalEvent` at
+that signal's bar close. It executes no earlier than the next available
+in-range bar's open (a later execution-step concern) and carries no
+creation date, reference close, execution date, requested/fill price, or
+status — all either recoverable from `signal`, or future information at
+creation time. `id` is a run-local, sequential, per-backtest value the
+Backtester assigns only when an `Order` is actually created (a
+`ZERO_QUANTITY` rejection consumes none); `Order` itself validates only
+`id >= 1`. `quantity` is computed by the Backtester (D-7 for ENTER, the
+full held position for EXIT), not by `Order`, which validates only that
+it is positive.
+
+**Why:**
+
+- **Derived date, not stored (resolves the SignalEvent open question):**
+  a signal's date is by definition the snapshot's date (D-17). Storing it
+  separately would duplicate state and allow an invalid signal whose date
+  disagrees with its own snapshot.
+- **Derived side, not stored:** V1 is long-only (D-16), so the
+  ENTER→BUY/EXIT→SELL mapping is fixed and one-to-one; storing side
+  separately would allow an invalid order — a BUY carrying an EXIT
+  signal, for example. If short selling is ever approved, side becomes a
+  genuinely independent field again; that is a deliberate, visible
+  change, not a quiet accommodation made now.
+- **No status field:** the eventual `Fill` or `OrderRejection` *is* the
+  outcome (D-12); an `Order` needs no `PENDING`/`FILLED`/`REJECTED` state
+  of its own. Pending-ness is the Backtester's own local variable, not
+  domain state.
+- **`int` order id, run-local and Backtester-owned:** already fixed by
+  D-14 and the architecture's execution-contract setup step. The count of
+  orders in one run is bounded by the bar count, so `int` is enough; no
+  UUID, database id, or static counter is needed or deterministic across
+  runs.
+- **No execution price or execution date on `Order`:** V1 is market
+  orders only (D-9), and the N+1 open is future information relative to
+  the signal bar — storing it at creation time would violate the
+  look-ahead contract this design exists to protect.
+- **`SignalEvent` in `strategy`, `Order`/`OrderSide` in `execution`:**
+  matches the package boundary the architecture already lists, and starts
+  `execution` with its first two types; the dependency runs
+  execution → strategy → indicator.
+
+**Rejected:**
+
+- **`SignalEvent(date, type, snapshot)`:** the duplicated-state
+  alternative this decision was written to resolve.
+- **A stored `Order.side` with a consistency check against the signal:**
+  a duplicate that could still disagree if the check were ever
+  bypassed; deriving makes the invalid state unrepresentable instead of
+  merely checked.
+- **`Order` fields for creation date or reference close:** both equal
+  values already reachable via `signal.date()` /
+  `signal.snapshot().close()`.
+- **A mutable `Order` with a status enum:** conflates signal intent with
+  execution outcome, and needs no mutation — `Order` is a value, not a
+  service.
+- **`long`/UUID/database order IDs:** unnecessary precision, or
+  non-deterministic identity; D-14 already settled on `int`.
+- **A static or global order-id counter:** would leak state across
+  backtest runs, breaking D-5's re-entrant, stateless `Backtester`.
+- **Consuming an order id for a `ZERO_QUANTITY` rejection:** no `Order`
+  exists in that case, so nothing should consume an id.
+- **Quantity or affordability logic inside `SignalEvent` or `Order`:**
+  belongs to the Backtester sizing step (D-7) and the execution step,
+  respectively — domain values stay pure data.
+
+**Consequence:** `SignalEvent` → sized by the Backtester (D-7) →
+`Order(id, quantity, signal)`, held as the Backtester's `pendingOrder` →
+executed no earlier than the next in-range bar's open, producing a `Fill`
+or an `OrderRejection` that carries `order.id()` and `order.signal()`
+forward, so the explanation for every trade is recoverable as
+`fill.signal().type()`, `.snapshot()`, and `.date()` with no duplicated
+signal state anywhere (D-12). Orders are never part of `BacktestResult`.
+
+**Open questions (not decided here, deferred to the Fill/OrderRejection design):**
+
+1. Whether an `INSUFFICIENT_CASH` `OrderRejection` should carry the
+   rejected order's id — the architecture's current `OrderRejection`
+   sketch has no order-id field.
+2. Order ids can show gaps in the fills (for example, when an order is
+   rejected for insufficient cash and consumes an id but produces no
+   fill). This is deterministic and expected; it should be documented
+   alongside `Fill`.
+3. Whether `Fill` copies `orderId` + `signal` (as D-12 currently says) or
+   references the `Order` itself. D-12's "orders are not part of the
+   result" favors copying; confirmed when `Fill` is designed.
+
+## D-21 Fill copies order data; OrderRejection is sealed to ZeroQuantity and InsufficientCash
+
+**Decision:** `engine.execution` adds:
+
+- `record Fill(int orderId, LocalDate date, long quantity, BigDecimal
+  referenceOpen, BigDecimal fillPrice, BigDecimal commission, SignalEvent
+  signal)`: `orderId >= 1`, `date`/`referenceOpen`/`fillPrice`/
+  `commission`/`signal` non-null, `quantity > 0`, `referenceOpen > 0`,
+  `fillPrice > 0`, `commission >= 0`. `side()` derives
+  `OrderSide.forSignal(signal.type())`; `slippageCost()` derives
+  `|fillPrice - referenceOpen| * quantity` exactly, with no rounding.
+  Neither is stored.
+- `enum RejectionReason { ZERO_QUANTITY, INSUFFICIENT_CASH }`.
+- `sealed interface OrderRejection { SignalEvent signal(); LocalDate
+  date(); RejectionReason reason(); }`, with exactly two implementations:
+  - `record ZeroQuantity(SignalEvent signal)`: `signal` non-null and
+    `signal.type() == ENTER`; `date()` derives `signal.date()`;
+    `reason()` derives `ZERO_QUANTITY`.
+  - `record InsufficientCash(int orderId, LocalDate date, long quantity,
+    BigDecimal requiredCash, BigDecimal availableCash, SignalEvent
+    signal)`: `orderId >= 1`, `date` non-null, `quantity > 0`,
+    `requiredCash > 0`, `availableCash` non-null,
+    `requiredCash.compareTo(availableCash) > 0`, `signal` non-null and
+    `signal.type() == ENTER`; `reason()` derives `INSUFFICIENT_CASH`.
+- `OrderSide` gains `static OrderSide forSignal(SignalType type)`
+  (`ENTER -> BUY`, `EXIT -> SELL`, exhaustive switch, null-checked);
+  `Order.side()` now delegates to it. `Order`'s components and validation
+  are unchanged.
+
+This resolves D-20's three open questions and progress.md's OQ1 and OQ3:
+
+1. **`OrderRejection` carries an order ID exactly when one was consumed:**
+   never on `ZeroQuantity` (no order ever existed), always on
+   `InsufficientCash` (an order did exist).
+2. **Order-ID gaps:** because only created orders consume IDs (D-20), and
+   each created order ends in exactly one `Fill` or one
+   `InsufficientCash`, `{fill IDs} union {InsufficientCash IDs}` is
+   always exactly `{1..n}`. A gap in the fill IDs is expected,
+   deterministic behavior, fully explained by the matching
+   `InsufficientCash`.
+3. **`Fill` copies, not references:** `orderId` and `signal` are copied
+   from the originating `Order`; the `Order` object itself is never
+   stored.
+4. **OQ1 (`ZERO_QUANTITY`'s `requiredCash`):** there is no such field.
+   `ZeroQuantity` carries only the signal; no order, and therefore no
+   order-shaped cost, ever existed.
+5. **OQ3 (rejection date convention):** `ZeroQuantity.date()` derives the
+   signal date; `InsufficientCash.date` is stored, because it is the
+   execution bar's date, genuinely different information.
+
+**Why:**
+
+- **Fill copies order data instead of referencing `Order`:** keeps the
+  result free of transient runtime objects (D-12) while preserving full
+  auditability -- order ID, signal type, snapshot, and signal date are
+  all still recoverable as `fill.orderId()`, `fill.signal().type()`,
+  `.snapshot()`, and `.date()`.
+- **`side()` and `slippageCost()` derived, not stored:** the same
+  no-duplicate-state principle as D-20's `Order.side()`. A stored side
+  could disagree with the signal; a stored slippage cost could disagree
+  with the recorded prices. Deriving makes both states unrepresentable.
+  `slippageCost()` is exact bookkeeping over already-recorded values, not
+  the execution calculation that produces `fillPrice` from the configured
+  slippage rate -- that calculation stays in the execution step.
+- **`Fill` validates only its own internal consistency:** not that the
+  price matches the slippage rate, that cash was sufficient, or that
+  execution happened after the signal. Those depend on configuration and
+  run state that `Fill` doesn't have and shouldn't duplicate; they are
+  Backtester/execution-step tests instead.
+- **Two `OrderRejection` records instead of one with optional fields:**
+  the two cases have genuinely different shapes. `ZeroQuantity` has
+  nothing order-shaped to carry; `InsufficientCash` has an order ID, a
+  genuinely different date, and two cash figures. A single record with a
+  nullable order ID and nullable cash fields would be null in exactly one
+  case or the other, every time -- an awkward representation for
+  information that always exists in one shape and never in the other.
+  The sealed interface expresses that exhaustively instead.
+- **`RejectionReason` derived per record, not stored:** the record type
+  already determines the reason; storing it separately would just be
+  another way to say the same thing, with a chance to disagree.
+- **`requiredCash > availableCash` enforced in the constructor:** an
+  `InsufficientCash` instance is a claim of insufficiency; checking its
+  own defining condition (with `BigDecimal.compareTo`) keeps that claim
+  honest without duplicating any *market* rule -- the values themselves
+  are supplied already-computed by the execution step, not calculated
+  here.
+- **Both records require an `ENTER` signal:** V1's SELL always sells the
+  full held position and needs no cash (D-7), so neither rejection case
+  can occur for a SELL. Representing a SELL rejection would be dead code
+  with no way to construct a real one.
+- **No generic `Outcome` wrapper:** the Backtester's two lists (fills,
+  rejections) already express "every signal has exactly one outcome";
+  the invariant is documented and Backtester-tested (signal count equals
+  fills plus rejections, each signal appears once, the ID union is
+  contiguous), not encoded in a new type that would exist only to hold
+  the same two variants a `sealed interface` already provides.
+
+**Rejected:**
+
+- **`Fill` holding the `Order` directly:** couples the result to a
+  transient object; D-12 forbids it.
+- **Storing `Fill.side` or `Fill.slippageCost`:** duplicate,
+  disagreement-prone state (see above).
+- **One `OrderRejection` record with a nullable order ID and nullable
+  cash fields:** awkward null state in exactly half of every instance.
+- **No order ID ever, on any rejection:** loses the explanation for
+  fill-ID gaps.
+- **Always an order ID, even on `ZeroQuantity`:** would force a
+  `ZeroQuantity` to consume an ID that no order ever used, contradicting
+  D-20.
+- **Sentinel values** (`orderId = 0`, `requiredCash = 0`, a one-share
+  cost estimate) for `ZeroQuantity`: would misstate financial meaning
+  that doesn't exist for a signal that never became an order.
+- **A SELL rejection type, and rejection reasons beyond the two V1
+  cases:** impossible or out of scope in V1; a future reason is a new
+  sealed-interface record, not a widened enum with unused values.
+- **Deriving `InsufficientCash.date` from `signal.date()`:** would lose
+  the execution bar's actual date, which is genuinely different
+  information (unlike `ZeroQuantity`, where no time passes between
+  signal and rejection).
+- **Calculating `fillPrice` from the slippage rate inside `Fill`, or
+  `requiredCash` inside `InsufficientCash`:** these are execution
+  calculations belonging to the execution step; the outcome records
+  represent already-computed results immutably.
+- **Validating execution causality (fill/rejection date after signal
+  date) inside `Fill`/`OrderRejection`:** left to Backtester-level tests,
+  consistent with keeping outcome values free of scheduling logic.
+
+**Still open (deferred, not decided here):**
+
+- **OQ2**, unchanged: a degenerate configuration (commission exceeding
+  cash plus proceeds, or `slippageRate >= 1` driving a SELL fill price to
+  zero or below) could in principle demand a SELL rejection, which V1's
+  model cannot represent. `BacktestConfig` validation must forbid such
+  configurations; this is not solved by widening `OrderRejection`.
+
+**Consequence:** the full V1 outcome model is now frozen:
+`SignalEvent` -> sizing -> `OrderRejection.ZeroQuantity`, or
+`SignalEvent` -> `Order` -> execution at the next in-range bar's open ->
+`Fill` or `OrderRejection.InsufficientCash`. Every value in the chain is
+immutable, holds no transient runtime object, and the full explanation
+for any outcome is recoverable through `signal()` alone.

@@ -2,11 +2,15 @@
 
 ## Current Milestone
 
-D-18 strategy grammar hardening. Implemented: `Bar`, `BarSeries`,
-`IndicatorType`, `IndicatorSpec`, `Indicator`, `SimpleMovingAverage`,
-`ExponentialMovingAverage`, `RelativeStrengthIndex`, `IndicatorSnapshot`,
-`Operand`, `Operator`, `Condition`. Not yet implemented: `StrategyDefinition`
-and everything after it. All of this work is still uncommitted.
+D-21 implementation: `Fill` and `OrderRejection`. Implemented: `Bar`,
+`BarSeries`, `IndicatorType`, `IndicatorSpec`, `Indicator`,
+`SimpleMovingAverage`, `ExponentialMovingAverage`, `RelativeStrengthIndex`,
+`IndicatorSnapshot`, `Operand`, `Operator`, `Condition`, `PositionSizing`,
+`StrategyDefinition`, `SignalType`, `SignalEvent`, `OrderSide`, `Order`,
+`Fill`, `RejectionReason`, `OrderRejection`. The full V1 outcome model
+(`SignalEvent` -> `Order` -> `Fill`/`OrderRejection`) is now frozen and
+implemented. Not yet implemented: `Portfolio`, `Trade`, `Equity`,
+`BacktestConfig`/`BacktestResult`, and `Backtester`.
 
 ## Completed
 
@@ -358,6 +362,156 @@ Design only, recorded before implementation. Full design is in
       snapshot's exception passes through untranslated
     - `Constant(-0.0)` and `Constant(0.0)` have equal hash codes
 
+### Engine implementation batch: `PositionSizing` and `StrategyDefinition` (D-19)
+
+- `in.vedchangani.parallax.engine.strategy.PositionSizing`: sealed
+  interface with one V1 implementation, `CashFraction(BigDecimal
+  fraction)`. Validates `0 < fraction <= 1` with `compareTo`, then
+  normalizes the stored value with `stripTrailingZeros()` so `0.5` equals
+  `0.50` and `1` equals `1.00`. It requests a cash fraction only — no
+  quantity, commission, slippage, or affordability logic, which stays a
+  Backtester/execution concern (D-7).
+- `in.vedchangani.parallax.engine.strategy.StrategyDefinition`: immutable
+  record `(Condition entryCondition, Condition exitCondition,
+  PositionSizing positionSizing)`. Compact constructor rejects only null
+  components; nothing else is validated, so Close-only/Constant-only
+  conditions, no-indicator strategies, identical entry/exit conditions,
+  shared specs, and multiple periods of one indicator type are all legal.
+- `requiredIndicatorSpecs()`: a private static recursive walk over the
+  sealed `Condition`/`Operand` hierarchies (`Compare` → both operands,
+  `All`/`Any` → every child, `IndicatorRef` → its spec,
+  `Close`/`Constant` → nothing), with **no `default` branch** in either
+  `switch` — a future grammar addition is a compile error here until
+  discovery is updated for it. Specs are collected into a `TreeSet`
+  ordered by a private comparator identical in shape to
+  `IndicatorSnapshot`'s (type declaration order, then period ascending),
+  and returned as `List.copyOf(...)`: distinct, canonically ordered,
+  unmodifiable. It is computed on every call, not stored, so it cannot
+  drift from the conditions and does not participate in
+  `StrategyDefinition` equality (which stays default record equality over
+  the three components).
+- 39 new tests across four files (188 engine tests total):
+  `CashFractionTest` (10 — bounds, null, trailing-zero equality/hashCode,
+  normalized storage); `StrategyDefinitionTest` (25 — construction,
+  null-component rejection, structural equality, and
+  `requiredIndicatorSpecs()` discovery: single/shared specs, multiple
+  periods of one type, both `Compare` operands, several levels of nesting,
+  Close/Constant contributing nothing, no indicators at all, order
+  independent of authoring/traversal order, an unmodifiable result, and a
+  cross-check that the order matches `IndicatorSnapshot`'s canonical order
+  for the same specs); `StrategyDefinitionStructureTest` (4 — component
+  types, `PositionSizing`'s exact permitted subclass, `CashFraction`'s
+  single `BigDecimal` component, `requiredIndicatorSpecs()`'s return
+  type).
+- Fixed a test-authoring bug found during this batch (not a production
+  bug): an early draft of `indicatorOnBothSidesOfOneCompareIsDiscovered`
+  used the shared `EXIT` fixture, which itself references `RSI(14)`,
+  producing three specs instead of the intended two. Corrected to use a
+  single self-contained condition for both entry and exit.
+
+### Engine implementation batch: `SignalEvent` and `Order` (D-20)
+
+- `in.vedchangani.parallax.engine.strategy.SignalType`: enum, exactly
+  `ENTER`/`EXIT`.
+- `in.vedchangani.parallax.engine.strategy.SignalEvent`: immutable record
+  `(SignalType type, IndicatorSnapshot snapshot)`. `date()` returns
+  `snapshot.date()`, **derived, not stored** — this resolves the
+  SignalEvent date-duplication question open since the `IndicatorSnapshot`
+  batch. Holds no `StrategyDefinition`, `PositionSizing`, position/
+  portfolio state, `Order`, or runtime `Indicator`.
+- `in.vedchangani.parallax.engine.execution` (new package):
+  - `OrderSide`: enum, exactly `BUY`/`SELL`.
+  - `Order`: immutable record `(int id, long quantity, SignalEvent
+    signal)`. Validates `id >= 1`, `quantity > 0`, `signal` non-null.
+    `side()` is **derived** from `signal.type()` via an exhaustive
+    `switch` (`ENTER` → `BUY`, `EXIT` → `SELL`) rather than stored, so an
+    order can never disagree with the signal that produced it. No
+    creation date, reference close, execution date, price, commission,
+    slippage, or status field — all either recoverable from `signal` or
+    future information at creation time. The Backtester will own order-id
+    assignment (`int nextOrderId = 1`, incremented only when an `Order` is
+    actually created) and pending-order state; `Order` itself validates
+    only `id >= 1`.
+- 28 new tests across four files (216 engine tests total):
+  `SignalEventTest` (10 — construction, derived `date()`, null-component
+  rejection, structural equality, exact snapshot preservation, runtime
+  isolation via a real `SimpleMovingAverage`, `SignalType.values()`);
+  `SignalEventStructureTest` (1 — components are exactly
+  `(SignalType, IndicatorSnapshot)`); `OrderTest` (15 — construction,
+  explicit sequential ids, id/quantity bounds, null-signal rejection,
+  `side()` derivation for both signal types, structural equality,
+  `OrderSide.values()`); `OrderStructureTest` (2 — components are exactly
+  `(int, long, SignalEvent)`, and `OrderSide` is confirmed absent as a
+  component, proving `side()` is derived).
+
+### Engine implementation batch: `Fill` and `OrderRejection` (D-21)
+
+- `in.vedchangani.parallax.engine.execution.Fill`: immutable record
+  `(int orderId, LocalDate date, long quantity, BigDecimal referenceOpen,
+  BigDecimal fillPrice, BigDecimal commission, SignalEvent signal)`.
+  `orderId` and `signal` are **copied** from the originating `Order` (the
+  `Order` object itself is never referenced — D-12). `date` is the
+  execution bar's date, `referenceOpen` its actual open, `fillPrice` the
+  open already adjusted for slippage by the execution step (not
+  calculated here). `side()` derives `OrderSide.forSignal(signal.type())`
+  and `slippageCost()` derives `|fillPrice − referenceOpen| × quantity`
+  exactly — neither is stored, so a `Fill` can never disagree with its own
+  signal or record an inconsistent slippage figure. Validates
+  `orderId >= 1`, positive quantity/prices, non-negative commission, and
+  non-null fields; does not validate slippage-rate correctness, cash
+  sufficiency, or execution timing (Backtester concerns).
+- `in.vedchangani.parallax.engine.execution.RejectionReason`: enum,
+  exactly `ZERO_QUANTITY`/`INSUFFICIENT_CASH`.
+- `in.vedchangani.parallax.engine.execution.OrderRejection`: sealed
+  interface (`signal()`, `date()`, `reason()`) with exactly two records,
+  chosen over one record with nullable fields because the two cases carry
+  genuinely different information:
+  - `ZeroQuantity(SignalEvent signal)`: no order ever existed, so no
+    order id, quantity, or cash fields exist to carry. Requires an
+    `ENTER` signal. `date()` derives `signal.date()` (nothing happens
+    between signal and rejection); `reason()` derives `ZERO_QUANTITY`.
+  - `InsufficientCash(int orderId, LocalDate date, long quantity,
+    BigDecimal requiredCash, BigDecimal availableCash, SignalEvent
+    signal)`: an order existed and consumed `orderId`, which is why fill
+    IDs can show gaps. `date` is the execution bar's date — stored, not
+    derived, because it genuinely differs from the signal date. Requires
+    an `ENTER` signal and `requiredCash.compareTo(availableCash) > 0`
+    (checked in the constructor, so an instance can never claim
+    insufficiency while showing enough cash); `reason()` derives
+    `INSUFFICIENT_CASH`.
+- `OrderSide` gained `static OrderSide forSignal(SignalType type)`
+  (`ENTER → BUY`, `EXIT → SELL`, exhaustive switch, null-checked);
+  `Order.side()` now delegates to it instead of its own inline switch.
+  `Order`'s record components and validation are unchanged.
+- This resolves all three of D-20's open Fill/OrderRejection questions
+  (order-ID presence, order-ID gap semantics, copy-vs-reference) plus two
+  older open questions: OQ1 (`ZERO_QUANTITY` has no `requiredCash` field
+  at all, rather than a sentinel) and OQ3 (`ZeroQuantity` derives the
+  signal date; `InsufficientCash` stores its own, genuinely different,
+  execution date).
+- 54 new tests across four files (270 engine tests total): `FillTest`
+  (22 — every stored field, BUY/SELL side derivation, slippage cost for
+  both sides and the zero-slippage case, zero commission accepted, every
+  null/numeric validation boundary, equality, and explanation recovery
+  without an `Order` object); `FillStructureTest` (3 — exact component
+  shape, no `Order`/`OrderSide` component, no stored slippage-cost
+  component alongside the derived method); `OrderRejectionTest` (24 —
+  `RejectionReason.values()`, `ZeroQuantity` construction/date/reason/
+  EXIT-rejection/equality, `InsufficientCash` construction/reason/
+  independent date/every validation boundary including the
+  `requiredCash > availableCash` check at, above, and below the
+  boundary/EXIT-rejection/equality); `OrderRejectionStructureTest` (5 —
+  exact permitted-subclass set, exact component shapes for both records,
+  a whitelist check that neither record holds an `Order`, `Bar`,
+  `BarSeries`, runtime `Indicator`, or collection, and `OrderSide`'s exact
+  values).
+- Fixed a test-authoring bug found while writing `FillStructureTest` (not
+  a production bug): `Set.of(...)` throws on duplicate elements, and
+  `Fill` has three `BigDecimal` components, so the original
+  "no forbidden component type" check threw `IllegalArgumentException`
+  before it could assert anything. Corrected to collect component types
+  into a `Set` via a stream collector, which tolerates duplicates.
+
 ## Current Architecture
 
 ```
@@ -372,7 +526,11 @@ Parallax/
 │       │                     #   SimpleMovingAverage, ExponentialMovingAverage,
 │       │                     #   RelativeStrengthIndex, IndicatorSnapshot
 │       │                     #   (implemented)
-│       └── strategy/        # Operand, Operator, Condition (implemented)
+│       ├── strategy/        # Operand, Operator, Condition, PositionSizing,
+│       │                     #   StrategyDefinition, SignalType, SignalEvent
+│       │                     #   (implemented)
+│       └── execution/       # OrderSide, Order, Fill, RejectionReason,
+│                             #   OrderRejection (implemented)
 ├── backend/                 # Spring Boot application module
 ├── frontend/                # React/Vite application
 ├── docs/
@@ -387,28 +545,33 @@ Approved but not yet implemented — the run loop: stateless
 BacktestResult`; single-pass loop per bar: stop after `endDate` → execute
 pending order at open → update indicators at close → skip lookback bars →
 record equity point → evaluate strategy (ready, not last in-range bar) →
-size at close and queue order. Still to build: `StrategyDefinition` (in
-`strategy`), the `execution`, `portfolio` and `result` packages, and
-`Backtester` at the engine root.
+size at close and queue order. Still to build: `Portfolio`, `Trade`,
+`Equity` (in `portfolio`), `BacktestConfig`/`BacktestResult` (in
+`result`), and `Backtester` at the engine root. The full outcome model
+(`SignalEvent`/`Order`/`Fill`/`OrderRejection`) is now implemented.
 
 ## Verification
 
-Run from `C:\Parallax` (current state, after the D-18 hardening batch):
+Run from `C:\Parallax` (current state, after the D-21 implementation
+batch):
 
-- Strategy tests (`OperandTest`, `CompareTest`, `AllTest`, `AnyTest`,
-  `ConditionPurityAndEqualityTest`, `StrategyGrammarStructureTest`): 58
-  tests, 0 failures.
-- `./mvnw -pl engine test`: `Tests run: 149, Failures: 0, Errors: 0,
+- New tests (`FillTest`, `FillStructureTest`, `OrderRejectionTest`,
+  `OrderRejectionStructureTest`): 54 tests, 0 failures.
+- `./mvnw -pl engine test`: `Tests run: 270, Failures: 0, Errors: 0,
   Skipped: 0` — `BarTest` (13), `BarSeriesTest` (9), `EngineSmokeTest` (1),
   `IndicatorSpecTest` (12), `SimpleMovingAverageTest` (9),
   `ExponentialMovingAverageTest` (11), `RelativeStrengthIndexTest` (11),
   `IndicatorSnapshotTest` (25), `OperandTest` (10), `CompareTest` (18),
   `AllTest` (10), `AnyTest` (10), `ConditionPurityAndEqualityTest` (5),
-  `StrategyGrammarStructureTest` (5).
+  `StrategyGrammarStructureTest` (5), `CashFractionTest` (10),
+  `StrategyDefinitionTest` (25), `StrategyDefinitionStructureTest` (4),
+  `SignalEventTest` (10), `SignalEventStructureTest` (1), `OrderTest`
+  (15), `OrderStructureTest` (2), `FillTest` (22), `FillStructureTest`
+  (3), `OrderRejectionTest` (24), `OrderRejectionStructureTest` (5).
 - `./mvnw clean install`: BUILD SUCCESS. Reactor: Parallax (pom), Parallax
-  Engine, backend; 149 engine tests plus 1 backend test.
+  Engine, backend; 270 engine tests plus 1 backend test.
 - `backend/` and `frontend/` unchanged.
-- Docs consistency check: every `D-n` reference (`D-1` through `D-18`)
+- Docs consistency check: every `D-n` reference (`D-1` through `D-21`)
   resolves to a heading in `decisions.md`.
 
 ## Decisions
@@ -429,6 +592,26 @@ Run from `C:\Parallax` (current state, after the D-18 hardening batch):
   GT/LT only, nestable `All`/`Any`, no empty groups, `double` constants,
   constant-vs-constant and identical operands permitted, and pure
   snapshot-only evaluation (implemented).
+- D-19: `StrategyDefinition(entry, exit, sizing)` with structural-only
+  validation; `PositionSizing.CashFraction` as the only V1 sizing mode,
+  normalized so equal fractions are equal values;
+  `requiredIndicatorSpecs()` derived on demand (not stored, not part of
+  equality) via an exhaustive, no-default traversal, in the same
+  canonical order as `IndicatorSnapshot` (implemented).
+- D-20: `SignalEvent(type, snapshot)` with `date()` derived from the
+  snapshot rather than stored; `Order(id, quantity, signal)` with
+  `side()` derived from the signal type rather than stored; run-local
+  sequential order ids owned by the Backtester; no status field on
+  `Order` (implemented).
+- D-21: `Fill` copies `orderId`/`signal` from its `Order` (never
+  references the `Order` itself) and derives `side()`/`slippageCost()`;
+  `OrderRejection` is sealed to `ZeroQuantity` (no order ever existed, no
+  order id, date derived from the signal) and `InsufficientCash` (an
+  order existed and kept its id, execution date stored since it genuinely
+  differs, `requiredCash > availableCash` enforced at construction); both
+  rejection records require an `ENTER` signal, since V1 has no SELL
+  rejection; order-ID gaps in the fills are documented as expected,
+  deterministic behavior (implemented).
 
 See [decisions.md](decisions.md).
 
@@ -438,33 +621,56 @@ None currently open.
 
 ## Open Questions (edge cases not specified by the approved design)
 
-1. `OrderRejection` for `ZERO_QUANTITY`: what `requiredCash` means when no
-   order quantity exists (for example, the cost of one share at the sizing
-   price plus commission).
+1. ~~`OrderRejection` for `ZERO_QUANTITY`: what `requiredCash` means when
+   no order quantity exists.~~ **Resolved by D-21:**
+   `OrderRejection.ZeroQuantity` has no `requiredCash` field at all — no
+   order ever existed, so no order-shaped cost exists to name.
 2. SELL when `cash + quantity × fillPrice − commission < 0` (commission
    larger than the whole account): fail the run, or reject? Only reachable
    with degenerate commission settings; config validation could forbid it.
-3. Rejection date convention: `ZERO_QUANTITY` is dated at the signal bar,
-   `INSUFFICIENT_CASH` at the execution bar. Confirm.
+   **Still open** — V1's `OrderRejection` model has no way to represent a
+   SELL rejection (D-21), so this must be prevented by `BacktestConfig`
+   validation, not solved by widening the outcome model.
+3. ~~Rejection date convention: `ZERO_QUANTITY` is dated at the signal
+   bar, `INSUFFICIENT_CASH` at the execution bar.~~ **Resolved by D-21:**
+   confirmed exactly as stated — `ZeroQuantity.date()` derives
+   `signal.date()`; `InsufficientCash.date` is stored separately as the
+   execution bar's date, since it's genuinely different information.
 4. Price adjustment basis (raw vs split/dividend adjusted) for datasets:
    to decide with the data layer; must be part of dataset provenance.
 
-5. `SignalEvent(date, type, snapshot)` as sketched in `architecture.md`
-   would duplicate `snapshot.date()`. Not decided in the
-   `IndicatorSnapshot` batch; revisit when `SignalEvent` is designed.
-
-6. Where the set of referenced `IndicatorSpec`s is collected (on
-   `StrategyDefinition`, or as a static traversal used by the Backtester).
-   Its iteration order must be deterministic. To decide with
-   `StrategyDefinition`.
+5. ~~`SignalEvent(date, type, snapshot)` as sketched in `architecture.md`
+   would duplicate `snapshot.date()`.~~ **Resolved by D-20:**
+   `SignalEvent.date()` is derived from `snapshot.date()`, not stored.
+6. ~~Where the set of referenced `IndicatorSpec`s is collected.~~
+   **Resolved by D-19:** `StrategyDefinition.requiredIndicatorSpecs()`, a
+   private traversal derived on demand, in canonical order.
 7. Persisting `Constant(double)` in the backend: store it in a form that
    round-trips exactly (for example `Double.toString`) so that reloaded
    strategy versions stay equal.
+8. Whether to later consolidate the canonical-order comparator into one
+   shared constant used by both `IndicatorSnapshot` and
+   `StrategyDefinition`, instead of the current two independent private
+   copies of the same two-line rule (D-19's open question).
+9. Identical entry and exit conditions are legal per D-19 but would churn
+   (enter, then exit on the next evaluable bar). The engine will not
+   reject them; a backend or UI warning may be wanted later.
+10. ~~Whether an `INSUFFICIENT_CASH` `OrderRejection` should carry the
+    rejected order's id.~~ **Resolved by D-21:** yes —
+    `InsufficientCash.orderId` is exactly the id the order had already
+    been assigned.
+11. ~~Order ids can show gaps in the fills.~~ **Resolved by D-21:**
+    documented as expected, deterministic behavior — `{fill IDs} ∪
+    {InsufficientCash IDs}` is always exactly `{1..n}`, so every gap is
+    explained by a matching rejection.
+12. ~~Whether `Fill` copies `orderId` + `signal` or references the
+    `Order` itself.~~ **Resolved by D-21:** copies, per D-12; the `Order`
+    object is never referenced.
 
 ## Next Milestone
 
-`StrategyDefinition` — an immutable configuration object composing an
-entry `Condition`, an exit `Condition`, and (once designed) a
-`PositionSizing`. Also where the set of referenced `IndicatorSpec`s
-(Open Question 6) is decided. No `SignalEvent`, `Backtester`, execution,
-or portfolio logic in that batch.
+`Portfolio` design — the mutable per-run accounting state that applies
+`Fill`s (cash, position quantity, cost basis, realized P&L, per D-13),
+and `EquityPoint`. This is the first mutable runtime type in the engine;
+everything implemented so far (`SignalEvent` through `OrderRejection`) is
+immutable. No `Backtester`, `Trade`, or metrics logic in that batch.
