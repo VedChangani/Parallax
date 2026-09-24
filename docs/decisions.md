@@ -631,6 +631,107 @@ run, by the same gap-up rejection behaviour a user strategy has under D-7)
 and it was withdrawn before commit. The benchmark is deferred to its own
 checkpoint, D-28.
 
+## D-28 Buy-and-hold benchmark as an independent post-run calculation
+
+**Decision:** `engine.metrics.BuyAndHoldBenchmark(BigDecimal
+initialCapital, List<EquityPoint> equityCurve)` answers "what would the
+same starting capital have produced by passively holding the asset over
+the requested backtest period?" — computed directly from `BarSeries` and
+`BacktestResult`, **never** by calling `Backtester.run`, evaluating a
+`StrategyDefinition`, or using `Portfolio`, `Order`, `Fill`, or the D-23
+strategy sizing/reserve machinery (this corrects the withdrawn D-27
+`BuyAndHold`, which delegated to `Backtester` and so inherited the
+strategy's gap-up rejection behaviour).
+
+- **Entry (option A — the first in-range bar's open):** the benchmark
+  buys once, at `fillPrice = firstInRangeBar.open × (1 + slippageRate)`,
+  never sells, and is never rejected — it is sized from the price actually
+  paid, so it is always affordable. Whole shares:
+  `q = floor((initialCapital − commission) / fillPrice)` via
+  `divideToIntegralValue`/`longValueExact` (exact, no `MathContext`). If
+  `initialCapital − commission ≤ 0` or `q` would be `0`, no trade occurs
+  and no commission is charged. If `q > 0`, one commission is paid and
+  `costBasis = q×fillPrice + commission`.
+- **Why option A, not the strategy's N-close/N+1-open convention (option
+  B) or a market-on-close entry (option C):** a *passive* holder has no
+  decision to make and so no decision delay — importing the strategy's
+  timing would handicap the benchmark by the same defect just removed. A
+  benchmark and a strategy both start with exactly `initialCapital` at the
+  first in-range bar's open (a strategy holds no position and has no
+  pending order before that point, D-6) and both end at the same last
+  in-range close, so the two are compared over the same window and same
+  capital. A one-bar window still produces a real result under A; it never
+  invests under B.
+- **No exit ever:** no exit commission, no exit slippage, no D-23 reserve,
+  and residual cash earns nothing (V1 has no interest model). Slippage is
+  represented only through the changed fill price, never as a separate
+  cash flow (consistent with D-27).
+- **Equity curve:** one `EquityPoint` per in-range bar, with dates
+  identical to `result.equityCurve()`'s. Because entry happens before the
+  first mark, every point shares the same `cash`, `quantity` and
+  `costBasis`, with `realizedPnl = 0` — only `date` and `close` vary. The
+  first point is marked at the first in-range bar's close, so its equity
+  generally differs from `initialCapital` (unlike a strategy's first
+  point) — this is why `initialCapital` is carried as its own record
+  component rather than read off the curve. `EquityPoint` itself is
+  reused unmodified: each point is exactly what `Portfolio` would produce
+  after the same BUY, marked to that close.
+- **Input contract, `of(series, result)`:** only `result.symbol()`,
+  `config()` and `equityCurve()` are read — never `strategy()`, `fills()`,
+  `rejections()`, `trades()`, or `firstEvaluableDate()` — so two different
+  strategies over the same series and config give an identical benchmark.
+  The caller-supplied "same data" contract is enforced, not assumed:
+  `series.symbol()` must equal `result.symbol()`, and the series' in-range
+  bars (by `result.config()`'s date range) must match
+  `result.equityCurve()` exactly in count, date and close (by
+  `compareTo`), each an `IllegalArgumentException` on mismatch. This
+  cannot detect a series differing only in its bar opens or lookback
+  content — a documented limit, not a gap the check could cheaply close.
+- **Record validation** makes an invalid benchmark unrepresentable:
+  `initialCapital > 0`; a non-empty, strictly-ascending, defensively
+  copied curve; every point sharing the same cash/quantity/costBasis;
+  every `realizedPnl == 0`; and `cash + costBasis == initialCapital`
+  exactly at every point (the no-realized-P&L accounting identity). The
+  first point's equity is **not** required to equal `initialCapital`
+  (unlike D-26's `PerformanceMetrics` precondition) — under option A it
+  generally doesn't.
+- **Package:** `engine.metrics`, alongside `PerformanceMetrics` — this is
+  post-run analysis of a finished result plus market data, with no
+  simulation in it (D-5). It depends on `data`, `portfolio` and `result`,
+  never on `Backtester`, `strategy`, or `execution`.
+
+**Why:** a benchmark and a strategy carrying the same frictions (whole
+shares, commission, slippage, idle-cash drag) isolates timing and
+selection from cost effects, and whole/fractional-share economics stay
+consistent with V1's "whole-share quantities" scope (CLAUDE.md). Reading
+only `symbol`/`config`/`equityCurve` off the result, never `strategy()` or
+`fills()`, is what makes independence from `StrategyDefinition` a checked
+fact rather than a convention.
+
+**Rejected:** entering at the second in-range bar's open (option B —
+carries the strategy's decision delay into a passive policy, and a
+one-bar window never invests); entering at the first in-range bar's close
+(option C — captures the bar-0-close-to-bar-1-open gap a strategy can't,
+and needs no `BarSeries`, but conflicts with "passive ownership of the
+requested window" starting at its open); delegating to
+`Backtester.run`/`StrategyDefinition` (the withdrawn design — reintroduces
+gap-up rejection); fractional shares or a frictionless price return
+(inconsistent with V1's whole-share, cost-bearing engine, and would
+flatter the benchmark relative to anything the engine can actually
+produce); a combined commission-plus-slippage cash flow (D-27); requiring
+`equityCurve[0].equity == initialCapital` (true for a strategy under
+D-26, not for this benchmark under option A); benchmark CAGR, volatility,
+Sharpe or drawdown (`PerformanceMetrics` is fixed to `BacktestResult` by
+D-26; extending it to a bare equity curve is a separate decision);
+excess-return/comparison fields, interfaces, registries, or multiple
+benchmark types.
+
+**Consequence:** open question 5 is resolved. Excess return (strategy
+`totalReturn()` minus benchmark `totalReturn()`) and chart pairing are
+consumer concerns, computed by the backend/frontend, not part of this
+decision. Price basis (raw vs. adjusted) remains open question 1;
+dividends and corporate actions are not modeled.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
@@ -647,11 +748,11 @@ Not yet decided; not blocking current implementation:
    engine (D-22); a later backend/reporting layer computes
    `costBasis / quantity` and picks its own precision.
 5. **Trading-cost metrics and buy-and-hold benchmark** (D-26): trading-cost
-   totals are **resolved by D-27**. The buy-and-hold benchmark remains
-   open: `BacktestResult` keeps closes but no opens, and a first design
-   attempt (running a fixed `CashFraction(1)` strategy through the
-   existing `Backtester`) proved economically unsound (see question 6) and
-   was withdrawn before commit. Deferred to its own checkpoint, D-28.
+   totals are **resolved by D-27**. The buy-and-hold benchmark is
+   **resolved by D-28** as an independent post-run calculation over
+   `BarSeries` and `BacktestResult`, entering at the first in-range bar's
+   open — not by running a strategy through `Backtester` (the withdrawn
+   first attempt; see question 6).
 6. **Gap-up rejection under `CashFraction(1)`**: sizing at bar N's close
    (D-7) leaves only the whole-share rounding remainder as slack at bar
    N+1's open. A rise from close to open beyond that remainder rejects the

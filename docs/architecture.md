@@ -115,13 +115,14 @@ root):
   `OrderRejection`
 - `portfolio`: `Portfolio`, `EquityPoint`
 - `result`: `BacktestConfig`, `Trade`, `BacktestResult`
-- `metrics`: `PerformanceMetrics` (D-26)
+- `metrics`: `PerformanceMetrics` (D-26), `BuyAndHoldBenchmark` (D-28)
 
 The V1 engine is now feature-complete for its scope: `Backtester.run(...)`
 is a working chronological simulation, `PerformanceMetrics.of(...)`
-computes the full V1 metric set from its result, and `BacktestResult`
-exposes exact trading-cost totals (D-27). Not yet implemented: the
-buy-and-hold benchmark, backend integration, and frontend.
+computes the full V1 metric set from its result, `BacktestResult` exposes
+exact trading-cost totals (D-27), and `BuyAndHoldBenchmark.of(...)`
+computes the independent passive benchmark (D-28). Not yet implemented:
+backend integration and frontend.
 
 This section reflects current state only; see Git history for how it was
 reached.
@@ -139,6 +140,8 @@ BacktestResult
         |
         v
 PerformanceMetrics.of(result)      [implemented, D-26]
+
+BuyAndHoldBenchmark.of(series, result)      [implemented, D-28 — independent of Backtester/StrategyDefinition]
 ```
 
 - `Backtester` is stateless. It holds no persistent fields and is
@@ -158,7 +161,7 @@ in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operan
 in.vedchangani.parallax.engine.execution   Order, OrderSide, Fill, RejectionReason, OrderRejection
 in.vedchangani.parallax.engine.portfolio   Portfolio, EquityPoint
 in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
-in.vedchangani.parallax.engine.metrics     PerformanceMetrics
+in.vedchangani.parallax.engine.metrics     PerformanceMetrics, BuyAndHoldBenchmark
 ```
 
 ## 2. Domain model
@@ -1124,13 +1127,10 @@ boundary. `StrictMath.pow`/`StrictMath.sqrt` are used throughout, never
 `Math.pow`/`Math.sqrt`, for bit-reproducible results across platforms
 (D-15). No `MathContext`, no rounding to cents.
 
-**Out of V1 scope** (deferred, not implemented): the buy-and-hold
-benchmark comparison (its own checkpoint, D-28 — an initial
-`CashFraction(1)`-strategy-based design was found economically unsound and
-withdrawn before commit; see decisions.md open question 6), non-zero
-risk-free rate, Sortino/Calmar/beta/alpha/VaR, and drawdown duration/dates.
-Trading-cost totals, originally deferred here, are implemented by D-27
-(below).
+**Out of V1 scope** (deferred, not implemented): non-zero risk-free rate,
+Sortino/Calmar/beta/alpha/VaR, and drawdown duration/dates. Trading-cost
+totals and the buy-and-hold benchmark, originally deferred here, are
+implemented by D-27 and D-28 (below).
 
 ### Trading-cost totals (D-27)
 
@@ -1158,6 +1158,81 @@ Slippage cost is the implicit adverse-fill cost relative to each execution
 bar's open. It is already embedded in the fill prices, so it is **not** an
 additional cash flow and must never be subtracted from cash again. For
 that reason there is no combined "total trading cost" figure.
+
+### Buy-and-hold benchmark (D-28)
+
+Implemented as `engine.metrics.BuyAndHoldBenchmark` — a record, not a
+simulation:
+
+```
+public record BuyAndHoldBenchmark(BigDecimal initialCapital, List<EquityPoint> equityCurve)
+
+public static BuyAndHoldBenchmark of(BarSeries series, BacktestResult result)
+public double totalReturn()
+```
+
+It answers *"what would the same starting capital have produced by
+passively holding the asset over the requested backtest period?"* — computed
+directly from `series` and `result`'s config/equity-curve dates, **never**
+by calling `Backtester.run`, evaluating a `StrategyDefinition`, or using
+`Portfolio`, `Order`, or `Fill`. This corrects the D-27 `BuyAndHold`, which
+delegated to `Backtester` and so inherited the strategy's gap-up rejection
+behaviour (it could fail to invest at all on a steadily rising series) —
+withdrawn before commit, see decisions.md open question 6.
+
+**Entry — the first in-range bar's open (D-28's option A):**
+`fillPrice = firstInRangeBar.open × (1 + slippageRate)`; whole shares
+`q = floor((initialCapital − commission) / fillPrice)` via
+`divideToIntegralValue`/`longValueExact`, exact, no `MathContext`. If
+`initialCapital − commission ≤ 0` or `q` would be `0`, there is no trade
+and no commission is charged; otherwise one commission is paid and
+`costBasis = q×fillPrice + commission`. The BUY is never rejected — it is
+sized from the price actually paid. The benchmark never sells: no exit
+commission or slippage, no D-23 reserve, and residual cash earns nothing.
+Slippage is represented only through the changed fill price, never as a
+separate cash flow.
+
+A passive holder has no decision to make and so no decision delay, unlike
+a strategy sized at the prior close (D-7). Entering at the first in-range
+bar's open — rather than the second bar's open (the strategy's earliest
+possible fill) or the first bar's close — means both a strategy and this
+benchmark hold exactly `initialCapital` at that same moment (a strategy
+has no position or pending order before it, D-6) and both end at the same
+last in-range close, so the two are compared over the same window and
+capital, without importing the strategy's timing or rejection risk.
+
+**Equity curve:** one `EquityPoint` per in-range bar, with dates identical
+to `result.equityCurve()`'s. Because entry happens before the first mark,
+every point shares the same `cash`, `quantity` and `costBasis`, with
+`realizedPnl = 0` — only `date` and `close` vary. The first point is
+marked at the first in-range bar's close, so its equity generally differs
+from `initialCapital` (unlike a strategy's first point under D-26) — this
+is why `initialCapital` is its own record component rather than read off
+the curve. `EquityPoint` is reused unmodified; each point is exactly what
+`Portfolio` would produce after the same BUY, marked to that close.
+
+**Input contract, enforced not assumed:** `of` reads only
+`result.symbol()`, `config()` and `equityCurve()` — never `strategy()`,
+`fills()`, `rejections()`, `trades()`, or `firstEvaluableDate()` — so two
+different strategies over the same series and config give an identical
+benchmark. `series.symbol()` must equal `result.symbol()`, and the
+series' in-range bars (by `result.config()`'s date range) must match
+`result.equityCurve()` exactly in count, date and close, each an
+`IllegalArgumentException` on mismatch; this cannot detect a series
+differing only in bar opens or lookback content, a documented limit.
+
+**Record validation:** `initialCapital > 0`; a non-empty,
+strictly-ascending, defensively copied curve; every point sharing the same
+cash/quantity/costBasis; every `realizedPnl == 0`; and
+`cash + costBasis == initialCapital` exactly at every point. The first
+point's equity is **not** required to equal `initialCapital` (unlike D-26's
+`PerformanceMetrics` precondition).
+
+`totalReturn()` uses the D-26 formula: an exact `BigDecimal` subtraction of
+final equity minus `initialCapital`, converted to `double` only at that
+statistical boundary. Benchmark CAGR, volatility, Sharpe and drawdown are
+out of scope — extending `PerformanceMetrics` to a bare equity curve is a
+separate decision, not made here.
 
 ## 13. Numerical policy
 
@@ -1322,6 +1397,30 @@ Small hand-calculable fixtures, not only external market data.
   multi-trade `Backtester` run with non-zero commission and slippage, the
   exact cash identity and `totalCommission == commissionPerFill ×
   fills().size()`.
+- **BuyAndHoldBenchmark** (implemented; `engine.metrics`, D-28): the
+  normal case (exact fill price, quantity, cash, cost basis, every equity
+  point, and total return with non-zero commission and slippage); the
+  regression case for the withdrawn design (a steadily rising series that
+  actually invests); gap-up and gap-down entries (sized from the actual
+  fill price, never rejected); a one-in-range-bar window (buy at open,
+  mark at close); zero quantity from too little capital, and separately
+  from commission at or above capital (no trade, no commission charged);
+  zero commission and zero slippage; lookback bars and bars after
+  `endDate` ignored; `startDate`/`endDate` on non-trading days; identical
+  results for two different `StrategyDefinition`s on the same series and
+  config; alignment failures (a different symbol, a missing or extra
+  in-range date, a differing close) each rejected with
+  `IllegalArgumentException`; every record-validation boundary (an empty
+  curve, non-ascending dates, a point disagreeing with the others on
+  cash/quantity/cost-basis, non-zero `realizedPnl`, `cash + costBasis ≠
+  initialCapital`, non-positive `initialCapital`); the accounting
+  identities `cash + costBasis == initialCapital` and
+  `equity == initialCapital + unrealizedPnl` at every point; determinism;
+  and a test-only cross-check against `Portfolio`/`Fill` accounting (never
+  used by the production implementation). A structural test pins the
+  record's two components and confirms no component holds a
+  `BacktestResult`, `BarSeries`, `StrategyDefinition`, `Portfolio`, or
+  `Backtester`.
 
 ## 16. Engine boundary
 
@@ -1357,7 +1456,7 @@ Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scop
 Trading-cost totals — implemented (D-27)
         |
         v
-Buy-and-hold benchmark — deferred (own checkpoint, D-28)
+Buy-and-hold benchmark — implemented (D-28)
         |
         v
 Backend integration (Spring Boot: persistence, REST, provider integration)
