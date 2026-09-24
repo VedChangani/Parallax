@@ -732,6 +732,65 @@ consumer concerns, computed by the backend/frontend, not part of this
 decision. Price basis (raw vs. adjusted) remains open question 1;
 dividends and corporate actions are not modeled.
 
+## D-29 Backend foundation: dependency direction, persistence stack, and package root
+
+**Decision:** the first Phase 7 backend batch. `backend` depends on
+`engine` as an ordinary Maven module dependency
+(`in.vedchangani:engine:0.0.1-SNAPSHOT`) — the dependency direction
+remains `backend → engine`, never the reverse, matching D-1. No engine
+Java source or the engine `pom.xml` is touched.
+
+Persistence stack, chosen now so later batches build on one foundation:
+Spring Data JPA, the PostgreSQL JDBC driver (`runtime` scope), and Flyway
+(`flyway-core` + `flyway-database-postgresql`, plus the separate
+`spring-boot-flyway` autoconfiguration module — Spring Boot 4.x split
+Flyway's autoconfiguration out of `spring-boot-autoconfigure`, unlike
+Boot 3.x). `spring.jpa.hibernate.ddl-auto=validate`: schema changes are
+owned by Flyway migrations, never by Hibernate. `spring.jpa.open-in-view
+=false`. The datasource is environment-backed
+(`PARALLAX_DB_URL`/`_USERNAME`/`_PASSWORD`) with local defaults, so a
+developer machine needs no extra configuration to run the application.
+No `spring.flyway.*` datasource properties are set — Flyway always
+migrates the application's own `DataSource` bean, never a separate
+connection.
+
+Integration tests use a real **Testcontainers PostgreSQL** (`postgres:
+16-alpine`), wired in through Spring Boot's `@ServiceConnection`
+mechanism, which registers a `JdbcConnectionDetails` bean that Boot's
+datasource autoconfiguration prefers over `spring.datasource.*` — so a
+developer's local `PARALLAX_DB_*` environment is never read by tests, and
+no second/parallel test-configuration system exists. This is proven, not
+assumed: an integration test compares the live `DataSource`'s connection
+URL against the container's own `getJdbcUrl()`, and confirms
+`flyway_schema_history` exists after context startup. This requires
+Docker on the development machine; no other infrastructure (Docker
+Compose, application containers) is added.
+
+The backend root package is renamed `in.vedchangani.backend` →
+`in.vedchangani.parallax.backend`, matching the engine's
+`in.vedchangani.parallax.engine` root. A stateless `Backtester` is
+exposed as a single `@Bean` from `EngineConfiguration` — the only point
+of contact between Spring configuration and the engine in this batch.
+
+**Why:** `ddl-auto=validate` (never `update`) keeps schema evolution
+explicit and reviewable as migrations, consistent with CLAUDE.md's
+"never silently invent" principle applied to persistence. A real
+PostgreSQL in tests (not H2) means constraint, numeric-scale and
+transaction behavior in later batches is actually verified, not merely
+approximated.
+
+**Rejected:** H2 or a local PostgreSQL instance for tests (§ design
+review — exact behavior over convenience); `ddl-auto=update` (schema
+drift with no reviewable history); reusing the engine's package root for
+the backend (they are different modules with different concerns);
+building service/entity/REST scaffolding in this batch (no persistence
+model exists yet to build it against — see the Phase 7 batch sequence).
+
+**Consequence:** no entities, repositories, migrations, REST endpoints,
+DTOs, or security exist yet — this batch is foundation only. Every later
+Phase 7 batch builds on this datasource/Flyway/Testcontainers setup
+without revisiting it.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
