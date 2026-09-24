@@ -92,18 +92,21 @@ See [decisions.md](decisions.md).
 
 ---
 
-# Engine Architecture (V1 — approved design, partially implemented)
+# Engine Architecture (V1 — approved design, implemented)
 
-Status: approved design, partially implemented — see "Implementation
-status" below. Decisions referenced as D-n are in
-[decisions.md](decisions.md).
+Status: approved design, implemented — see "Implementation status" below.
+Decisions referenced as D-n are in [decisions.md](decisions.md).
 
 ## Implementation status
 
-Implemented (all packages below `engine`):
+Implemented (all packages below `engine`, plus `Backtester` at the engine
+root):
 
+- `Backtester`: the chronological run loop (`run(BarSeries,
+  StrategyDefinition, BacktestConfig) -> BacktestResult`), D-25
 - `data`: `Bar`, `BarSeries`
-- `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator`,
+- `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator` (including
+  its `Indicator.create(IndicatorSpec)` factory method),
   `SimpleMovingAverage`, `ExponentialMovingAverage`,
   `RelativeStrengthIndex`, `IndicatorSnapshot`
 - `strategy`: `Operand`, `Operator`, `Condition`, `PositionSizing`,
@@ -112,11 +115,14 @@ Implemented (all packages below `engine`):
   `OrderRejection`
 - `portfolio`: `Portfolio`, `EquityPoint`
 - `result`: `BacktestConfig`, `Trade`, `BacktestResult`
+- `metrics`: `PerformanceMetrics` (D-26), `BuyAndHoldBenchmark` (D-28)
 
-Not yet implemented: the `IndicatorSpec -> Indicator` factory,
-`Backtester` itself, performance metrics, backend integration, and
-frontend. Nothing else stands between the current state and
-`Backtester.run(...)` — every type the loop assembles already exists.
+The V1 engine is now feature-complete for its scope: `Backtester.run(...)`
+is a working chronological simulation, `PerformanceMetrics.of(...)`
+computes the full V1 metric set from its result, `BacktestResult` exposes
+exact trading-cost totals (D-27), and `BuyAndHoldBenchmark.of(...)`
+computes the independent passive benchmark (D-28). Not yet implemented:
+backend integration and frontend.
 
 This section reflects current state only; see Git history for how it was
 reached.
@@ -133,7 +139,9 @@ Backtester.run(...)
 BacktestResult
         |
         v
-PerformanceMetrics.of(result)      [later]
+PerformanceMetrics.of(result)      [implemented, D-26]
+
+BuyAndHoldBenchmark.of(series, result)      [implemented, D-28 — independent of Backtester/StrategyDefinition]
 ```
 
 - `Backtester` is stateless. It holds no persistent fields and is
@@ -143,7 +151,7 @@ PerformanceMetrics.of(result)      [later]
 - Metrics are separate post-processing logic. They are not calculated
   inside the chronological loop.
 
-Future packages (created only when code for them is written):
+Package layout (all implemented):
 
 ```
 in.vedchangani.parallax.engine             Backtester
@@ -153,6 +161,7 @@ in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operan
 in.vedchangani.parallax.engine.execution   Order, OrderSide, Fill, RejectionReason, OrderRejection
 in.vedchangani.parallax.engine.portfolio   Portfolio, EquityPoint
 in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
+in.vedchangani.parallax.engine.metrics     PerformanceMetrics, BuyAndHoldBenchmark
 ```
 
 ## 2. Domain model
@@ -198,6 +207,14 @@ double  value()
 
 Indicators process one close at a time and cannot see the `BarSeries` or
 future data.
+
+`static Indicator Indicator.create(IndicatorSpec spec)` is the sole
+mapping from an `IndicatorSpec` definition to a fresh runtime instance —
+an exhaustive `switch` on `spec.type()` with no `default` branch (`SMA` →
+`SimpleMovingAverage`, `EMA` → `ExponentialMovingAverage`, `RSI` →
+`RelativeStrengthIndex`), so a new `IndicatorType` fails to compile here
+until handled. Every call returns a new, independent instance; there is
+no registry, no factory class, and no static state.
 
 ### IndicatorSnapshot
 
@@ -625,6 +642,8 @@ record BacktestResult(String symbol, StrategyDefinition strategy, BacktestConfig
                       List<EquityPoint> equityCurve, List<Fill> fills, List<OrderRejection> rejections)
   List<Trade> trades()      -> Trade.fromFills(fills)      // derived, not stored
   EquityPoint finalPoint()  -> equityCurve.getLast()        // derived; no PortfolioState type
+  BigDecimal totalCommission()    -> Σ fill.commission() over all fills     // derived, D-27
+  BigDecimal totalSlippageCost()  -> Σ fill.slippageCost() over all fills   // derived, D-27
 ```
 
 **BacktestConfig** is the immutable input to one run.
@@ -676,7 +695,8 @@ state to keep in sync with `fills`/`equityCurve`; construction validates
 that both lists are internally consistent (ascending dates,
 BUY/SELL-alternating fills starting with BUY), so `trades()` can never
 throw for a successfully constructed result. There is no `PortfolioState`
-type — `finalPoint()` already is the final state (D-22). Every list is
+type — `finalPoint()` already is the final state (D-22). The two cost
+totals are likewise derived, not stored (D-27 — see §12). Every list is
 defensively copied (`List.copyOf`) and exposed as unmodifiable.
 `equityCurve` must be non-empty (a valid run always has at least one
 in-range bar); `fills` and `rejections` may be empty. No `Portfolio`,
@@ -742,6 +762,31 @@ metrics inside the loop.
 
 The provider abstraction belongs to the backend. The engine receives a
 validated `BarSeries`.
+
+### Backtester (engine root, see D-25)
+
+```
+public final class Backtester           // no fields — stateless, re-entrant
+  BacktestResult run(BarSeries, StrategyDefinition, BacktestConfig)
+    -> new Run(series, strategy, config).execute()
+
+  static long enterQuantity(cash, fraction, close, commission, slippageRate)
+    // pure D-23 sizing arithmetic, package-private, independently testable
+
+  private static final class Run        // owns every mutable per-run value; discarded after execute()
+    Portfolio; Map<IndicatorSpec, Indicator> (LinkedHashMap, canonical order);
+    Order pendingOrder; int nextOrderId = 1; Optional<LocalDate> firstEvaluableDate;
+    List<EquityPoint>; List<Fill>; List<OrderRejection>
+```
+
+`Backtester` itself is stateless — every run creates its own `Run`, and
+nothing mutable escapes it; only the immutable values copied into the
+returned `BacktestResult` do. `enterQuantity` is a small pure static
+method rather than a class, since D-23's arithmetic has no state of its
+own and benefits from being unit-tested directly. There is no service
+layer, broker model, or execution framework — `Run` executes orders
+inline, which keeps the loop in one place, readable top to bottom (D-5).
+The exact bar-by-bar algorithm this runs is §3.
 
 ## 3. Chronological execution contract
 
@@ -998,14 +1043,205 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
   `Trade.Open`/`Trade.Closed` parsed from the result's `fills`, called
   fresh by `BacktestResult.trades()` rather than stored.
 
-## 12. Numerical policy
+## 12. Performance metrics
+
+Implemented: `engine.metrics.PerformanceMetrics` (D-26), a pure post-run
+value computed by `PerformanceMetrics.of(BacktestResult)`. It participates
+in none of signal generation, sizing, execution, portfolio mutation, or
+chronological processing (D-5) — it consumes an already-produced immutable
+`BacktestResult` and never mutates it or anything reachable from it.
+
+```
+public record PerformanceMetrics(
+    double totalReturn,
+    OptionalDouble cagr,
+    OptionalDouble volatility,
+    OptionalDouble sharpeRatio,
+    double maxDrawdown,
+    int closedTradeCount,
+    OptionalDouble winRate,
+    OptionalDouble averageWin,
+    OptionalDouble averageLoss
+)
+```
+
+Every metric that can be undefined for a given result is an
+`OptionalDouble` with exactly one documented emptiness condition — never
+`NaN`, `Infinity`, or a sentinel value.
+
+**Preconditions of `of(result)`** (IAE if violated, NPE for a null
+result): the first equity point's equity must equal
+`config.initialCapital()` exactly, and every equity point's equity must be
+strictly positive. Both always hold for genuine `Backtester` output (no
+fill can occur before the second in-range bar, and cash cannot go negative
+— D-23), so these checks exist to keep the formulas below mutually
+consistent rather than to reject real runs.
+
+**Total return:** `(finalEquity − initialCapital) / initialCapital`. An
+open final position counts at its mark-to-market value on the last close
+(D-8, no forced liquidation); a no-trade run is exactly `0.0`.
+
+**CAGR (ACT/365 Fixed):** `StrictMath.pow(finalEquity/initialCapital,
+365/days) − 1`, where `days` is the span between the first and last
+equity-point dates. **Empty when that span is under 365 days** — V1 never
+annualizes a sub-year return (GIPS convention), so even a run over a full
+calendar year (e.g. 360 observed days) can have no CAGR while still
+reporting total return.
+
+**Periodic returns:** simple arithmetic returns between consecutive equity
+points only — `n` points give `n − 1` returns. `initialCapital` is never
+added as a separate observation (the first equity point already equals
+it). A data gap between two consecutive equity points is still exactly one
+return observation; V1 does not calendar-gap adjust it.
+
+**Volatility:** sample standard deviation (divisor `n − 1`) of the
+periodic returns, annualized by a fixed `× √252` (assumes daily bars).
+Empty for fewer than two returns. If every return is bitwise-equal, the
+standard deviation is defined as exactly `0.0` — without this rule, mean
+subtraction over identical doubles leaves ~1e-17 of spurious dispersion.
+
+**Sharpe ratio:** `mean(returns) / stdDev × √252`, with the risk-free rate
+fixed at zero (no config field — V1 has no rate series or period-
+conversion convention). Empty for fewer than two returns or zero
+volatility (including a flat no-trade run, where the ratio is undefined).
+Never `NaN`/`Infinity`.
+
+**Maximum drawdown:** the largest close-to-close fall from a running peak
+equity, as a fraction of that peak (`0.25` = 25%). Always present, `0.0`
+for a single point or monotonically rising equity. No absolute monetary
+amount, drawdown series, duration, or peak/trough dates are stored.
+
+**Trade statistics:** derived only from `result.trades()`, using
+`Trade.Closed.realizedPnl()` directly — never recomputed. Only closed
+trades count (`closedTradeCount`); an open trade is never a win or a loss.
+A trade's P&L above zero is a win, below zero a loss, exactly zero is
+breakeven — a breakeven trade is in the win-rate denominator but excluded
+from both averages. `winRate` is empty iff `closedTradeCount == 0`.
+`averageWin`/`averageLoss` are empty when there are no wins/losses
+respectively; `averageLoss` is reported as a negative number.
+
+**Numerical policy:** every metric is a `double` (D-14). Monetary
+differences and sums are performed exactly in `BigDecimal`; conversion to
+`double` happens only at each metric's own statistical calculation
+boundary. `StrictMath.pow`/`StrictMath.sqrt` are used throughout, never
+`Math.pow`/`Math.sqrt`, for bit-reproducible results across platforms
+(D-15). No `MathContext`, no rounding to cents.
+
+**Out of V1 scope** (deferred, not implemented): non-zero risk-free rate,
+Sortino/Calmar/beta/alpha/VaR, and drawdown duration/dates. Trading-cost
+totals and the buy-and-hold benchmark, originally deferred here, are
+implemented by D-27 and D-28 (below).
+
+### Trading-cost totals (D-27)
+
+Implemented as two derived methods on `BacktestResult` — not components,
+not stored, and not on `PerformanceMetrics` (they are exact ledger sums,
+not `double` statistics):
+
+- `totalCommission()` = `Σ fill.commission()` over **all** fills.
+- `totalSlippageCost()` = `Σ fill.slippageCost()` over **all** fills.
+
+Both include the entry fill of a final open trade (its costs were actually
+paid); neither includes a hypothetical exit cost for a still-open position
+(D-8). Both are `BigDecimal.ZERO` when there are no fills, computed by
+exact `BigDecimal` addition only. Summing `Trade.Closed` totals instead
+would miss the open trade's entry fill.
+
+The two are different kinds of cost. Commission is actual cash paid and
+reconciles exactly with cash:
+
+```
+finalPoint().cash() = initialCapital − Σ_BUY(q × fillPrice) + Σ_SELL(q × fillPrice) − totalCommission()
+```
+
+Slippage cost is the implicit adverse-fill cost relative to each execution
+bar's open. It is already embedded in the fill prices, so it is **not** an
+additional cash flow and must never be subtracted from cash again. For
+that reason there is no combined "total trading cost" figure.
+
+### Buy-and-hold benchmark (D-28)
+
+Implemented as `engine.metrics.BuyAndHoldBenchmark` — a record, not a
+simulation:
+
+```
+public record BuyAndHoldBenchmark(BigDecimal initialCapital, List<EquityPoint> equityCurve)
+
+public static BuyAndHoldBenchmark of(BarSeries series, BacktestResult result)
+public double totalReturn()
+```
+
+It answers *"what would the same starting capital have produced by
+passively holding the asset over the requested backtest period?"* — computed
+directly from `series` and `result`'s config/equity-curve dates, **never**
+by calling `Backtester.run`, evaluating a `StrategyDefinition`, or using
+`Portfolio`, `Order`, or `Fill`. This corrects the D-27 `BuyAndHold`, which
+delegated to `Backtester` and so inherited the strategy's gap-up rejection
+behaviour (it could fail to invest at all on a steadily rising series) —
+withdrawn before commit, see decisions.md open question 6.
+
+**Entry — the first in-range bar's open (D-28's option A):**
+`fillPrice = firstInRangeBar.open × (1 + slippageRate)`; whole shares
+`q = floor((initialCapital − commission) / fillPrice)` via
+`divideToIntegralValue`/`longValueExact`, exact, no `MathContext`. If
+`initialCapital − commission ≤ 0` or `q` would be `0`, there is no trade
+and no commission is charged; otherwise one commission is paid and
+`costBasis = q×fillPrice + commission`. The BUY is never rejected — it is
+sized from the price actually paid. The benchmark never sells: no exit
+commission or slippage, no D-23 reserve, and residual cash earns nothing.
+Slippage is represented only through the changed fill price, never as a
+separate cash flow.
+
+A passive holder has no decision to make and so no decision delay, unlike
+a strategy sized at the prior close (D-7). Entering at the first in-range
+bar's open — rather than the second bar's open (the strategy's earliest
+possible fill) or the first bar's close — means both a strategy and this
+benchmark hold exactly `initialCapital` at that same moment (a strategy
+has no position or pending order before it, D-6) and both end at the same
+last in-range close, so the two are compared over the same window and
+capital, without importing the strategy's timing or rejection risk.
+
+**Equity curve:** one `EquityPoint` per in-range bar, with dates identical
+to `result.equityCurve()`'s. Because entry happens before the first mark,
+every point shares the same `cash`, `quantity` and `costBasis`, with
+`realizedPnl = 0` — only `date` and `close` vary. The first point is
+marked at the first in-range bar's close, so its equity generally differs
+from `initialCapital` (unlike a strategy's first point under D-26) — this
+is why `initialCapital` is its own record component rather than read off
+the curve. `EquityPoint` is reused unmodified; each point is exactly what
+`Portfolio` would produce after the same BUY, marked to that close.
+
+**Input contract, enforced not assumed:** `of` reads only
+`result.symbol()`, `config()` and `equityCurve()` — never `strategy()`,
+`fills()`, `rejections()`, `trades()`, or `firstEvaluableDate()` — so two
+different strategies over the same series and config give an identical
+benchmark. `series.symbol()` must equal `result.symbol()`, and the
+series' in-range bars (by `result.config()`'s date range) must match
+`result.equityCurve()` exactly in count, date and close, each an
+`IllegalArgumentException` on mismatch; this cannot detect a series
+differing only in bar opens or lookback content, a documented limit.
+
+**Record validation:** `initialCapital > 0`; a non-empty,
+strictly-ascending, defensively copied curve; every point sharing the same
+cash/quantity/costBasis; every `realizedPnl == 0`; and
+`cash + costBasis == initialCapital` exactly at every point. The first
+point's equity is **not** required to equal `initialCapital` (unlike D-26's
+`PerformanceMetrics` precondition).
+
+`totalReturn()` uses the D-26 formula: an exact `BigDecimal` subtraction of
+final equity minus `initialCapital`, converted to `double` only at that
+statistical boundary. Benchmark CAGR, volatility, Sharpe and drawdown are
+out of scope — extending `PerformanceMetrics` to a bare equity curve is a
+separate decision, not made here.
+
+## 13. Numerical policy
 
 | Type | Used for |
 |---|---|
 | `BigDecimal` | prices, fill prices, commissions, slippage rate, cash fraction, cash, cost basis, P&L, equity, initial capital |
 | `long` | quantities |
 | `int` | periods, per-run order IDs |
-| `double` | indicator calculations, indicator outputs, condition comparisons, later derived statistics |
+| `double` | indicator calculations, indicator outputs, condition comparisons, `PerformanceMetrics` statistics (D-26) |
 
 - Use `compareTo` for `BigDecimal` comparisons.
 - Money is not rounded to cents inside the engine.
@@ -1019,7 +1255,7 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
 - This policy is not redesigned during the first implementation stages
   without a concrete correctness problem.
 
-## 13. Determinism and reproducibility
+## 14. Determinism and reproducibility
 
 Identical `BarSeries` content, `StrategyDefinition`, `BacktestConfig`, and
 engine version must produce identical results.
@@ -1034,7 +1270,7 @@ where the supplied series begins. Experiment persistence must therefore
 eventually identify the exact supplied dataset/series, including
 sufficient lookback provenance.
 
-## 14. Testing strategy
+## 15. Testing strategy
 
 Small hand-calculable fixtures, not only external market data.
 
@@ -1115,16 +1351,78 @@ Small hand-calculable fixtures, not only external market data.
   trade, and an empty vs. present `firstEvaluableDate`; a whitelist
   reflection check that none of these types holds a `Portfolio`, `Order`,
   `BarSeries`, or runtime `Indicator`.
-- **Execution** (Backtester-level, not yet implemented): signal at bar N close, fill at bar N+1 open, no same-bar
-  fill, no signal on the last in-range bar, commission, slippage,
-  insufficient-cash rejection, zero-quantity rejection, the D-23
-  exit-commission reserve including its worked counterexample.
+- **Backtester / execution** (implemented; `engine.Backtester`, D-25):
+  signal at bar N close, fill at bar N+1 open, no same-bar fill, no
+  signal on the last in-range bar (both that a prior pending order still
+  executes there and that no new signal/order/rejection originates
+  there); commission and slippage in fills; the exact affordability
+  boundary (`requiredCash == availableCash` fills,
+  `requiredCash > availableCash` rejects); the D-23 exit-commission
+  reserve (cash left at exactly the commission after an accepted BUY, the
+  reserve never charged twice, cash-safety verified at an extreme low
+  exit price); zero-quantity and insufficient-cash rejections; order-ID
+  sequencing across a rejection; SMA/EMA/RSI warm-up and
+  `firstEvaluableDate` (including readiness reached during lookback, and
+  readiness that is never reached); paired-dataset proof that sizing
+  depends only on the signal bar's close, never the next bar's open; the
+  full accounting/trade-reconciliation identities on a multi-trade run;
+  determinism; and a structural check that `Backtester` is stateless and
+  leaks no mutable runtime object into `BacktestResult`.
 - **Lookback/range**: pre-start bars warm indicators, pre-start bars create
   no trading activity, `endDate` inclusive, bars after `endDate` ignored,
   `endDate` on a non-trading day, series ending before `endDate`.
 - **Determinism**: identical input twice produces an identical result.
+- **PerformanceMetrics** (implemented; `engine.metrics`, D-26): hand-
+  calculable fixtures for total return (gain/loss/flat), CAGR (exactly one
+  year, multi-year gain/loss, under-365-days empty, same-day empty),
+  volatility/Sharpe (known mean/stdDev pairs, exact zero-dispersion,
+  fewer-than-two-returns empty), maximum drawdown (rising, one drawdown
+  with recovery, multiple drawdowns, immediate loss, single point), trade
+  statistics (no trades, one win/loss/breakeven, mixed set, a trailing
+  open trade excluded from closed statistics, an open-only run); every
+  record-validation boundary; the two `of(result)` preconditions (first-
+  equity mismatch, a zero-equity point) and a null result; determinism on
+  the same and on identical results; and consistency checks against a real
+  multi-trade `Backtester.run(...)` result (closed count matches
+  `trades()`, closed + open counts sum to `trades().size()`, Σ closed
+  `realizedPnl()` equals `finalPoint().realizedPnl()`). A structural test
+  pins the record's nine components in order and confirms no component
+  holds a `BacktestResult`, `Portfolio`, `BarSeries`, runtime `Indicator`,
+  or `Backtester`.
+- **Trading-cost totals** (implemented; `BacktestResult`, D-27): exact
+  `totalCommission()`/`totalSlippageCost()` for no fills (zero), a BUY
+  only (the open entry's costs counted), BUY+SELL, and BUY+SELL+BUY;
+  zero slippage when fill prices equal reference opens; reconciliation
+  with `Trade.Closed` totals plus the trailing open entry; and, on a real
+  multi-trade `Backtester` run with non-zero commission and slippage, the
+  exact cash identity and `totalCommission == commissionPerFill ×
+  fills().size()`.
+- **BuyAndHoldBenchmark** (implemented; `engine.metrics`, D-28): the
+  normal case (exact fill price, quantity, cash, cost basis, every equity
+  point, and total return with non-zero commission and slippage); the
+  regression case for the withdrawn design (a steadily rising series that
+  actually invests); gap-up and gap-down entries (sized from the actual
+  fill price, never rejected); a one-in-range-bar window (buy at open,
+  mark at close); zero quantity from too little capital, and separately
+  from commission at or above capital (no trade, no commission charged);
+  zero commission and zero slippage; lookback bars and bars after
+  `endDate` ignored; `startDate`/`endDate` on non-trading days; identical
+  results for two different `StrategyDefinition`s on the same series and
+  config; alignment failures (a different symbol, a missing or extra
+  in-range date, a differing close) each rejected with
+  `IllegalArgumentException`; every record-validation boundary (an empty
+  curve, non-ascending dates, a point disagreeing with the others on
+  cash/quantity/cost-basis, non-zero `realizedPnl`, `cash + costBasis ≠
+  initialCapital`, non-positive `initialCapital`); the accounting
+  identities `cash + costBasis == initialCapital` and
+  `equity == initialCapital + unrealizedPnl` at every point; determinism;
+  and a test-only cross-check against `Portfolio`/`Fill` accounting (never
+  used by the production implementation). A structural test pins the
+  record's two components and confirms no component holds a
+  `BacktestResult`, `BarSeries`, `StrategyDefinition`, `Portfolio`, or
+  `Backtester`.
 
-## 15. Engine boundary
+## 16. Engine boundary
 
 ```
 BacktestResult Backtester.run(
@@ -1140,19 +1438,25 @@ Output: immutable `BacktestResult`.
 No callbacks. No I/O. No persistence. No HTTP. No Spring. Engine domain
 types must never become JPA entities.
 
-## 16. Future direction
+## 17. Future direction
 
 High-level path only — no speculative detailed design for unapproved
 subsystems:
 
 ```
-current engine foundation (data -> indicator -> strategy -> execution -> portfolio -> result)
+engine foundation (data -> indicator -> strategy -> execution -> portfolio -> result)
         |
         v
-Backtester (the chronological run loop, §3)
+Backtester (the chronological run loop, §3) — implemented (D-25)
         |
         v
-Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5)
+Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5) — implemented (D-26)
+        |
+        v
+Trading-cost totals — implemented (D-27)
+        |
+        v
+Buy-and-hold benchmark — implemented (D-28)
         |
         v
 Backend integration (Spring Boot: persistence, REST, provider integration)

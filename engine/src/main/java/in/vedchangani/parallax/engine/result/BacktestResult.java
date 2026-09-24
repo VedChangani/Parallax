@@ -6,6 +6,7 @@ import in.vedchangani.parallax.engine.execution.OrderSide;
 import in.vedchangani.parallax.engine.portfolio.EquityPoint;
 import in.vedchangani.parallax.engine.strategy.StrategyDefinition;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
@@ -21,9 +22,11 @@ import java.util.Optional;
  * ({@code Portfolio}, a runtime {@code Indicator}, a pending
  * {@code Order}, or the {@code Backtester} that produced this result).
  *
- * <p>{@code trades()} and {@code finalPoint()} are derived, not stored:
- * trades are parsed from {@code fills} on every call, and the final
- * state is simply the last equity point.
+ * <p>{@code trades()}, {@code finalPoint()}, {@code totalCommission()} and
+ * {@code totalSlippageCost()} are derived, not stored: trades are parsed
+ * from {@code fills} on every call, the final state is simply the last
+ * equity point, and the two cost totals are exact sums over
+ * {@code fills} (D-27).
  */
 public record BacktestResult(String symbol, StrategyDefinition strategy, BacktestConfig config,
                               Optional<LocalDate> firstEvaluableDate, List<EquityPoint> equityCurve,
@@ -109,5 +112,39 @@ public record BacktestResult(String symbol, StrategyDefinition strategy, Backtes
      */
     public EquityPoint finalPoint() {
         return equityCurve.getLast();
+    }
+
+    /**
+     * {@code Σ fill.commission()} over every fill in {@link #fills()} —
+     * BUY and SELL, including the entry fill of a final open trade — with
+     * {@link BigDecimal#ZERO} when there are no fills (D-27). This is the
+     * commission actually paid in cash. A still-open position contributes
+     * no hypothetical exit commission (D-8). Derived on every call by
+     * exact {@code BigDecimal} addition; never stored, never rounded.
+     */
+    public BigDecimal totalCommission() {
+        BigDecimal total = BigDecimal.ZERO;
+        for (Fill fill : fills) {
+            total = total.add(fill.commission());
+        }
+        return total;
+    }
+
+    /**
+     * {@code Σ fill.slippageCost()} over every fill in {@link #fills()} —
+     * BUY and SELL, including the entry fill of a final open trade — with
+     * {@link BigDecimal#ZERO} when there are no fills (D-27). This is the
+     * implicit adverse-fill cost relative to each execution bar's open.
+     * It is already reflected in the fill prices, so it is <em>not</em> an
+     * additional cash flow and must never be subtracted from cash again.
+     * Derived on every call by exact {@code BigDecimal} addition; never
+     * stored, never rounded.
+     */
+    public BigDecimal totalSlippageCost() {
+        BigDecimal total = BigDecimal.ZERO;
+        for (Fill fill : fills) {
+            total = total.add(fill.slippageCost());
+        }
+        return total;
     }
 }

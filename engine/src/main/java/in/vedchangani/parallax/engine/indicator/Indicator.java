@@ -1,6 +1,7 @@
 package in.vedchangani.parallax.engine.indicator;
 
 import java.math.BigDecimal;
+import java.util.Objects;
 
 /**
  * The runtime calculation for one {@link IndicatorSpec}, for one backtest
@@ -33,4 +34,26 @@ public interface Indicator {
      * @throws IllegalStateException if {@link #isReady()} is {@code false}
      */
     double value();
+
+    /**
+     * Creates a fresh runtime {@code Indicator} for {@code spec}: the
+     * only mapping from an immutable {@link IndicatorSpec} definition to
+     * a new, independent, per-run instance. Every call returns a new
+     * instance; nothing is cached, shared, or held in static state.
+     *
+     * <p>The {@code switch} is exhaustive over {@link IndicatorType} with
+     * no {@code default} branch, so adding a new indicator type without
+     * updating this method is a compile error, not a silently missing
+     * mapping.
+     *
+     * @throws NullPointerException if {@code spec} is null
+     */
+    static Indicator create(IndicatorSpec spec) {
+        Objects.requireNonNull(spec, "spec must not be null");
+        return switch (spec.type()) {
+            case SMA -> new SimpleMovingAverage(spec.period());
+            case EMA -> new ExponentialMovingAverage(spec.period());
+            case RSI -> new RelativeStrengthIndex(spec.period());
+        };
+    }
 }

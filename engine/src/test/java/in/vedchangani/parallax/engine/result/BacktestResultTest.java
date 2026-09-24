@@ -272,6 +272,102 @@ class BacktestResultTest {
         assertEquals(Optional.of(evaluable), r.firstEvaluableDate());
     }
 
+    // --- trading-cost totals (D-27) -------------------------------------------------
+
+    private static Fill fill(int orderId, LocalDate date, long quantity, String referenceOpen, String fillPrice,
+                             String commission, SignalEvent signal) {
+        return new Fill(orderId, date, quantity, new BigDecimal(referenceOpen), new BigDecimal(fillPrice),
+                new BigDecimal(commission), signal);
+    }
+
+    /** BUY 10: slippage |100.5 − 100| × 10 = 5.0, commission 5. */
+    private static final Fill SLIPPED_BUY =
+            fill(1, LocalDate.of(2024, 1, 3), 10, "100", "100.5", "5", ENTER);
+    /** SELL 10: slippage |119.4 − 120| × 10 = 6.0, commission 5. */
+    private static final Fill SLIPPED_SELL =
+            fill(2, LocalDate.of(2024, 1, 5), 10, "120", "119.4", "5", EXIT);
+    /** BUY 8: slippage |110.11 − 110| × 8 = 0.88, commission 5. */
+    private static final Fill SLIPPED_SECOND_BUY =
+            fill(3, LocalDate.of(2024, 1, 8), 8, "110", "110.11", "5", ENTER);
+
+    private static BacktestResult withFills(List<Fill> fills) {
+        List<EquityPoint> curve = List.of(point(LocalDate.of(2024, 1, 2), new BigDecimal("100")));
+        return result(curve, fills, List.of());
+    }
+
+    @Test
+    void costTotalsAreExactlyZeroWithNoFills() {
+        BacktestResult r = withFills(List.of());
+
+        assertEquals(BigDecimal.ZERO, r.totalCommission());
+        assertEquals(BigDecimal.ZERO, r.totalSlippageCost());
+    }
+
+    @Test
+    void costTotalsIncludeTheEntryFillOfAnOpenTrade() {
+        BacktestResult r = withFills(List.of(SLIPPED_BUY));
+
+        assertTrue(r.trades().get(0) instanceof Trade.Open);
+        assertEquals(0, new BigDecimal("5").compareTo(r.totalCommission()));
+        assertEquals(0, new BigDecimal("5.0").compareTo(r.totalSlippageCost()));
+    }
+
+    @Test
+    void costTotalsForOneClosedTrade() {
+        BacktestResult r = withFills(List.of(SLIPPED_BUY, SLIPPED_SELL));
+
+        assertEquals(0, new BigDecimal("10").compareTo(r.totalCommission()));
+        assertEquals(0, new BigDecimal("11.0").compareTo(r.totalSlippageCost()));
+    }
+
+    @Test
+    void costTotalsForClosedTradeThenOpenTrade() {
+        BacktestResult r = withFills(List.of(SLIPPED_BUY, SLIPPED_SELL, SLIPPED_SECOND_BUY));
+
+        assertEquals(0, new BigDecimal("15").compareTo(r.totalCommission()));
+        assertEquals(0, new BigDecimal("11.88").compareTo(r.totalSlippageCost()));
+    }
+
+    @Test
+    void slippageTotalIsZeroWhenFillPricesEqualReferenceOpens() {
+        LocalDate d = LocalDate.of(2024, 1, 3);
+        BacktestResult r = withFills(List.of(buy(1, d, 10), sell(2, d.plusDays(2), 10)));
+
+        assertEquals(0, BigDecimal.ZERO.compareTo(r.totalSlippageCost()));
+        assertEquals(0, new BigDecimal("10").compareTo(r.totalCommission()));
+    }
+
+    @Test
+    void costTotalsReconcileWithClosedTradeTotalsPlusTrailingOpenEntry() {
+        BacktestResult r = withFills(List.of(SLIPPED_BUY, SLIPPED_SELL, SLIPPED_SECOND_BUY));
+
+        BigDecimal commission = BigDecimal.ZERO;
+        BigDecimal slippage = BigDecimal.ZERO;
+        for (Trade trade : r.trades()) {
+            switch (trade) {
+                case Trade.Closed closed -> {
+                    commission = commission.add(closed.totalCommission());
+                    slippage = slippage.add(closed.totalSlippageCost());
+                }
+                case Trade.Open open -> {
+                    commission = commission.add(open.entry().commission());
+                    slippage = slippage.add(open.entry().slippageCost());
+                }
+            }
+        }
+
+        assertEquals(0, commission.compareTo(r.totalCommission()));
+        assertEquals(0, slippage.compareTo(r.totalSlippageCost()));
+    }
+
+    @Test
+    void costTotalsAreRecomputedIdenticallyOnEveryCall() {
+        BacktestResult r = withFills(List.of(SLIPPED_BUY, SLIPPED_SELL, SLIPPED_SECOND_BUY));
+
+        assertEquals(r.totalCommission(), r.totalCommission());
+        assertEquals(r.totalSlippageCost(), r.totalSlippageCost());
+    }
+
     // --- equality -----------------------------------------------------------------
 
     @Test
