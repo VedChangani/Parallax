@@ -115,10 +115,12 @@ root):
   `OrderRejection`
 - `portfolio`: `Portfolio`, `EquityPoint`
 - `result`: `BacktestConfig`, `Trade`, `BacktestResult`
+- `metrics`: `PerformanceMetrics` (D-26)
 
 The V1 engine is now feature-complete for its scope: `Backtester.run(...)`
-is a working chronological simulation. Not yet implemented: performance
-metrics, backend integration, and frontend.
+is a working chronological simulation, and `PerformanceMetrics.of(...)`
+computes the full V1 metric set from its result. Not yet implemented:
+backend integration and frontend.
 
 This section reflects current state only; see Git history for how it was
 reached.
@@ -135,7 +137,7 @@ Backtester.run(...)
 BacktestResult
         |
         v
-PerformanceMetrics.of(result)      [later]
+PerformanceMetrics.of(result)      [implemented, D-26]
 ```
 
 - `Backtester` is stateless. It holds no persistent fields and is
@@ -155,6 +157,7 @@ in.vedchangani.parallax.engine.strategy    StrategyDefinition, Condition, Operan
 in.vedchangani.parallax.engine.execution   Order, OrderSide, Fill, RejectionReason, OrderRejection
 in.vedchangani.parallax.engine.portfolio   Portfolio, EquityPoint
 in.vedchangani.parallax.engine.result      BacktestConfig, BacktestResult, Trade
+in.vedchangani.parallax.engine.metrics     PerformanceMetrics
 ```
 
 ## 2. Domain model
@@ -1033,14 +1036,104 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
   `Trade.Open`/`Trade.Closed` parsed from the result's `fills`, called
   fresh by `BacktestResult.trades()` rather than stored.
 
-## 12. Numerical policy
+## 12. Performance metrics
+
+Implemented: `engine.metrics.PerformanceMetrics` (D-26), a pure post-run
+value computed by `PerformanceMetrics.of(BacktestResult)`. It participates
+in none of signal generation, sizing, execution, portfolio mutation, or
+chronological processing (D-5) — it consumes an already-produced immutable
+`BacktestResult` and never mutates it or anything reachable from it.
+
+```
+public record PerformanceMetrics(
+    double totalReturn,
+    OptionalDouble cagr,
+    OptionalDouble volatility,
+    OptionalDouble sharpeRatio,
+    double maxDrawdown,
+    int closedTradeCount,
+    OptionalDouble winRate,
+    OptionalDouble averageWin,
+    OptionalDouble averageLoss
+)
+```
+
+Every metric that can be undefined for a given result is an
+`OptionalDouble` with exactly one documented emptiness condition — never
+`NaN`, `Infinity`, or a sentinel value.
+
+**Preconditions of `of(result)`** (IAE if violated, NPE for a null
+result): the first equity point's equity must equal
+`config.initialCapital()` exactly, and every equity point's equity must be
+strictly positive. Both always hold for genuine `Backtester` output (no
+fill can occur before the second in-range bar, and cash cannot go negative
+— D-23), so these checks exist to keep the formulas below mutually
+consistent rather than to reject real runs.
+
+**Total return:** `(finalEquity − initialCapital) / initialCapital`. An
+open final position counts at its mark-to-market value on the last close
+(D-8, no forced liquidation); a no-trade run is exactly `0.0`.
+
+**CAGR (ACT/365 Fixed):** `StrictMath.pow(finalEquity/initialCapital,
+365/days) − 1`, where `days` is the span between the first and last
+equity-point dates. **Empty when that span is under 365 days** — V1 never
+annualizes a sub-year return (GIPS convention), so even a run over a full
+calendar year (e.g. 360 observed days) can have no CAGR while still
+reporting total return.
+
+**Periodic returns:** simple arithmetic returns between consecutive equity
+points only — `n` points give `n − 1` returns. `initialCapital` is never
+added as a separate observation (the first equity point already equals
+it). A data gap between two consecutive equity points is still exactly one
+return observation; V1 does not calendar-gap adjust it.
+
+**Volatility:** sample standard deviation (divisor `n − 1`) of the
+periodic returns, annualized by a fixed `× √252` (assumes daily bars).
+Empty for fewer than two returns. If every return is bitwise-equal, the
+standard deviation is defined as exactly `0.0` — without this rule, mean
+subtraction over identical doubles leaves ~1e-17 of spurious dispersion.
+
+**Sharpe ratio:** `mean(returns) / stdDev × √252`, with the risk-free rate
+fixed at zero (no config field — V1 has no rate series or period-
+conversion convention). Empty for fewer than two returns or zero
+volatility (including a flat no-trade run, where the ratio is undefined).
+Never `NaN`/`Infinity`.
+
+**Maximum drawdown:** the largest close-to-close fall from a running peak
+equity, as a fraction of that peak (`0.25` = 25%). Always present, `0.0`
+for a single point or monotonically rising equity. No absolute monetary
+amount, drawdown series, duration, or peak/trough dates are stored.
+
+**Trade statistics:** derived only from `result.trades()`, using
+`Trade.Closed.realizedPnl()` directly — never recomputed. Only closed
+trades count (`closedTradeCount`); an open trade is never a win or a loss.
+A trade's P&L above zero is a win, below zero a loss, exactly zero is
+breakeven — a breakeven trade is in the win-rate denominator but excluded
+from both averages. `winRate` is empty iff `closedTradeCount == 0`.
+`averageWin`/`averageLoss` are empty when there are no wins/losses
+respectively; `averageLoss` is reported as a negative number.
+
+**Numerical policy:** every metric is a `double` (D-14). Monetary
+differences and sums are performed exactly in `BigDecimal`; conversion to
+`double` happens only at each metric's own statistical calculation
+boundary. `StrictMath.pow`/`StrictMath.sqrt` are used throughout, never
+`Math.pow`/`Math.sqrt`, for bit-reproducible results across platforms
+(D-15). No `MathContext`, no rounding to cents.
+
+**Out of V1 scope** (deferred, not implemented): trading-cost totals
+(commission/slippage sums — easily derivable from `fills()` later),
+buy-and-hold benchmark comparison (needs its own checkpoint — the result
+keeps closes but no opens), non-zero risk-free rate, Sortino/Calmar/
+beta/alpha/VaR, and drawdown duration/dates.
+
+## 13. Numerical policy
 
 | Type | Used for |
 |---|---|
 | `BigDecimal` | prices, fill prices, commissions, slippage rate, cash fraction, cash, cost basis, P&L, equity, initial capital |
 | `long` | quantities |
 | `int` | periods, per-run order IDs |
-| `double` | indicator calculations, indicator outputs, condition comparisons, later derived statistics |
+| `double` | indicator calculations, indicator outputs, condition comparisons, `PerformanceMetrics` statistics (D-26) |
 
 - Use `compareTo` for `BigDecimal` comparisons.
 - Money is not rounded to cents inside the engine.
@@ -1054,7 +1147,7 @@ fills alternate `BUY, SELL, BUY, SELL, …`.
 - This policy is not redesigned during the first implementation stages
   without a concrete correctness problem.
 
-## 13. Determinism and reproducibility
+## 14. Determinism and reproducibility
 
 Identical `BarSeries` content, `StrategyDefinition`, `BacktestConfig`, and
 engine version must produce identical results.
@@ -1069,7 +1162,7 @@ where the supplied series begins. Experiment persistence must therefore
 eventually identify the exact supplied dataset/series, including
 sufficient lookback provenance.
 
-## 14. Testing strategy
+## 15. Testing strategy
 
 Small hand-calculable fixtures, not only external market data.
 
@@ -1171,8 +1264,25 @@ Small hand-calculable fixtures, not only external market data.
   no trading activity, `endDate` inclusive, bars after `endDate` ignored,
   `endDate` on a non-trading day, series ending before `endDate`.
 - **Determinism**: identical input twice produces an identical result.
+- **PerformanceMetrics** (implemented; `engine.metrics`, D-26): hand-
+  calculable fixtures for total return (gain/loss/flat), CAGR (exactly one
+  year, multi-year gain/loss, under-365-days empty, same-day empty),
+  volatility/Sharpe (known mean/stdDev pairs, exact zero-dispersion,
+  fewer-than-two-returns empty), maximum drawdown (rising, one drawdown
+  with recovery, multiple drawdowns, immediate loss, single point), trade
+  statistics (no trades, one win/loss/breakeven, mixed set, a trailing
+  open trade excluded from closed statistics, an open-only run); every
+  record-validation boundary; the two `of(result)` preconditions (first-
+  equity mismatch, a zero-equity point) and a null result; determinism on
+  the same and on identical results; and consistency checks against a real
+  multi-trade `Backtester.run(...)` result (closed count matches
+  `trades()`, closed + open counts sum to `trades().size()`, Σ closed
+  `realizedPnl()` equals `finalPoint().realizedPnl()`). A structural test
+  pins the record's nine components in order and confirms no component
+  holds a `BacktestResult`, `Portfolio`, `BarSeries`, runtime `Indicator`,
+  or `Backtester`.
 
-## 15. Engine boundary
+## 16. Engine boundary
 
 ```
 BacktestResult Backtester.run(
@@ -1188,7 +1298,7 @@ Output: immutable `BacktestResult`.
 No callbacks. No I/O. No persistence. No HTTP. No Spring. Engine domain
 types must never become JPA entities.
 
-## 16. Future direction
+## 17. Future direction
 
 High-level path only — no speculative detailed design for unapproved
 subsystems:
@@ -1200,7 +1310,7 @@ engine foundation (data -> indicator -> strategy -> execution -> portfolio -> re
 Backtester (the chronological run loop, §3) — implemented (D-25)
         |
         v
-Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5)
+Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5) — implemented (D-26)
         |
         v
 Backend integration (Spring Boot: persistence, REST, provider integration)

@@ -510,6 +510,88 @@ surface as an engine-bug signal, not be hidden).
 toward; only performance metrics, backend integration, and frontend
 remain, none of which change engine behavior.
 
+## D-26 V1 performance-metric conventions: `PerformanceMetrics.of(BacktestResult)`
+
+**Decision:** `engine.metrics.PerformanceMetrics` is one immutable record
+computed by a pure static `of(BacktestResult)`, and participates in none of
+signal generation, sizing, execution, portfolio mutation, or chronological
+processing (D-5) — post-run analysis of an already-produced result only.
+
+- **Preconditions** (IAE if violated, NPE for a null result): the first
+  equity point's equity equals `config.initialCapital()` exactly, and
+  every equity point's equity is strictly positive. Both always hold for
+  genuine `Backtester` output (no fill can occur before the second
+  in-range bar; cash cannot go negative, D-23) — the checks keep the
+  formulas below mutually consistent rather than reject real runs.
+- **Periodic returns**: simple arithmetic returns between consecutive
+  equity points only — `n` points give `n-1` returns. `initialCapital` is
+  never a separate observation. A data gap between two consecutive equity
+  points remains exactly one return observation; V1 does not calendar-gap
+  adjust it — an intentional limitation of the daily-bar model.
+- **Total return**: `(finalEquity − initialCapital) / initialCapital`. An
+  open final position counts at its final mark-to-market equity (D-8); a
+  no-trade run is exactly `0.0`.
+- **CAGR**: ACT/365 Fixed over the observed span (first to last equity-
+  point date, not the configured range) — `StrictMath.pow(finalEquity /
+  initialCapital, 365/days) − 1`. **Empty when that span is under 365
+  days** (GIPS convention against annualizing sub-year returns) — this
+  covers a same-day range and any run under a year, even one spanning a
+  full calendar year with fewer than 365 observed days.
+- **Volatility**: sample standard deviation (divisor `n-1`) of the
+  periodic returns, annualized by a fixed `× √252` (assumes daily bars).
+  Empty for fewer than two returns. If every return is bitwise-equal, the
+  standard deviation is defined as exactly `0.0` — without this rule, mean
+  subtraction over identical doubles leaves ~1e-17 of spurious dispersion.
+- **Sharpe ratio**: `mean(returns) / stdDev × √252`, risk-free rate fixed
+  at zero (no config field). Empty for fewer than two returns or zero
+  volatility (including a flat no-trade run, where the ratio is
+  undefined). Never `NaN`/`Infinity`.
+- **Maximum drawdown**: the largest close-to-close fall from a running
+  peak equity, as a fraction of that peak (`0.25` = 25%). Percentage only
+  — no absolute amount, drawdown series, duration, or peak/trough dates.
+  Always present; `0.0` for a single point or monotonically rising equity.
+- **Trade statistics**: derived only from `result.trades()`, using
+  `Trade.Closed.realizedPnl()` directly, never recomputed. Only closed
+  trades count (`closedTradeCount`); an open trade is never a win or loss.
+  P&L above zero is a win, below zero a loss, exactly zero is breakeven —
+  breakeven counts in the win-rate denominator but excluded from both
+  averages. `winRate` empty iff `closedTradeCount == 0`; `averageWin`/
+  `averageLoss` empty when there are no wins/losses; `averageLoss` is
+  signed negative.
+- **Numerical policy**: every metric is a `double` (D-14). Monetary
+  differences and sums are performed exactly in `BigDecimal`; conversion
+  to `double` happens only at each metric's own statistical calculation
+  boundary. `StrictMath.pow`/`StrictMath.sqrt` throughout (including the
+  `StrictMath.sqrt(252.0)` annualization factor), never `Math.pow`/
+  `Math.sqrt`, for bit-reproducible results across platforms (D-15). No
+  `MathContext`, no rounding to cents.
+
+**Why:** A single flat record (not sub-records) is the smallest shape for
+nine fields that are all "facts about one run." `OptionalDouble` with one
+documented emptiness condition per metric avoids `NaN`/`Infinity`/sentinel
+ambiguity without a nullable-`Double` or a giant Optional-of-everything
+type. Fixed 252/zero-risk-free/ACT-365 conventions are stated once here so
+the implementation never has to invent them.
+
+**Rejected:** a synthetic time-zero equity point or `initialCapital` as a
+return observation (redundant — the first equity point already equals it
+for genuine `Backtester` output — and would bias volatility/Sharpe); log
+returns; population standard deviation; calendar-day or bar-count-derived
+annualization; `Math.pow`/`Math.sqrt` (breaks platform determinism); a
+risk-free-rate config field; reporting Sharpe as `0`/`Infinity` at zero
+volatility; annualizing CAGR under 365 days; `BigDecimal` +
+`MathContext.DECIMAL64` for the averages; a monetary drawdown or drawdown
+series; counting open trades; treating breakeven as a win or excluding it
+from the win-rate denominator; a metrics interface/registry or
+sub-records; adding these preconditions to `BacktestResult` itself (would
+change a frozen D-24 type for a metrics-only need).
+
+**Consequence:** trading-cost totals (commission/slippage sums — easily
+derivable from `fills()`), a buy-and-hold benchmark (the result keeps
+closes but no opens — needs its own checkpoint), a non-zero risk-free
+rate, Sortino/Calmar/beta/alpha/VaR, and drawdown duration/dates are all
+explicitly deferred, not part of this decision.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
@@ -525,3 +607,6 @@ Not yet decided; not blocking current implementation:
 4. **Average-cost display**: confirmed to live entirely outside the
    engine (D-22); a later backend/reporting layer computes
    `costBasis / quantity` and picks its own precision.
+5. **Trading-cost metrics and buy-and-hold benchmark** (D-26): deferred —
+   the former is a straightforward addition, the latter needs a checkpoint
+   of its own since `BacktestResult` keeps closes but no opens.
