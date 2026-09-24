@@ -505,4 +505,59 @@ class BacktesterTest {
                 .count();
         assertEquals(1, buyFills);
     }
+
+    // --- trading-cost totals reconcile with cash (D-27) ------------------------
+
+    /**
+     * Churning always-enter/always-exit run with commission 5 and slippage
+     * 1%: BUY 98 @ 90.9 (day 2), SELL 98 @ 108.9 (day 3), BUY 105 @ 101
+     * (day 4), SELL 105 @ 128.7 (day 5), BUY 111 @ 126.25 (day 6, left
+     * open — day 6 is the last in-range bar). Every entry's next open is at
+     * or below its sizing close, so no BUY is rejected.
+     */
+    private static BacktestResult costReconciliationRun() {
+        BarSeries s = series(flatBar(1, "100"), flatBar(2, "90"), flatBar(3, "110"),
+                flatBar(4, "100"), flatBar(5, "130"), flatBar(6, "125"));
+        BacktestConfig cfg = config("10000", "5", "0.01", date(1), date(6));
+        return new Backtester().run(s, strategy(ALWAYS_ENTER, ALWAYS_EXIT), cfg);
+    }
+
+    @Test
+    void finalCashEqualsCapitalMinusBuysPlusSellsMinusTotalCommission() {
+        BacktestResult result = costReconciliationRun();
+
+        BigDecimal expectedCash = result.config().initialCapital();
+        for (Fill fill : result.fills()) {
+            BigDecimal notional = fill.fillPrice().multiply(BigDecimal.valueOf(fill.quantity()));
+            expectedCash = switch (fill.side()) {
+                case BUY -> expectedCash.subtract(notional);
+                case SELL -> expectedCash.add(notional);
+            };
+        }
+        expectedCash = expectedCash.subtract(result.totalCommission());
+
+        assertEquals(5, result.fills().size());
+        assertEquals(0, expectedCash.compareTo(result.finalPoint().cash()));
+        assertEquals(0, d("633.75").compareTo(result.finalPoint().cash()));
+    }
+
+    @Test
+    void totalCommissionEqualsCommissionPerFillTimesFillCount() {
+        BacktestResult result = costReconciliationRun();
+
+        BigDecimal expected = result.config().commissionPerFill()
+                .multiply(BigDecimal.valueOf(result.fills().size()));
+
+        assertEquals(0, expected.compareTo(result.totalCommission()));
+        assertEquals(0, d("25").compareTo(result.totalCommission()));
+    }
+
+    @Test
+    void totalSlippageCostWithNonZeroSlippageIsExact() {
+        BacktestResult result = costReconciliationRun();
+
+        // 0.9×98 + 1.1×98 + 1×105 + 1.3×105 + 1.25×111
+        //   = 88.2 + 107.8 + 105 + 136.5 + 138.75
+        assertEquals(0, d("576.25").compareTo(result.totalSlippageCost()));
+    }
 }

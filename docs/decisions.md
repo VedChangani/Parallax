@@ -592,6 +592,45 @@ closes but no opens — needs its own checkpoint), a non-zero risk-free
 rate, Sortino/Calmar/beta/alpha/VaR, and drawdown duration/dates are all
 explicitly deferred, not part of this decision.
 
+## D-27 Trading-cost totals on BacktestResult
+
+**Decision:** `BacktestResult.totalCommission()` and
+`totalSlippageCost()` — derived methods, not components or stored fields,
+following the `trades()`/`finalPoint()` precedent (D-24) — are `Σ
+fill.commission()` and `Σ fill.slippageCost()` over **all** fills, BUY and
+SELL, including a final open trade's entry fill; never a hypothetical exit
+cost for a still-open position (D-8). `BigDecimal.ZERO` with no fills;
+exact `BigDecimal` addition only, no `MathContext`, no rounding, no
+conversion to `double`. No change to the `Backtester` loop, `Portfolio`,
+`Fill`, `Trade`, `EquityPoint`, D-7/D-23 sizing, or D-26.
+
+Commission is actual cash paid:
+`finalCash = initialCapital − Σ_BUY(q×fillPrice) + Σ_SELL(q×fillPrice) −
+totalCommission`. Slippage cost is the implicit adverse-fill cost relative
+to each bar's open, already embedded in fill prices — **not** an
+additional cash flow, and never combined with commission into one total.
+
+**Why:** these are exact ledger aggregations of raw fill data, the same
+kind of structural derivation as `trades()`/`finalPoint()` — not `double`
+statistics, so they don't belong on `PerformanceMetrics` (D-26 fixes every
+metric there as a `double`). Summing over `Fill` rather than `Trade.Closed`
+is required so an open trade's entry costs are not missed.
+
+**Rejected:** cost fields (`BigDecimal` or `double`) on
+`PerformanceMetrics`; a `TradingCosts` record (two sums don't justify a
+type); a combined commission-plus-slippage total (implies a cash figure
+that doesn't exist); leaving cost aggregation to the backend (the
+all-fills scope, including a trailing open entry, would be reinvented
+there).
+
+**Consequence:** the buy-and-hold benchmark (open question 5) remains
+unresolved — a design review of an initial `BuyAndHold` implementation
+found it economically unsound (with `CashFraction(1)`, a benchmark's entry
+can be delayed, or on a steadily rising series prevented for the whole
+run, by the same gap-up rejection behaviour a user strategy has under D-7)
+and it was withdrawn before commit. The benchmark is deferred to its own
+checkpoint, D-28.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
@@ -607,6 +646,19 @@ Not yet decided; not blocking current implementation:
 4. **Average-cost display**: confirmed to live entirely outside the
    engine (D-22); a later backend/reporting layer computes
    `costBasis / quantity` and picks its own precision.
-5. **Trading-cost metrics and buy-and-hold benchmark** (D-26): deferred —
-   the former is a straightforward addition, the latter needs a checkpoint
-   of its own since `BacktestResult` keeps closes but no opens.
+5. **Trading-cost metrics and buy-and-hold benchmark** (D-26): trading-cost
+   totals are **resolved by D-27**. The buy-and-hold benchmark remains
+   open: `BacktestResult` keeps closes but no opens, and a first design
+   attempt (running a fixed `CashFraction(1)` strategy through the
+   existing `Backtester`) proved economically unsound (see question 6) and
+   was withdrawn before commit. Deferred to its own checkpoint, D-28.
+6. **Gap-up rejection under `CashFraction(1)`**: sizing at bar N's close
+   (D-7) leaves only the whole-share rounding remainder as slack at bar
+   N+1's open. A rise from close to open beyond that remainder rejects the
+   BUY (`INSUFFICIENT_CASH`); on a steadily rising series this can delay
+   entry, or prevent it for the entire run. This is existing, unchanged
+   strategy behaviour, not a defect introduced by any later work — it
+   surfaced during the D-27 buy-and-hold review because a benchmark that
+   inherits the strategy order model inherits this too. Whether a
+   different sizing convention or a warning is warranted is a separate
+   decision.

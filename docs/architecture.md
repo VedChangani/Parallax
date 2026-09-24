@@ -118,9 +118,10 @@ root):
 - `metrics`: `PerformanceMetrics` (D-26)
 
 The V1 engine is now feature-complete for its scope: `Backtester.run(...)`
-is a working chronological simulation, and `PerformanceMetrics.of(...)`
-computes the full V1 metric set from its result. Not yet implemented:
-backend integration and frontend.
+is a working chronological simulation, `PerformanceMetrics.of(...)`
+computes the full V1 metric set from its result, and `BacktestResult`
+exposes exact trading-cost totals (D-27). Not yet implemented: the
+buy-and-hold benchmark, backend integration, and frontend.
 
 This section reflects current state only; see Git history for how it was
 reached.
@@ -638,6 +639,8 @@ record BacktestResult(String symbol, StrategyDefinition strategy, BacktestConfig
                       List<EquityPoint> equityCurve, List<Fill> fills, List<OrderRejection> rejections)
   List<Trade> trades()      -> Trade.fromFills(fills)      // derived, not stored
   EquityPoint finalPoint()  -> equityCurve.getLast()        // derived; no PortfolioState type
+  BigDecimal totalCommission()    -> Σ fill.commission() over all fills     // derived, D-27
+  BigDecimal totalSlippageCost()  -> Σ fill.slippageCost() over all fills   // derived, D-27
 ```
 
 **BacktestConfig** is the immutable input to one run.
@@ -689,7 +692,8 @@ state to keep in sync with `fills`/`equityCurve`; construction validates
 that both lists are internally consistent (ascending dates,
 BUY/SELL-alternating fills starting with BUY), so `trades()` can never
 throw for a successfully constructed result. There is no `PortfolioState`
-type — `finalPoint()` already is the final state (D-22). Every list is
+type — `finalPoint()` already is the final state (D-22). The two cost
+totals are likewise derived, not stored (D-27 — see §12). Every list is
 defensively copied (`List.copyOf`) and exposed as unmodifiable.
 `equityCurve` must be non-empty (a valid run always has at least one
 in-range bar); `fills` and `rejections` may be empty. No `Portfolio`,
@@ -1120,11 +1124,40 @@ boundary. `StrictMath.pow`/`StrictMath.sqrt` are used throughout, never
 `Math.pow`/`Math.sqrt`, for bit-reproducible results across platforms
 (D-15). No `MathContext`, no rounding to cents.
 
-**Out of V1 scope** (deferred, not implemented): trading-cost totals
-(commission/slippage sums — easily derivable from `fills()` later),
-buy-and-hold benchmark comparison (needs its own checkpoint — the result
-keeps closes but no opens), non-zero risk-free rate, Sortino/Calmar/
-beta/alpha/VaR, and drawdown duration/dates.
+**Out of V1 scope** (deferred, not implemented): the buy-and-hold
+benchmark comparison (its own checkpoint, D-28 — an initial
+`CashFraction(1)`-strategy-based design was found economically unsound and
+withdrawn before commit; see decisions.md open question 6), non-zero
+risk-free rate, Sortino/Calmar/beta/alpha/VaR, and drawdown duration/dates.
+Trading-cost totals, originally deferred here, are implemented by D-27
+(below).
+
+### Trading-cost totals (D-27)
+
+Implemented as two derived methods on `BacktestResult` — not components,
+not stored, and not on `PerformanceMetrics` (they are exact ledger sums,
+not `double` statistics):
+
+- `totalCommission()` = `Σ fill.commission()` over **all** fills.
+- `totalSlippageCost()` = `Σ fill.slippageCost()` over **all** fills.
+
+Both include the entry fill of a final open trade (its costs were actually
+paid); neither includes a hypothetical exit cost for a still-open position
+(D-8). Both are `BigDecimal.ZERO` when there are no fills, computed by
+exact `BigDecimal` addition only. Summing `Trade.Closed` totals instead
+would miss the open trade's entry fill.
+
+The two are different kinds of cost. Commission is actual cash paid and
+reconciles exactly with cash:
+
+```
+finalPoint().cash() = initialCapital − Σ_BUY(q × fillPrice) + Σ_SELL(q × fillPrice) − totalCommission()
+```
+
+Slippage cost is the implicit adverse-fill cost relative to each execution
+bar's open. It is already embedded in the fill prices, so it is **not** an
+additional cash flow and must never be subtracted from cash again. For
+that reason there is no combined "total trading cost" figure.
 
 ## 13. Numerical policy
 
@@ -1281,6 +1314,14 @@ Small hand-calculable fixtures, not only external market data.
   pins the record's nine components in order and confirms no component
   holds a `BacktestResult`, `Portfolio`, `BarSeries`, runtime `Indicator`,
   or `Backtester`.
+- **Trading-cost totals** (implemented; `BacktestResult`, D-27): exact
+  `totalCommission()`/`totalSlippageCost()` for no fills (zero), a BUY
+  only (the open entry's costs counted), BUY+SELL, and BUY+SELL+BUY;
+  zero slippage when fill prices equal reference opens; reconciliation
+  with `Trade.Closed` totals plus the trailing open entry; and, on a real
+  multi-trade `Backtester` run with non-zero commission and slippage, the
+  exact cash identity and `totalCommission == commissionPerFill ×
+  fills().size()`.
 
 ## 16. Engine boundary
 
@@ -1311,6 +1352,12 @@ Backtester (the chronological run loop, §3) — implemented (D-25)
         |
         v
 Performance metrics (CAGR, Sharpe, drawdown, win rate, ... — CLAUDE.md V1 scope; post-run, per D-5) — implemented (D-26)
+        |
+        v
+Trading-cost totals — implemented (D-27)
+        |
+        v
+Buy-and-hold benchmark — deferred (own checkpoint, D-28)
         |
         v
 Backend integration (Spring Boot: persistence, REST, provider integration)
