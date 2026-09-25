@@ -337,4 +337,53 @@ class StrategyDefinitionMapperTest {
         assertThrows(NullPointerException.class, () -> mapper.toEngine(null));
         assertThrows(NullPointerException.class, () -> mapper.toDto(null));
     }
+
+    // --- D-31 additive method: toEngine(dto, rootPath) ----------------------
+
+    @Test
+    void toEngineWithEmptyRootPathReproducesTheUnprefixedOverloadsPaths() {
+        ConditionDto entry = compare(indicator(IndicatorTypeDto.RSI, 1), OperatorDto.GT, constant("0"));
+
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL), ""));
+
+        assertEquals("entryCondition.left", e.path());
+    }
+
+    @Test
+    void toEngineWithRootPathPrefixesAConditionFailurePath() {
+        ConditionDto entry = compare(indicator(IndicatorTypeDto.RSI, 1), OperatorDto.GT, constant("0"));
+
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL), "definition"));
+
+        assertEquals("definition.entryCondition.left", e.path());
+    }
+
+    @Test
+    void toEngineWithRootPathPrefixesAPositionSizingFailurePath() {
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(ALWAYS_TRUE, ALWAYS_FALSE, fraction("0")), "definition"));
+
+        assertEquals("definition.positionSizing", e.path());
+    }
+
+    @Test
+    void toEngineWithRootPathProducesTheSameEngineObjectAsTheUnprefixedOverload() {
+        StrategyDefinitionDto dto = definition(ALWAYS_TRUE, ALWAYS_FALSE, FULL);
+        assertEquals(mapper.toEngine(dto), mapper.toEngine(dto, ""));
+    }
+
+    @Test
+    void singleArgumentToEngineStillDelegatesToTheTwoArgumentOverloadUnchanged() {
+        StrategyDefinitionDto dto = definition(ALWAYS_TRUE, ALWAYS_FALSE, FULL);
+        assertEquals(mapper.toEngine(dto, ""), mapper.toEngine(dto));
+    }
+
+    @Test
+    void toEngineWithRootPathRejectsNullArguments() {
+        StrategyDefinitionDto dto = definition(ALWAYS_TRUE, ALWAYS_FALSE, FULL);
+        assertThrows(NullPointerException.class, () -> mapper.toEngine(null, ""));
+        assertThrows(NullPointerException.class, () -> mapper.toEngine(dto, null));
+    }
 }

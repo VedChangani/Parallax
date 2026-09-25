@@ -901,6 +901,119 @@ directly as-is by a later persistence batch (D-31): `jsonb` for the text,
 a `char(64)` for the hash, an `int` for the schema version — no format
 change anticipated at that boundary.
 
+## D-31 Strategy persistence, ownership seam, and strategy REST
+
+**Decision:** the first persistent, user-owned resources:
+`AppUser → Strategy → immutable StrategyVersion`, plus the owner-scoped
+strategy REST API (`/api/strategies`). Packages: `user`, `strategy`,
+`api`, alongside the unmodified D-30 `strategy.definition`.
+
+- **Schema** (`V1__create_user_and_strategy.sql`): `app_user` (username
+  unique); `strategy` (`owner_id` FK `ON DELETE RESTRICT`, `name`/
+  `description`, `latest_version_number`, unique on `(owner_id, name)`);
+  `strategy_version` (`strategy_id` FK `ON DELETE RESTRICT`,
+  `version_number`, `definition jsonb`, `definition_schema_version`,
+  `definition_hash`, unique on `(strategy_id, version_number)`). No
+  `owner_id` on `strategy_version` — ownership is always resolved through
+  a join to `strategy`. A CHECK ties `definition_schema_version` to the
+  document's own embedded `schemaVersion`; another CHECK enforces a
+  lowercase-hex 64-character hash. `definition_hash` is **`varchar(64)`**,
+  not the `char(64)` D-30 anticipated — `bpchar` pads, and the CHECK
+  already enforces the exact length, so a plain `varchar` plus regex is
+  the cleaner Hibernate `validate` mapping. `V2__seed_development_user.sql`
+  inserts the deterministic `dev` user.
+- **Immutability** (`strategy_version`: no update, no delete) is enforced
+  at four layers: database `BEFORE UPDATE OR DELETE`/`BEFORE TRUNCATE`
+  triggers; Hibernate `@Immutable` plus `updatable=false` on every column;
+  no entity setters; no repository or REST update/delete method.
+- **Entities** use plain `long` foreign-key columns, never JPA
+  associations/collections (safe under `open-in-view=false`, since there
+  is no lazy graph to fetch outside a transaction). Construction/mutators
+  are package-private; `StrategyService` is the only write path.
+  `StrategyVersion` is built only from D-30 `CanonicalStrategyDefinition`
+  output, stored via `@ColumnTransformer(write = "?::jsonb")` — never a
+  second serializer. Reads always go through D-30 `decode(...)`, which
+  re-parses/re-maps/re-encodes/re-hashes rather than trusting PostgreSQL's
+  own `jsonb` rendering byte-for-byte.
+- **Version allocation:** `codec.encode` runs before any transaction
+  opens; the transaction takes an owner-scoped `SELECT ... FOR UPDATE` on
+  `Strategy` (READ COMMITTED — the PostgreSQL default, never raised),
+  allocates `latest + 1`, updates the parent, and inserts the version.
+  `uq_strategy_version_number` is the backstop; a failed attempt rolls
+  back the whole transaction (parent counter included), so no number is
+  consumed. Creating a new `Strategy` plus version 1 needs no lock (the
+  row is invisible to others until commit) — `uq_strategy_owner_name`
+  alone decides a concurrent duplicate name. **Every write to a
+  `Strategy` row, including a metadata PATCH, takes the same lock** — an
+  unlocked PATCH could otherwise race a concurrent `createVersion` and
+  silently revert `latest_version_number`, since Hibernate's default
+  UPDATE writes every column.
+- **Ownership:** every repository method `StrategyService` uses is
+  owner-scoped (`findByIdAndOwnerId`, `lockByIdAndOwnerId`,
+  `findOwned`/`findAllOwned` joining through `Strategy`) — no
+  `findAll`/unrestricted `findById`. A nonexistent resource and another
+  owner's resource are indistinguishable, both 404. `CurrentUser`
+  (`SeededCurrentUser` today, resolving the seeded `dev` user on every
+  call) is the sole source of the owner id — no request ever supplies
+  one, and a later Spring Security-backed `CurrentUser` replaces only
+  that bean.
+- **REST + D-30 boundary:** every strategy-definition-bearing body is
+  read with `@RequestBody String` and parsed exactly once by the D-30
+  strict codec, never Spring's global JSON binding. Two additive D-30
+  overloads make this possible, both delegated to by the original method
+  with unchanged behavior: `StrategyDefinitionCodec.parseRequest(String,
+  Class<T extends Record>)` and `StrategyDefinitionMapper.toEngine(
+  StrategyDefinitionDto, String rootPath)` (prefixes every
+  semantic-validation path, e.g. `definition.entryCondition.left`, for a
+  definition nested inside a request envelope). **These two overloads are
+  the only D-30 source changes in this decision** — canonical JSON,
+  hashing, strictness configuration, the DTO hierarchy, and every existing
+  D-30 test are unchanged. Envelope Bean Validation (`@NotBlank`/`@Size`
+  on `name`/`description`) is invoked explicitly against the parsed
+  record, since `@Valid` cannot apply to a raw `String` parameter.
+  Responses carry the D-30 transport DTO shape for a definition (never
+  canonical text, never `schemaVersion`), so a `GET .../versions/{n}` body
+  posts back unchanged and produces the same `definitionHash`.
+- **Errors** (`ProblemDetail`): malformed body/envelope validation → 400;
+  semantically invalid definition → 422; not-found/cross-owner → 404
+  (identical either way); duplicate name/version conflict → 409 (matched
+  against the actual database constraint name, not a racy `exists()`
+  pre-check); stored-data integrity failure or any other unexpected
+  error → 500, logged, generic body — never an exception class name,
+  stack trace, SQL, or constraint name.
+
+**Why:** D-30 remains the sole authority for strategy-definition
+semantics, syntax, canonicalization, and hashing — D-31 only adds the two
+narrow overloads needed to run that same strict parser against a request
+envelope rather than a bare document. The pessimistic lock (not optimistic
+versioning) makes version-number allocation trivially reason-about: one
+row lock serializes every writer, so 1..n-with-no-gaps is enforced by
+construction rather than by retry logic.
+
+**Rejected:** `char(64)` for the hash column (D-30's original suggestion —
+padding and `validate` friction outweigh the benefit over `varchar` plus a
+CHECK); JPA associations/collections between `Strategy` and
+`StrategyVersion` (an unnecessary entity graph under
+`open-in-view=false`); an `owner_id` column on `strategy_version`
+(ownership is already inherited through `Strategy`); binding the request
+envelope with Spring's lenient global mapper and re-serializing the
+nested definition into the strict codec (a second, competing JSON reader,
+and the lenient read would already have silently accepted duplicate keys
+or an unknown `ownerId` field); a racy `exists()` pre-check for duplicate
+names/versions (the database constraint is authoritative); deleting the
+seeded `dev` user once it owns strategies (its future lifecycle is
+disabling/replacing it, never deleting — `ON DELETE RESTRICT` already
+prevents this); `password_hash` in this batch (added by the later
+authentication migration); PATCH as a partial update (full metadata
+replacement only — `name` and `description` both required); deduplicating
+identical-content `StrategyVersion`s (versions record events, not unique
+contents); pagination, DELETE/PUT endpoints, Spring Security, datasets,
+and backtests (out of scope for this batch).
+
+**Consequence:** the ownership and immutable-versioning model every later
+dataset and backtest run will build on is now in place. A run will
+reference a `StrategyVersion`, never a `Strategy`.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:

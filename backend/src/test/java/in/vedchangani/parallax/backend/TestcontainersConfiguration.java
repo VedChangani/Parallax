@@ -16,7 +16,7 @@ import org.testcontainers.utility.DockerImageName;
  * no second/parallel configuration system is introduced.
  */
 @TestConfiguration(proxyBeanMethods = false)
-class TestcontainersConfiguration {
+public class TestcontainersConfiguration {
 
     @Bean
     @ServiceConnection

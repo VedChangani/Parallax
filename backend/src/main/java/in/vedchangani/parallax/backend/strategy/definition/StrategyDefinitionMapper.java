@@ -49,13 +49,33 @@ public final class StrategyDefinitionMapper {
     // --- DTO -> engine -------------------------------------------------------
 
     public StrategyDefinition toEngine(StrategyDefinitionDto dto) {
+        return toEngine(dto, "");
+    }
+
+    /**
+     * The D-31 REST envelope boundary (D-31 §8): identical mapping to
+     * {@link #toEngine(StrategyDefinitionDto)}, with every path prefixed by
+     * {@code rootPath} — for example {@code "definition"} when the
+     * definition arrives nested inside a {@code CreateStrategyRequest}
+     * envelope, so a semantic-validation error names the exact envelope
+     * field (e.g. {@code "definition.entryCondition.left"}). {@code
+     * rootPath = ""} (used by the single-argument overload) reproduces the
+     * original, unprefixed D-30 paths exactly — no other mapping behavior
+     * changes.
+     */
+    public StrategyDefinition toEngine(StrategyDefinitionDto dto, String rootPath) {
         Objects.requireNonNull(dto, "dto must not be null");
+        Objects.requireNonNull(rootPath, "rootPath must not be null");
 
-        Condition entry = toEngineCondition(dto.entryCondition(), "entryCondition");
-        Condition exit = toEngineCondition(dto.exitCondition(), "exitCondition");
-        PositionSizing sizing = toEnginePositionSizing(dto.positionSizing(), "positionSizing");
+        Condition entry = toEngineCondition(dto.entryCondition(), joinPath(rootPath, "entryCondition"));
+        Condition exit = toEngineCondition(dto.exitCondition(), joinPath(rootPath, "exitCondition"));
+        PositionSizing sizing = toEnginePositionSizing(dto.positionSizing(), joinPath(rootPath, "positionSizing"));
 
-        return construct(() -> new StrategyDefinition(entry, exit, sizing), "");
+        return construct(() -> new StrategyDefinition(entry, exit, sizing), rootPath);
+    }
+
+    private static String joinPath(String rootPath, String field) {
+        return rootPath.isEmpty() ? field : rootPath + "." + field;
     }
 
     private Condition toEngineCondition(ConditionDto dto, String path) {

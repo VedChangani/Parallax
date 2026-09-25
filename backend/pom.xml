@@ -103,6 +103,23 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+			<!--
+				D-31: binds *IT.java (real PostgreSQL/Testcontainers integration tests,
+				D-31 §13-15) to the integration-test/verify phases. Version is managed by
+				spring-boot-dependencies; unit tests (*Test.java) remain Surefire-only.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+				<executions>
+					<execution>
+						<goals>
+							<goal>integration-test</goal>
+							<goal>verify</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
 		</plugins>
 	</build>
 

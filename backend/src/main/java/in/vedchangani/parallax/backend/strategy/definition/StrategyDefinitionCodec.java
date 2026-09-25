@@ -92,19 +92,40 @@ public final class StrategyDefinitionCodec {
      *                                                strictly match the DTO shape
      */
     public StrategyDefinitionDto parseRequest(String json) {
+        return parseRequest(json, StrategyDefinitionDto.class);
+    }
+
+    /**
+     * The D-31 REST envelope boundary (D-31 §8): the same strict reader and
+     * the same {@link MalformedStrategyDefinitionException} path/reason
+     * mapping as {@link #parseRequest(String)}, generalized to any request
+     * record — so an envelope such as {@code CreateStrategyRequest}
+     * (ordinary metadata fields alongside a nested {@link
+     * StrategyDefinitionDto}) is read by exactly one strict parser, never
+     * Spring's lenient global mapper. This is the only generalization: the
+     * strictness configuration, canonical encoding, hashing, and
+     * decode/integrity behavior are unchanged, and {@link
+     * #parseRequest(String)} now delegates here with {@code
+     * StrategyDefinitionDto.class}.
+     *
+     * @throws MalformedStrategyDefinitionException if {@code json} does not
+     *                                                strictly match {@code requestType}'s shape
+     */
+    public <T extends Record> T parseRequest(String json, Class<T> requestType) {
         Objects.requireNonNull(json, "json must not be null");
-        StrategyDefinitionDto dto;
+        Objects.requireNonNull(requestType, "requestType must not be null");
+        T value;
         try {
-            dto = jsonMapper.readValue(json, StrategyDefinitionDto.class);
+            value = jsonMapper.readValue(json, requestType);
         } catch (JacksonException e) {
             throw new MalformedStrategyDefinitionException(pathOf(e), reasonOf(e));
         }
-        if (dto == null) {
+        if (value == null) {
             // The JSON literal `null` deserializes to a Java null without Jackson
             // throwing — reject it explicitly rather than let it surface as an NPE.
             throw new MalformedStrategyDefinitionException("", "wrong JSON type");
         }
-        return dto;
+        return value;
     }
 
     // --- canonical encode --------------------------------------------------

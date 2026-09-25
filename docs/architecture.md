@@ -1470,12 +1470,11 @@ in advance.
 
 ---
 
-# Backend Architecture (Phase 7 — D-29 foundation and D-30 strategy codec implemented)
+# Backend Architecture (Phase 7 — D-29/D-30/D-31 implemented)
 
-Status: the foundation (D-29) and the strategy-definition JSON boundary
-(D-30) described below are implemented. Persistence, REST, and security
-are designed (see decisions.md's Phase 7 design review) but not yet built;
-each remains its own future checkpoint.
+Status: the foundation (D-29), the strategy-definition JSON boundary
+(D-30), and strategy persistence/ownership/REST (D-31, below) are
+implemented. Datasets, backtests, and security remain future checkpoints.
 
 ## Dependency direction
 
@@ -1493,14 +1492,15 @@ the only point of contact between Spring configuration and the engine.
 
 `in.vedchangani.parallax.backend`, matching the engine's
 `in.vedchangani.parallax.engine`. Packages are grouped by feature
-(`strategy.definition` implemented; `user`, `dataset`, `backtest`, `api`
-planned) — no `util`, `common`, or `manager` bucket.
+(`strategy.definition`, `user`, `strategy`, `api` implemented; `dataset`,
+`backtest` planned) — no `util`, `common`, or `manager` bucket.
 
 ## StrategyDefinition JSON boundary (D-30)
 
 `in.vedchangani.parallax.backend.strategy.definition` — a backend-only,
 engine-unmodified boundary between JSON and the engine's
-`StrategyDefinition`. No persistence, no REST; those are later batches.
+`StrategyDefinition`. Persistence and REST are D-31 (below), built on top
+of this boundary without changing its canonical/hash/strictness behavior.
 
 - **DTOs:** `StrategyDefinitionDto`, `ConditionDto`
   (`Compare`/`All`/`Any`), `OperandDto` (`Indicator`/`Close`/`Constant`),
@@ -1539,15 +1539,16 @@ engine-unmodified boundary between JSON and the engine's
 See decisions.md's D-30 entry for the exact canonical grammar and the
 hash/integrity contract.
 
-## Persistence stack (foundation only; no entities or migrations yet)
+## Persistence stack
 
 - **Spring Data JPA** + the PostgreSQL JDBC driver (runtime scope).
 - **Flyway** (`flyway-core`, `flyway-database-postgresql`, and the
   separate `spring-boot-flyway` autoconfiguration module — Spring Boot 4.x
   split Flyway's autoconfiguration out of `spring-boot-autoconfigure`)
   owns schema changes. `spring.jpa.hibernate.ddl-auto=validate`: Hibernate
-  never creates or alters schema. Migration location:
-  `classpath:db/migration` (empty in this batch).
+  never creates or alters schema, only validates against it. Migration
+  location: `classpath:db/migration` — `V1__create_user_and_strategy.sql`
+  and `V2__seed_development_user.sql` (D-31, below).
 - **Datasource:** environment-backed with local defaults
   (`spring.datasource.url=${PARALLAX_DB_URL:jdbc:postgresql://
   localhost:5432/parallax}`, and equivalently for username/password), so a
@@ -1574,9 +1575,108 @@ dependency: a tiny in-memory `BarSeries`/`StrategyDefinition`/
 `BacktestConfig` run through the `Backtester` bean, with no persistence or
 HTTP involved.
 
+## Strategy persistence, ownership, and REST (D-31)
+
+The first persistent, user-owned resources: `AppUser → Strategy →
+immutable StrategyVersion`, plus the strategy REST API. Packages:
+`user` (identity seam), `strategy` (persistence/service/domain
+exceptions), `strategy.definition` (D-30, unchanged in shape), `api`
+(controller/DTOs/error mapping).
+
+**Schema** (`V1__create_user_and_strategy.sql`): `app_user` (id, username
+unique, created_at), `strategy` (id, owner_id FK `ON DELETE RESTRICT`,
+name, description, latest_version_number, created_at; unique on
+`(owner_id, name)`), `strategy_version` (id, strategy_id FK `ON DELETE
+RESTRICT`, version_number, `definition jsonb`, definition_schema_version,
+definition_hash `varchar(64)`, created_at; unique on `(strategy_id,
+version_number)`). `strategy_version` has no `owner_id` — ownership is
+always resolved through a join to `strategy`. A CHECK ties
+`definition_schema_version` to the document's own embedded
+`schemaVersion` property; another CHECK enforces the lowercase-hex
+64-character hash format. `V2__seed_development_user.sql` inserts the
+deterministic `dev` user `SeededCurrentUser` resolves until real
+authentication exists (D-31 decision: its future lifecycle is disabling
+it, never deleting it, once it owns historical resources).
+
+**Immutability** (`strategy_version`: no update, no delete) is enforced
+at four layers: database `BEFORE UPDATE OR DELETE`/`BEFORE TRUNCATE`
+triggers that raise on any attempt; Hibernate `@Immutable` plus
+`updatable=false` on every column; no setters on the entity; no
+repository or REST update/delete method.
+
+**Entities** (`Strategy`, `StrategyVersion`) use plain `long` foreign-key
+columns, never JPA associations/collections — safe under
+`open-in-view=false` because there is no lazy graph to fetch outside a
+transaction. Construction and mutators are package-private;
+`StrategyService` is the only write path. `StrategyVersion` is built
+only from D-30 `CanonicalStrategyDefinition` output (`json()` stored
+verbatim into the `jsonb` column via `@ColumnTransformer(write =
+"?::jsonb")`, never re-serialized). Reads always go through D-30's
+`decode(schemaVersion, json, hash)`, which re-parses/re-maps/re-encodes/
+re-hashes rather than trusting PostgreSQL's own `jsonb` rendering
+byte-for-byte.
+
+**Version allocation** (`StrategyService.createVersion`): `codec.encode`
+runs before any transaction opens; the transaction then takes an
+owner-scoped `SELECT ... FOR UPDATE` on `Strategy` (READ COMMITTED — the
+PostgreSQL default), allocates `latest + 1`, updates the parent, and
+inserts the version. `uq_strategy_version_number` is the backstop. A
+failed attempt rolls back the whole transaction, including the parent's
+counter, so no number is consumed. Creating a brand-new `Strategy` plus
+its version 1 needs no lock (the row is invisible to others until
+commit) — `uq_strategy_owner_name` alone decides a concurrent duplicate
+name. **Every write to a `Strategy` row — including a metadata PATCH —
+takes the same lock**, so a PATCH can never race a concurrent
+`createVersion` and silently revert `latest_version_number` (Hibernate's
+default UPDATE writes every column).
+
+**Ownership** (D-31 §10): every repository method used by `StrategyService`
+is owner-scoped (`findByIdAndOwnerId`, `lockByIdAndOwnerId`,
+`findOwned`/`findAllOwned` joining through `Strategy`) — there is no
+`findAll`/unrestricted `findById`. A nonexistent resource and another
+owner's resource are indistinguishable: both raise
+`StrategyNotFoundException`/`StrategyVersionNotFoundException` and map to
+404. `CurrentUser` (`SeededCurrentUser` today) is the sole source of the
+owner id; no request ever supplies one.
+
+**REST** (`/api/strategies`, `StrategyController`): `POST`/`GET`/`GET
+{id}`/`PATCH {id}` for strategies, `POST`/`GET`/`GET {version}` under
+`.../{id}/versions` — no DELETE, no PUT. Every strategy-definition-bearing
+body is read with `@RequestBody String` and parsed exactly once by the
+D-30 strict codec (`StrategyDefinitionCodec.parseRequest(json, Class)`),
+never Spring's global JSON binding; envelope Bean Validation
+(`@NotBlank`/`@Size` on `name`/`description`) is invoked explicitly
+against the already-parsed record, since `@Valid` cannot apply to a raw
+`String` parameter. Responses carry the D-30 transport DTO shape for a
+definition (never the stored canonical text, never `schemaVersion`), so a
+`GET .../versions/{n}` body can be POSTed back unchanged and produce the
+same `definitionHash`.
+
+**D-30 changes for this boundary** are exactly two additive overloads,
+both delegated to by the original method with unchanged behavior:
+`StrategyDefinitionCodec.parseRequest(String, Class<T extends Record>)`
+and `StrategyDefinitionMapper.toEngine(StrategyDefinitionDto, String
+rootPath)` (prefixes every semantic-validation path, e.g.
+`definition.entryCondition.left`, when a definition arrives nested inside
+a request envelope). Canonical JSON, hashing, strictness, and every
+existing D-30 test are unchanged.
+
+**Errors** (`ApiExceptionHandler`, `ProblemDetail`): malformed body → 400;
+envelope Bean Validation failure → 400; `InvalidStrategyDefinitionException`
+(engine semantics) → 422; not-found/cross-owner → 404; duplicate name or
+version conflict → 409 (matched against the actual database constraint
+name via `ConstraintViolationException.getConstraintName()`, not by
+pre-checking `exists()`); `StrategyDefinitionIntegrityException` or any
+other unexpected failure → 500, logged, with a generic body — never an
+exception class name, stack trace, SQL, or constraint name.
+
+See decisions.md's D-31 entry for the exact rationale and rejected
+alternatives.
+
 ## Not yet implemented
 
-Entities, repositories, migrations, REST controllers, request/response
-DTOs, dataset ingestion, run orchestration/persistence, and security. See
-decisions.md's D-29/D-30 entries and the Phase 7 design review for the
-approved plan and batch sequence.
+Datasets, dataset versions, CSV/Alpha Vantage ingestion, backtest runs and
+result/metrics/benchmark persistence, Spring Security/authentication
+(`password_hash`, BCrypt, HTTP Basic), and the frontend. See decisions.md's
+D-29/D-30/D-31 entries and the Phase 7 design review for the approved plan
+and batch sequence.

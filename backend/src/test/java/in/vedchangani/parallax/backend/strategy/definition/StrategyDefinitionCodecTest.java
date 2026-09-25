@@ -505,4 +505,64 @@ class StrategyDefinitionCodecTest {
         assertThrows(NullPointerException.class, () -> codec.decode(1, null, "x"));
         assertThrows(NullPointerException.class, () -> codec.decode(1, "{}", null));
     }
+
+    // --- D-31 additive method: parseRequest(json, Class<T>) ----------------
+    //
+    // A minimal local envelope record, standing in for a real REST envelope
+    // (e.g. CreateStrategyRequest) without adding a test dependency on the
+    // api package: only the strict-parsing behavior at the D-30 boundary is
+    // under test here.
+
+    private record Envelope(String name, StrategyDefinitionDto definition) {
+    }
+
+    @Test
+    void singleArgumentParseRequestStillDelegatesToTheGenericOverloadUnchanged() {
+        String transport = GOLDEN_JSON.replaceFirst("\"schemaVersion\":1,", "");
+        assertEquals(codec.parseRequest(transport, StrategyDefinitionDto.class), codec.parseRequest(transport));
+    }
+
+    @Test
+    void parseRequestWithTypeParsesAnEnvelopeContainingANestedDefinition() {
+        String transport = GOLDEN_JSON.replaceFirst("\"schemaVersion\":1,", "");
+        String json = "{\"name\":\"my-strategy\",\"definition\":" + transport + "}";
+
+        Envelope envelope = codec.parseRequest(json, Envelope.class);
+
+        assertEquals("my-strategy", envelope.name());
+        assertEquals(goldenDefinition(), mapper.toEngine(envelope.definition()));
+    }
+
+    @Test
+    void parseRequestWithTypeAppliesTheSameStrictRulesToTheNestedDefinition() {
+        String transport = GOLDEN_JSON.replaceFirst("\"schemaVersion\":1,", "");
+        String badNestedDefinition = transport.replaceFirst("\"period\":20", "\"period\":20,\"bogus\":1");
+        String json = "{\"name\":\"my-strategy\",\"definition\":" + badNestedDefinition + "}";
+
+        MalformedStrategyDefinitionException e = assertThrows(MalformedStrategyDefinitionException.class,
+                () -> codec.parseRequest(json, Envelope.class));
+        assertEquals("definition.entryCondition.left.bogus", e.path());
+    }
+
+    @Test
+    void parseRequestWithTypeStillRejectsSchemaVersionInsideTheNestedDefinition() {
+        String json = "{\"name\":\"my-strategy\",\"definition\":" + GOLDEN_JSON + "}";
+        assertThrows(MalformedStrategyDefinitionException.class, () -> codec.parseRequest(json, Envelope.class));
+    }
+
+    @Test
+    void parseRequestWithTypeRejectsAnUnknownEnvelopeField() {
+        String transport = GOLDEN_JSON.replaceFirst("\"schemaVersion\":1,", "");
+        String json = "{\"name\":\"my-strategy\",\"definition\":" + transport + ",\"ownerId\":1}";
+
+        MalformedStrategyDefinitionException e = assertThrows(MalformedStrategyDefinitionException.class,
+                () -> codec.parseRequest(json, Envelope.class));
+        assertEquals("ownerId", e.path());
+    }
+
+    @Test
+    void parseRequestWithTypeRejectsNullArguments() {
+        assertThrows(NullPointerException.class, () -> codec.parseRequest(null, Envelope.class));
+        assertThrows(NullPointerException.class, () -> codec.parseRequest("{}", null));
+    }
 }
