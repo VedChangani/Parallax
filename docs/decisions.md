@@ -791,15 +791,125 @@ DTOs, or security exist yet — this batch is foundation only. Every later
 Phase 7 batch builds on this datasource/Flyway/Testcontainers setup
 without revisiting it.
 
+## D-30 StrategyDefinition DTO mapping and canonical JSON codec
+
+**Decision:** a backend-only, engine-unmodified boundary
+(`backend.strategy.definition`) between JSON and the engine's
+`StrategyDefinition`: a sealed DTO tree, a path-tracked mapper, and a
+deterministic canonical-JSON/SHA-256 codec. No persistence, no REST.
+Resolves open question 2.
+
+- **DTO tree:** sealed interfaces mirroring the engine's shape
+  (`ConditionDto{Compare,All,Any}`, `OperandDto{Indicator,Close,Constant}`,
+  `PositionSizingDto{CashFraction}`), each discriminated by a `"type"`
+  property (`compare`/`all`/`any`/`indicator`/`close`/`constant`/
+  `cashFraction`) via `@JsonTypeInfo`/`@JsonSubTypes`. Backend-owned
+  `IndicatorTypeDto`/`OperatorDto` enums, never the engine's, so the
+  stored/transport format never depends on an engine enum's identifiers.
+  `StrategyDefinitionDto` (the transport root) carries no
+  `schemaVersion` — only `StoredStrategyDocument` (internal, decode-only)
+  does.
+- **`Constant.value` and `CashFraction.fraction` are JSON strings
+  everywhere** (request, response, storage) — never JSON numbers, enforced
+  by explicit Jackson coercion config, not merely convention. `Constant`
+  round-trips via `Double.toString`/`Double.parseDouble` exactly (Java 19+
+  guarantees this bit-exactly for every finite value); `CashFraction`
+  parses straight into `BigDecimal`, never through a `double`. A JSON
+  string survives PostgreSQL `jsonb` untouched, where a JSON number would
+  be rewritten into `numeric` notation (e.g. `1.0E-300` → a 300-digit
+  literal).
+- **Mapper-owned rules are exactly two**, both syntax, not semantics: the
+  decimal grammar `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?` for both
+  string fields, and rejecting a nonzero literal that underflows to `0.0`
+  as a `double` (e.g. `"1e-400"`) — both `MalformedStrategyDefinitionException`
+  and `InvalidStrategyDefinitionException` respectively, per the table
+  below. Overflow (`"1e400"` → `Infinity`) is deliberately *not* caught by
+  the mapper; it is let through so the engine's own finiteness check
+  rejects it. Every other rule (finiteness, the `-0.0` fold, non-empty
+  condition groups, indicator period/RSI bounds, `CashFraction` bounds and
+  `stripTrailingZeros` canonicalization) is left entirely to the engine
+  constructors — the mapper catches only their `IllegalArgumentException`
+  and rewraps it as `InvalidStrategyDefinitionException(path, message)`,
+  with a depth-first field path such as
+  `entryCondition.conditions[1].right`. An engine `NullPointerException`
+  is never caught (a strictly-parsed DTO tree cannot produce one; if it
+  does, that is a backend bug and propagates unchanged).
+- **Canonical JSON** is never produced by Jackson serialization — a
+  hand-written recursive emitter (exhaustive `switch`, no `default`) over
+  `mapper.toDto(validatedEngineObject)` writes it, so it can never depend
+  on Jackson's field ordering and is always derived from an
+  already-validated engine object, never a raw client request. Grammar:
+  fixed property order (`type` first; the document starts with
+  `schemaVersion`), no whitespace, no trailing newline, engine list order
+  preserved exactly, no nulls, JSON numbers only for `schemaVersion`/
+  `period`. `schemaVersion` (`= 1`) is embedded as the document's own
+  leading property — inside the hashed bytes — so a stored `definition_
+  schema_version` column can never be tampered with independently of the
+  hash.
+- **Hash:** `lowercase-hex(SHA-256(canonicalJson.getBytes(UTF_8)))`,
+  computed only over the codec's own canonical text — never over a raw
+  client request and never over PostgreSQL's `jsonb` rendering. Loading
+  stored data always re-parses, re-maps to the engine, re-encodes
+  canonically, and re-hashes before comparing.
+- **Decode/integrity** (`decode(schemaVersion, documentJson,
+  expectedSha256)`): unsupported schema version → fail; malformed stored
+  JSON → fail; document's own `schemaVersion` disagreeing with the
+  supplied one → fail; semantically invalid stored tree → fail; malformed
+  expected-hash string → fail; recomputed hash ≠ expected → fail. Every
+  failure is `StrategyDefinitionIntegrityException` — a 500-class,
+  never-client-facing type distinct from the two client-facing exceptions
+  (`Malformed…`/`Invalid…`, both path-carrying). Because the comparison is
+  against the *re-encoded* hash rather than raw byte equality with `
+  documentJson`, a `jsonb`-reformatted (reordered/whitespaced) stored
+  document still verifies correctly.
+- **Unknown-field policy:** rejected everywhere — unknown/duplicate/
+  missing/null properties, null list elements, trailing tokens, unknown or
+  missing type ids, and every scalar coercion (number/boolean → string,
+  string/float → int, case-insensitive enums). One private, explicitly
+  configured Jackson `JsonMapper` inside the codec enforces this — never
+  Spring's global (lenient) mapper. Reproducibility outweighs forward
+  compatibility in V1: a stored document must never silently carry
+  information the engine doesn't understand, and a client typo must never
+  be silently dropped.
+
+**Why:** the DTO tree stays intentionally close to the engine's shape so
+the mapper is a straightforward structural walk rather than a translation
+layer, while numeric fields diverge from the engine's native types
+(`double`/`BigDecimal`) specifically where a JSON number would lose
+exactness. Input canonicalization happens from the validated *engine*
+object, never from raw request bytes, so two requests describing the same
+definition with different formatting (whitespace, key order, `"0.500"` vs
+`"5E-1"`) always produce identical canonical text and hash — this is what
+makes `definition_hash` a property of the definition, not of how a client
+happened to write it.
+
+**Rejected:** JSON numbers for `Constant`/`CashFraction` (loses exactness
+through `jsonb` and through lenient JSON libraries); accepting both JSON
+numbers and strings for those fields (two input paths per field, no real
+benefit); silently rounding constant underflow to `0.0` (would let a
+nonzero threshold silently become always-true/false); duplicating engine
+semantic rules as Bean Validation annotations on the DTO tree; a separate
+hash-utility class (SHA-256 stays a private codec method until a second
+genuine use case appears — D-31's dataset content hash — justifies
+sharing it); accepting unknown JSON properties for forward compatibility
+(reproducibility wins in V1); hashing raw request JSON or a database's
+`jsonb` text representation directly.
+
+**Consequence:** open question 2 is resolved. The codec's output
+(canonical text + hash + schema version) is designed to be stored
+directly as-is by a later persistence batch (D-31): `jsonb` for the text,
+a `char(64)` for the hash, an `int` for the schema version — no format
+change anticipated at that boundary.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
 
 1. **Price adjustment basis** (raw vs split/dividend-adjusted) for
    supplied datasets — a data-layer/provenance decision.
-2. **Persisting `Constant(double)`** in the backend: needs a form that
-   round-trips exactly (e.g. `Double.toString`) so reloaded strategy
-   versions stay equal.
+2. **Persisting `Constant(double)`** in the backend: **resolved by D-30**
+   — `Double.toString`, as a JSON string, so reloaded strategy versions
+   stay exactly equal.
 3. **Identical entry/exit conditions** are legal (D-19) but would churn
    (enter, then exit next bar). The engine won't reject them; a backend/UI
    warning may be wanted later.

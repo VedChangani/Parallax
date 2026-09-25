@@ -1470,11 +1470,12 @@ in advance.
 
 ---
 
-# Backend Architecture (Phase 7 — foundation implemented, D-29)
+# Backend Architecture (Phase 7 — D-29 foundation and D-30 strategy codec implemented)
 
-Status: only the foundation described below is implemented. Persistence,
-REST, and security are designed (see decisions.md's Phase 7 design review)
-but not yet built; each remains its own future checkpoint.
+Status: the foundation (D-29) and the strategy-definition JSON boundary
+(D-30) described below are implemented. Persistence, REST, and security
+are designed (see decisions.md's Phase 7 design review) but not yet built;
+each remains its own future checkpoint.
 
 ## Dependency direction
 
@@ -1491,9 +1492,52 @@ the only point of contact between Spring configuration and the engine.
 ## Package root
 
 `in.vedchangani.parallax.backend`, matching the engine's
-`in.vedchangani.parallax.engine`. Future batches add one package per
-feature (`user`, `strategy`, `dataset`, `backtest`, `api`) — no `util`,
-`common`, or `manager` bucket.
+`in.vedchangani.parallax.engine`. Packages are grouped by feature
+(`strategy.definition` implemented; `user`, `dataset`, `backtest`, `api`
+planned) — no `util`, `common`, or `manager` bucket.
+
+## StrategyDefinition JSON boundary (D-30)
+
+`in.vedchangani.parallax.backend.strategy.definition` — a backend-only,
+engine-unmodified boundary between JSON and the engine's
+`StrategyDefinition`. No persistence, no REST; those are later batches.
+
+- **DTOs:** `StrategyDefinitionDto`, `ConditionDto`
+  (`Compare`/`All`/`Any`), `OperandDto` (`Indicator`/`Close`/`Constant`),
+  `PositionSizingDto` (`CashFraction`), plus backend-owned
+  `IndicatorTypeDto`/`OperatorDto` enums — sealed interfaces discriminated
+  by a `"type"` JSON property, kept structurally close to the engine
+  grammar (D-18/D-19) but transport-specific where exactness requires it:
+  `Constant.value` and `CashFraction.fraction` are JSON **strings**, never
+  numbers.
+- **`StrategyDefinitionMapper`:** a stateless, path-tracked, depth-first
+  DTO ↔ engine mapper. It owns exactly two rules the engine has no
+  vocabulary for (the shared decimal grammar, and rejecting a nonzero
+  literal that underflows to `0.0`); every other rule — finiteness, the
+  `-0.0` fold, non-empty condition groups, indicator/RSI period bounds,
+  `CashFraction` bounds and canonicalization — is left entirely to the
+  engine constructors, whose `IllegalArgumentException` it rewraps as
+  `InvalidStrategyDefinitionException(path, message)` (e.g.
+  `entryCondition.conditions[1].right`).
+- **`StrategyDefinitionCodec`:** a strict request reader (`parseRequest`,
+  via its own explicitly configured Jackson `JsonMapper` — rejecting
+  unknown/duplicate/null/missing properties, trailing tokens, unknown type
+  ids, and every scalar coercion), a canonical encoder (`encode`, via a
+  hand-written recursive emitter — never Jackson serialization — always
+  from `mapper.toDto(validatedEngineObject)`, producing fixed-order,
+  whitespace-free UTF-8 JSON plus its lowercase-hex SHA-256), and a
+  verified stored-data decoder (`decode`, which re-parses, re-maps,
+  re-encodes and re-hashes before trusting a stored document — never
+  comparing raw bytes against a database's own `jsonb` rendering).
+  `schemaVersion` (currently `1`) is embedded as the canonical document's
+  own leading property, inside the hashed bytes.
+- **Errors:** `MalformedStrategyDefinitionException`/
+  `InvalidStrategyDefinitionException` (client-facing, path-carrying) are
+  distinct from `StrategyDefinitionIntegrityException` (stored-data
+  corruption or a codec/engine disagreement — never client-facing).
+
+See decisions.md's D-30 entry for the exact canonical grammar and the
+hash/integrity contract.
 
 ## Persistence stack (foundation only; no entities or migrations yet)
 
@@ -1532,7 +1576,7 @@ HTTP involved.
 
 ## Not yet implemented
 
-Entities, repositories, migrations, REST controllers, DTOs, the strategy
-definition codec, dataset ingestion, run orchestration/persistence, and
-security. See decisions.md's D-29 entry and the Phase 7 design review for
-the approved plan and batch sequence.
+Entities, repositories, migrations, REST controllers, request/response
+DTOs, dataset ingestion, run orchestration/persistence, and security. See
+decisions.md's D-29/D-30 entries and the Phase 7 design review for the
+approved plan and batch sequence.
