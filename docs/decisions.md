@@ -1014,6 +1014,152 @@ and backtests (out of scope for this batch).
 dataset and backtest run will build on is now in place. A run will
 reference a `StrategyVersion`, never a `Strategy`.
 
+## D-32 Dataset persistence, CSV ingestion, and content-hash integrity
+
+**Decision:** the first persistent market-data layer: `AppUser → Dataset →
+immutable DatasetVersion → immutable dataset_bar rows`, plus a V1 CSV
+upload REST API (`/api/datasets`). Packages: `dataset`, `dataset.csv`,
+alongside the existing `api`. No Alpha Vantage, no `MarketDataProvider`
+interface, no `BacktestRun` — this batch establishes the exact dataset
+snapshot a future run will reference.
+
+- **Schema** (`V3__create_dataset.sql`): `dataset` (`owner_id` FK `ON
+  DELETE RESTRICT`, `name`/`symbol` both fixed at creation — no PATCH in
+  this batch, `latest_version_number` starting at **0** since a dataset
+  may exist with no versions yet; unique on `(owner_id, name)` and on
+  `(id, symbol)`); `dataset_version` (immutable snapshot: `symbol` a
+  copy of the parent's, tied to it by a **composite FK** `(dataset_id,
+  symbol) -> dataset(id, symbol)` so a version's symbol can never
+  disagree with its dataset's; `source`, `source_detail`,
+  `adjustment_basis`, `bar_count`, `first_date`, `last_date`,
+  `content_hash`; unique on `(dataset_id, version_number)`); `dataset_bar`
+  (no surrogate id — PK `(dataset_version_id, bar_date)`; unconstrained
+  `numeric` OHLC columns, preserving whatever scale is inserted).
+  Immutability on `dataset_version`/`dataset_bar` is enforced the same
+  way as D-31's `strategy_version`: `BEFORE UPDATE OR DELETE`/`BEFORE
+  TRUNCATE` triggers, plus (for `dataset_version`) Hibernate `@Immutable`
+  and `updatable=false`. No OHLC semantic CHECK is added in SQL — `Bar`
+  remains the sole semantic authority (CLAUDE.md); the database only
+  enforces syntax-level constraints (hash format, symbol grammar,
+  non-blank name, known enum values, `bar_count >= 1`, `first_date <=
+  last_date`).
+- **Symbol grammar:** `^[A-Z0-9][A-Z0-9._-]{0,31}$` (1–32 chars,
+  uppercase ASCII letters/digits plus `.`/`_`/`-`, alphanumeric start).
+  Lowercase is rejected outright, never uppercased — comparison is exact
+  and case-sensitive. Enforced identically as Bean Validation on the
+  create request and as `ck_dataset_symbol_format`.
+- **CSV contract** (`dataset.csv.CsvBarParser`, plain Java, no CSV
+  library — the fixed, unquoted, 6-field-comma-separated shape never
+  needs one): an optional single leading UTF-8 BOM is stripped; every
+  remaining byte must be 7-bit ASCII; LF/CRLF/mixed line endings are all
+  accepted with the final terminator optional; the header must be
+  exactly `date,open,high,low,close,volume`; every data row must have
+  exactly six unquoted, unwhitespaced fields. Dates/prices/volume are
+  parsed under strict regex grammars — never through `double` — then
+  `new Bar(...)` is the sole semantic authority; its
+  `IllegalArgumentException` is caught and rewrapped as
+  `InvalidCsvDataException(line, message)`, never duplicated. The one
+  deliberate exception is date ordering: the parser itself tracks the
+  previous row's date so a duplicate/out-of-order date can be reported
+  with its exact line — `BarSeries` still re-validates the complete
+  sequence as the final authority. `MalformedCsvException` (syntax) maps
+  to 400; `InvalidCsvDataException` (semantics/ordering/empty-dataset) to
+  422.
+- **Price canonicalization:** `stripTrailingZeros()`, then `setScale(0)`
+  if scale is negative — the same rule as `BacktestConfig`/`CashFraction`,
+  copied into a small backend-local `DatasetContent.canonicalPrice`
+  method rather than exposed from the engine. Applied to O/H/L/C only,
+  before `Bar` construction, so the validated `BarSeries`, the stored
+  `dataset_bar` rows, and the content hash all agree on scale (`100`,
+  `100.0`, `100.00` all become one value).
+- **Content hash** (`DatasetContent`): SHA-256, lowercase hex, over the
+  payload `PARALLAX-BARS/1\n<symbol>\n<date>,<open>,<high>,<low>,<close>,
+  <volume>\n...` (UTF-8, every line including the last ending in one LF;
+  dates via `toString()`, prices via canonical `toPlainString()`, volume
+  via `Long.toString`). Computed from the **normalized `BarSeries`**,
+  never raw CSV bytes — different byte-level formatting that parses to
+  the same series produces the same hash. `DatasetContent.of` rejects a
+  non-canonical price rather than silently normalizing it. SHA-256 stays
+  a private `DatasetContent` method rather than a shared helper with
+  D-30's codec: the two hash entirely different payload shapes, and
+  duplicating six lines is cheaper than a shared package for that (this
+  closes D-30's "Rejected" note anticipating this batch as the second use
+  case).
+- **Transaction/version allocation:** identical shape to D-31 — CSV
+  parsing, `BarSeries` construction, canonicalization, and hashing all
+  happen **before** any transaction opens; a short transaction then takes
+  an owner-scoped `SELECT ... FOR UPDATE` on `Dataset`, allocates `latest
+  + 1`, updates the parent, inserts the `DatasetVersion`, and batch-inserts
+  every `dataset_bar` row (JDBC batch size 1000) — all on one connection,
+  no network/file I/O while the lock is held. A failed attempt rolls back
+  the counter, the version row, and every bar row; `uq_dataset_version_number`
+  is the backstop, mapped to `DatasetVersionConflictException` (409).
+- **`dataset_bar` is plain JDBC, not a JPA entity** (a deliberate
+  departure from D-31's all-Spring-Data style): an assigned composite key
+  with no surrogate id would make Spring Data's `save` issue a `merge`
+  (one `SELECT` per row), and thousands of managed entities per read add
+  nothing for rows that are never individually edited. A package-private
+  `DatasetBarRepository` (`JdbcTemplate`) exposes only a batch
+  `insertAll` and an owner-scoped, date-ordered `findOwned` — no
+  update/delete method exists, matching the table's own immutability
+  triggers. It is the only place a `BarSeries` can be assembled outside
+  this decision's own verification path.
+- **Ownership:** identical shape to D-31 §10 — every repository method
+  owner-scoped (`findByIdAndOwnerId`/`lockByIdAndOwnerId` on `Dataset`;
+  `findOwned`/`findAllOwned` on `DatasetVersion` joining through
+  `Dataset`; `DatasetBarRepository.findOwned` joining through both).
+  Missing and cross-owner resources are indistinguishable, both 404.
+- **Integrity verification** (`DatasetService.getVerifiedSeries` — the
+  **only** way a `BarSeries` leaves the `dataset` package): reconstructs
+  the series from stored bars, then `DatasetContent.verify` recomputes
+  the hash/count/first/last date and compares against the stored values
+  exactly. Any mismatch — including a non-canonical stored price, caught
+  the same way `DatasetContent.of` catches it — is a
+  `DatasetIntegrityException` (500, logged, generic body). Nothing is
+  ever repaired or resaved. A metadata-only `getVersion` never reads bars
+  and therefore never verifies.
+- **Adjustment basis:** required on every version, no default (silently
+  defaulting to `RAW` would risk mislabeling adjusted data); an
+  unverified uploader declaration, excluded from the content hash, and
+  ignored by the engine. D-32 performs no adjustment calculation of any
+  kind.
+- **REST:** `POST`/`GET`/`GET {id}` for datasets;
+  `POST`/`GET`/`GET {version}`/`GET {version}/bars` under
+  `.../{id}/versions` — no PATCH/PUT/DELETE, no pagination. The dataset
+  create body is read by the same strict D-30 codec reader used for every
+  other request envelope (`StrategyDefinitionCodec.parseRequest`, no
+  strategy-definition content involved) — never Spring's lenient global
+  binding. Version creation reads a raw `MultipartHttpServletRequest`
+  directly (not `@RequestParam` binding) to enforce the exact multipart
+  shape: exactly one `file` part, exactly one `adjustmentBasis` value
+  (case-sensitive, no default), nothing else. Bars are returned
+  unpaginated, with prices as JSON strings (the D-30 precedent) and
+  volume as a JSON number.
+
+**Why:** market data must be abstracted behind a provider interface
+eventually (CLAUDE.md), but CSV upload is the only source D-32 has —
+introducing `MarketDataProvider` now, with one implementation, would be
+exactly the kind of speculative abstraction CLAUDE.md warns against; it
+is added when Alpha Vantage (a second, genuinely different source)
+arrives. The composite FK (rather than relying on the hash alone to catch
+symbol drift) makes an inconsistent version unrepresentable at the
+database level, not merely detectable after the fact.
+
+**Rejected:** a `MarketDataProvider` interface before a second source
+exists; a shared SHA-256 helper package (D-30's anticipated one — the two
+payload shapes never overlap); OHLC semantic CHECK constraints in SQL
+(would duplicate `Bar`'s authority); a JPA entity for `dataset_bar`; a
+Dataset metadata PATCH in this batch; defaulting `adjustmentBasis` to
+`RAW`; a CSV library for a fixed, unquoted 6-field format; sorting or
+repairing out-of-order/duplicate CSV rows; trusting a stored `content_hash`
+without recomputing it; pagination on the bars endpoint; dataset
+sharing/public datasets.
+
+**Consequence:** the exact historical dataset snapshot a future
+`BacktestRun` will reference now exists and is independently verifiable.
+Alpha Vantage integration, backtest orchestration, and result persistence
+remain future checkpoints.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
