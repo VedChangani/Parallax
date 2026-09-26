@@ -1,7 +1,7 @@
 import { useParams } from 'react-router';
-import { PlaceholderPage } from '../../components/PlaceholderPage.jsx';
+import { StrategyDetailPage as StrategyDetailView } from '../../features/strategies/StrategyDetailPage.jsx';
 
 export function StrategyDetailPage() {
   const { id } = useParams();
-  return <PlaceholderPage title={`Strategy #${id}`} description="Strategy detail and version history." />;
+  return <StrategyDetailView strategyId={Number(id)} />;
 }

@@ -1,7 +1,7 @@
 import { useParams } from 'react-router';
-import { PlaceholderPage } from '../../components/PlaceholderPage.jsx';
+import { StrategyVersionNewPage as StrategyVersionNewPageView } from '../../features/strategies/StrategyVersionNewPage.jsx';
 
 export function StrategyVersionNewPage() {
   const { id } = useParams();
-  return <PlaceholderPage title={`New version for strategy #${id}`} description="Create a new immutable version." />;
+  return <StrategyVersionNewPageView strategyId={Number(id)} />;
 }

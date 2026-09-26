@@ -1,5 +1,5 @@
-import { PlaceholderPage } from '../../components/PlaceholderPage.jsx';
+import { StrategyNewPage as StrategyNewPageView } from '../../features/strategies/StrategyNewPage.jsx';
 
 export function StrategyNewPage() {
-  return <PlaceholderPage title="New strategy" description="Define a new structured strategy." />;
+  return <StrategyNewPageView />;
 }
