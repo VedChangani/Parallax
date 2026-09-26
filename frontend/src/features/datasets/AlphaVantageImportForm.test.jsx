@@ -35,9 +35,9 @@ describe('AlphaVantageImportForm', () => {
     globalThis.fetch.mockResolvedValue(jsonResponse({ datasetId: 7, versionNumber: 1, barCount: 100 }, 201));
     renderForm();
 
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
-    await screen.findByText(/Created version 1/);
+    await screen.findByText(/Loaded snapshot v1/);
     const [path, init] = globalThis.fetch.mock.calls[0];
     expect(path).toBe('/api/datasets/7/versions/alpha-vantage');
     const body = JSON.parse(init.body);
@@ -50,9 +50,9 @@ describe('AlphaVantageImportForm', () => {
     renderForm();
 
     fireEvent.click(screen.getByLabelText(/full/i));
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
-    await screen.findByText(/Created version 1/);
+    await screen.findByText(/Loaded snapshot v1/);
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(JSON.parse(init.body)).toEqual({ historyDepth: 'FULL' });
   });
@@ -62,9 +62,9 @@ describe('AlphaVantageImportForm', () => {
     globalThis.fetch.mockResolvedValue(jsonResponse(version, 201));
     const onImported = renderForm();
 
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
-    await screen.findByText(/Created version 4/);
+    await screen.findByText(/Loaded snapshot v4/);
     expect(onImported).toHaveBeenCalledWith(version);
   });
 
@@ -73,7 +73,7 @@ describe('AlphaVantageImportForm', () => {
       jsonResponse({ title: 'Market data request rejected', detail: 'unknown symbol' }, 422),
     );
     renderForm();
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
     expect(await screen.findByText('unknown symbol')).toBeTruthy();
   });
@@ -83,7 +83,7 @@ describe('AlphaVantageImportForm', () => {
       jsonResponse({ title: 'Market data unavailable', detail: 'rate limit exceeded' }, 503),
     );
     renderForm();
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
     expect(await screen.findByText('rate limit exceeded')).toBeTruthy();
   });
@@ -93,7 +93,7 @@ describe('AlphaVantageImportForm', () => {
       jsonResponse({ title: 'Market data provider error', detail: 'malformed upstream response' }, 502),
     );
     renderForm();
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
     expect(await screen.findByText('malformed upstream response')).toBeTruthy();
   });
@@ -103,7 +103,7 @@ describe('AlphaVantageImportForm', () => {
       jsonResponse({ title: 'Internal error', detail: 'an internal error occurred' }, 500),
     );
     renderForm();
-    fireEvent.click(screen.getByRole('button', { name: /import from alpha vantage/i }));
+    fireEvent.click(screen.getByRole('button', { name: /load historical data/i }));
 
     expect(await screen.findByText('an internal error occurred')).toBeTruthy();
   });

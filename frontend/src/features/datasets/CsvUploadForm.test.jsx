@@ -37,7 +37,7 @@ describe('CsvUploadForm', () => {
 
   it('requires a file and an adjustment basis before submitting', () => {
     renderForm();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
     expect(screen.getByText('Choose a CSV file to upload.')).toBeTruthy();
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -47,7 +47,7 @@ describe('CsvUploadForm', () => {
     globalThis.fetch.mockResolvedValue(jsonResponse({ datasetId: 7, versionNumber: 1, barCount: 1 }, 201));
     renderForm();
     const file = selectFileAndBasis();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
 
@@ -65,9 +65,9 @@ describe('CsvUploadForm', () => {
     globalThis.fetch.mockResolvedValue(jsonResponse(version, 201));
     const onImported = renderForm();
     selectFileAndBasis();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
-    expect(await screen.findByText(/Created version 3/)).toBeTruthy();
+    expect(await screen.findByText(/Created snapshot v3/)).toBeTruthy();
     expect(onImported).toHaveBeenCalledWith(version);
   });
 
@@ -81,7 +81,7 @@ describe('CsvUploadForm', () => {
     renderForm();
     selectFileAndBasis();
 
-    const button = screen.getByRole('button', { name: /upload csv/i });
+    const button = screen.getByRole('button', { name: /import csv/i });
     fireEvent.click(button);
     expect(button.disabled).toBe(true);
     fireEvent.click(button);
@@ -96,7 +96,7 @@ describe('CsvUploadForm', () => {
     globalThis.fetch.mockResolvedValue(new Response(null, { status: 413 }));
     renderForm();
     selectFileAndBasis();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
     expect(await screen.findByText('This CSV file is too large.')).toBeTruthy();
   });
@@ -107,7 +107,7 @@ describe('CsvUploadForm', () => {
     );
     renderForm();
     selectFileAndBasis();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
     expect(await screen.findByText('line 3: close must be positive')).toBeTruthy();
   });
@@ -118,7 +118,7 @@ describe('CsvUploadForm', () => {
     );
     renderForm();
     selectFileAndBasis();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
     expect(await screen.findByText('an internal error occurred')).toBeTruthy();
   });
@@ -127,7 +127,7 @@ describe('CsvUploadForm', () => {
     globalThis.fetch.mockRejectedValue(new TypeError('Failed to fetch'));
     renderForm();
     selectFileAndBasis();
-    fireEvent.click(screen.getByRole('button', { name: /upload csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /import csv/i }));
 
     expect(await screen.findByText(/could not reach the backend/i)).toBeTruthy();
   });

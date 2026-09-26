@@ -77,7 +77,7 @@ describe('DatasetVersionPage', () => {
     stubFetch();
     renderVersion();
 
-    expect(await screen.findByRole('heading', { name: 'AAPL — version 2' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'AAPL' })).toBeTruthy();
     expect(screen.getByText('Immutable')).toBeTruthy();
     expect(screen.getByText('CSV upload')).toBeTruthy();
     expect(screen.getByText('Raw')).toBeTruthy();
@@ -107,7 +107,7 @@ describe('DatasetVersionPage', () => {
     stubFetch();
     renderVersion();
 
-    await screen.findByRole('heading', { name: 'AAPL — version 2' });
+    await screen.findByRole('heading', { name: 'AAPL' });
     expect(globalThis.fetch.mock.calls.some(([url]) => /\/bars$/.test(url))).toBe(false);
   });
 
@@ -115,8 +115,8 @@ describe('DatasetVersionPage', () => {
     stubFetch();
     renderVersion();
 
-    await screen.findByRole('heading', { name: 'AAPL — version 2' });
-    fireEvent.click(screen.getByRole('button', { name: /view bars/i }));
+    await screen.findByRole('heading', { name: 'AAPL' });
+    fireEvent.click(screen.getByRole('button', { name: /view historical bars/i }));
 
     expect(await screen.findByText('2024-01-01')).toBeTruthy();
     expect(globalThis.fetch.mock.calls.some(([url]) => /\/bars$/.test(url))).toBe(true);
@@ -126,7 +126,7 @@ describe('DatasetVersionPage', () => {
     stubFetch();
     renderVersion();
 
-    await screen.findByRole('heading', { name: 'AAPL — version 2' });
+    await screen.findByRole('heading', { name: 'AAPL' });
     expect(immutableCache.has('/api/datasets/7/versions/2')).toBe(true);
     expect(immutableCache.get('/api/datasets/7/versions/2')).toEqual(sampleVersion);
   });

@@ -3,7 +3,7 @@ import { NavLink } from 'react-router';
 const LINKS = [
   { to: '/backtests', label: 'Backtests' },
   { to: '/strategies', label: 'Strategies' },
-  { to: '/datasets', label: 'Datasets' },
+  { to: '/datasets', label: 'Markets' },
 ];
 
 /** Persistent primary navigation, shared by every page via AppLayout. */

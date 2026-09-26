@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { importAlphaVantage } from '../../api/datasets.js';
+import { Badge } from '../../components/Badge.jsx';
 import { Button } from '../../components/Button.jsx';
 
 /**
- * The Alpha Vantage import tool panel on the Dataset detail page (D-33
- * `POST /api/datasets/{id}/versions/alpha-vantage`). The API key is
- * backend configuration only - no key field exists here, and none is ever
- * sent in the request body.
+ * The primary "Historical data" acquisition panel on a market's page
+ * (backend: `POST /api/datasets/{id}/versions/alpha-vantage`, D-33). The
+ * API key is backend configuration only - no key field exists here, and
+ * none is ever sent in the request body.
  *
  * @param {object} props
  * @param {number} props.datasetId
@@ -38,15 +39,19 @@ export function AlphaVantageImportForm({ datasetId, onImported }) {
   }
 
   return (
-    <div className="rounded-md border border-border bg-surface p-5">
-      <h3 className="text-sm font-semibold text-ink">Import from Alpha Vantage</h3>
+    <div className="rounded-md border border-border bg-surface p-5 shadow-[2px_2px_0_0_var(--color-border)]">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-ink">Historical data</h3>
+        <Badge tone="accent">Recommended</Badge>
+      </div>
       <p className="mt-1 text-sm text-ink-secondary">
-        Fetch this symbol's daily bars directly from Alpha Vantage and create a new, immutable version.
+        Fetch this symbol's daily bars directly from Alpha Vantage and preserve them as a new, immutable data
+        snapshot.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
         <fieldset>
-          <legend className="block text-sm font-medium text-ink">History depth</legend>
+          <legend className="block text-sm font-medium text-ink">History</legend>
           <div className="mt-2 flex gap-4">
             <label className="flex items-center gap-2 text-sm text-ink">
               <input
@@ -56,7 +61,7 @@ export function AlphaVantageImportForm({ datasetId, onImported }) {
                 checked={historyDepth === 'COMPACT'}
                 onChange={() => setHistoryDepth('COMPACT')}
               />
-              Compact <span className="text-ink-muted">(recent history)</span>
+              Compact <span className="text-ink-muted">- recent daily history</span>
             </label>
             <label className="flex items-center gap-2 text-sm text-ink">
               <input
@@ -66,7 +71,7 @@ export function AlphaVantageImportForm({ datasetId, onImported }) {
                 checked={historyDepth === 'FULL'}
                 onChange={() => setHistoryDepth('FULL')}
               />
-              Full <span className="text-ink-muted">(entire available history)</span>
+              Full <span className="text-ink-muted">- extended history, where the provider permits it</span>
             </label>
           </div>
         </fieldset>
@@ -79,15 +84,15 @@ export function AlphaVantageImportForm({ datasetId, onImported }) {
 
         {result ? (
           <p role="status" className="text-sm text-success">
-            Created version {result.versionNumber} ({result.barCount} bars).{' '}
+            Loaded snapshot v{result.versionNumber} ({result.barCount} bars).{' '}
             <Link to={`/datasets/${datasetId}/versions/${result.versionNumber}`} className="font-medium underline">
-              View version
+              Open snapshot
             </Link>
           </p>
         ) : null}
 
-        <Button type="submit" variant="secondary" disabled={submitting} aria-busy={submitting}>
-          {submitting ? 'Importing…' : 'Import from Alpha Vantage'}
+        <Button type="submit" variant="primary" disabled={submitting} aria-busy={submitting}>
+          {submitting ? 'Loading…' : 'Load historical data'}
         </Button>
       </form>
     </div>
@@ -106,6 +111,6 @@ function describeImportError(error) {
     case 500:
       return error.detail ?? 'An internal error occurred while storing this version.';
     default:
-      return error.detail ?? error.title ?? 'Could not import from Alpha Vantage.';
+      return error.detail ?? error.title ?? 'Could not load historical data from Alpha Vantage.';
   }
 }

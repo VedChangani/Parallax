@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as immutableCache from '../../api/immutableCache.js';
@@ -13,13 +13,13 @@ function renderList() {
     <MemoryRouter initialEntries={['/datasets']}>
       <Routes>
         <Route path="/datasets" element={<DatasetListPage />} />
-        <Route path="/datasets/:id" element={<p>dataset detail page</p>} />
+        <Route path="/datasets/:id" element={<p>market detail page</p>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
-describe('DatasetListPage', () => {
+describe('DatasetListPage (Markets)', () => {
   beforeEach(() => {
     immutableCache.clear();
   });
@@ -32,29 +32,60 @@ describe('DatasetListPage', () => {
     globalThis.fetch = vi.fn(() => new Promise(() => {}));
     renderList();
 
-    expect(screen.getByRole('heading', { name: 'Datasets' })).toBeTruthy();
-    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Markets' })).toBeTruthy();
+    expect(screen.queryByRole('searchbox')).toBeNull();
   });
 
-  it('renders the dataset list on success', async () => {
+  it('renders market data on success', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       jsonResponse([
-        { id: 1, name: 'Apple daily', symbol: 'AAPL', latestVersionNumber: 2, createdAt: '2024-01-01T00:00:00Z' },
+        { id: 1, name: 'Apple Inc.', symbol: 'AAPL', latestVersionNumber: 2, createdAt: '2024-01-01T00:00:00Z' },
       ]),
     );
     renderList();
 
-    expect(await screen.findByRole('link', { name: 'Apple daily' })).toBeTruthy();
-    expect(screen.getByText('AAPL')).toBeTruthy();
-    expect(screen.getByText('v2')).toBeTruthy();
+    const link = await screen.findByRole('link', { name: /AAPL/ });
+    expect(link.textContent).toContain('Apple Inc.');
+    expect(link.textContent).toContain('Latest snapshot v2');
   });
 
-  it('shows an empty state with no datasets, explaining what a dataset is', async () => {
+  it('filters the list by symbol or display name', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse([
+        { id: 1, name: 'Apple Inc.', symbol: 'AAPL', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' },
+        { id: 2, name: 'Reliance Industries', symbol: 'RELIANCE', latestVersionNumber: 3, createdAt: '2024-01-01T00:00:00Z' },
+      ]),
+    );
+    renderList();
+
+    await screen.findByRole('link', { name: /AAPL/ });
+    expect(screen.getByRole('link', { name: /RELIANCE/ })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'reliance' } });
+
+    expect(screen.queryByRole('link', { name: /AAPL/ })).toBeNull();
+    expect(screen.getByRole('link', { name: /RELIANCE/ })).toBeTruthy();
+  });
+
+  it('shows a dedicated message when the search matches nothing', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse([{ id: 1, name: 'Apple Inc.', symbol: 'AAPL', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' }]),
+    );
+    renderList();
+
+    await screen.findByRole('link', { name: /AAPL/ });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'zzz' } });
+
+    expect(await screen.findByText('No markets match your search.')).toBeTruthy();
+  });
+
+  it('shows an inviting empty state with no markets yet', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse([]));
     renderList();
 
-    expect(await screen.findByText('No datasets yet')).toBeTruthy();
-    expect(screen.getByText(/versioned collection of daily bars/i)).toBeTruthy();
+    expect(await screen.findByText('No markets yet')).toBeTruthy();
+    expect(screen.getByText(/begin researching strategies/i)).toBeTruthy();
+    expect(screen.getByText(/preserve an immutable snapshot/i)).toBeTruthy();
   });
 
   it('shows an error state on failure, and recovers via retry', async () => {
@@ -68,29 +99,29 @@ describe('DatasetListPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /retry/i }));
 
-    expect(await screen.findByText('No datasets yet')).toBeTruthy();
+    expect(await screen.findByText('No markets yet')).toBeTruthy();
   });
 
-  it('navigates to the dataset detail page from the list', async () => {
+  it('navigates to the market detail page from the list', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       jsonResponse([
-        { id: 1, name: 'Apple daily', symbol: 'AAPL', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' },
+        { id: 1, name: 'Apple Inc.', symbol: 'AAPL', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' },
       ]),
     );
     renderList();
 
-    const link = await screen.findByRole('link', { name: 'Apple daily' });
+    const link = await screen.findByRole('link', { name: /AAPL/ });
     fireEvent.click(link);
 
-    expect(await screen.findByText('dataset detail page')).toBeTruthy();
+    expect(await screen.findByText('market detail page')).toBeTruthy();
   });
 
-  it('navigates to the newly created dataset after a successful inline creation', async () => {
+  it('navigates to the newly created market after a successful "Add market first" creation', async () => {
     globalThis.fetch = vi.fn((url, init) => {
       if (init?.method === 'POST') {
         return Promise.resolve(
           jsonResponse(
-            { id: 9, name: 'Apple daily', symbol: 'AAPL', latestVersionNumber: 0, createdAt: '2024-01-01T00:00:00Z' },
+            { id: 9, name: 'Apple Inc.', symbol: 'AAPL', latestVersionNumber: 0, createdAt: '2024-01-01T00:00:00Z' },
             201,
           ),
         );
@@ -99,20 +130,23 @@ describe('DatasetListPage', () => {
     });
     renderList();
 
-    await screen.findByText('No datasets yet');
-    fireEvent.click(screen.getByRole('button', { name: 'New dataset' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Apple daily' } });
-    fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'AAPL' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create dataset' }));
+    await screen.findByText('No markets yet');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add market' })[0]);
 
-    expect(await screen.findByText('dataset detail page')).toBeTruthy();
+    const panel = within(screen.getByRole('heading', { name: 'Add market' }).closest('div'));
+    fireEvent.click(panel.getByLabelText('Add market first'));
+    fireEvent.change(panel.getByLabelText('Symbol'), { target: { value: 'AAPL' } });
+    fireEvent.change(panel.getByLabelText('Display name'), { target: { value: 'Apple Inc.' } });
+    fireEvent.click(panel.getByRole('button', { name: 'Add market' }));
+
+    expect(await screen.findByText('market detail page')).toBeTruthy();
   });
 
-  it('never uses the immutable cache for the dataset list (mutable resource)', async () => {
+  it('never uses the immutable cache for the market list (mutable resource)', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse([]));
     renderList();
 
-    await screen.findByText('No datasets yet');
+    await screen.findByText('No markets yet');
     expect(immutableCache.has('/api/datasets')).toBe(false);
   });
 });

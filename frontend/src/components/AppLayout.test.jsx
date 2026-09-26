@@ -17,13 +17,13 @@ function renderLayoutAt(path) {
 }
 
 describe('AppLayout', () => {
-  it('renders persistent navigation exposing Backtests, Strategies, and Datasets', () => {
+  it('renders persistent navigation exposing Backtests, Strategies, and Markets', () => {
     renderLayoutAt('/backtests');
 
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Backtests' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Strategies' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Datasets' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Markets' })).toBeTruthy();
   });
 
   it('exposes a main landmark containing the routed page', () => {

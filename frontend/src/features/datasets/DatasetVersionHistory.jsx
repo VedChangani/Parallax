@@ -2,21 +2,17 @@ import { Link } from 'react-router';
 import { Badge } from '../../components/Badge.jsx';
 import { CopyButton } from '../../components/CopyButton.jsx';
 import { DataTable } from '../../components/DataTable.jsx';
+import { formatInstantDate } from '../../lib/format.js';
 
 const SOURCE_LABELS = {
   CSV_UPLOAD: 'CSV upload',
   ALPHA_VANTAGE: 'Alpha Vantage',
 };
 
-const ADJUSTMENT_BASIS_LABELS = {
-  RAW: 'Raw',
-  SPLIT_ADJUSTED: 'Split-adjusted',
-  SPLIT_AND_DIVIDEND_ADJUSTED: 'Split & dividend-adjusted',
-};
-
 /**
- * The version-history table on the Dataset detail page - every field the
- * backend actually returns for a DatasetVersion (D-32), newest first.
+ * "Data snapshots" - the user-facing name for the backend's DatasetVersion
+ * history (D-32). Every value shown comes directly from the actual
+ * DatasetVersionResponse fields; nothing is recomputed.
  *
  * @param {object} props
  * @param {number} props.datasetId
@@ -27,21 +23,14 @@ export function DatasetVersionHistory({ datasetId, versions }) {
 
   return (
     <DataTable
-      caption="Dataset version history"
+      caption="Data snapshots"
       rows={sorted}
       getRowKey={(row) => row.versionNumber}
       columns={[
         {
           key: 'versionNumber',
-          header: 'Version',
-          render: (row) => (
-            <Link
-              to={`/datasets/${datasetId}/versions/${row.versionNumber}`}
-              className="font-medium text-ink hover:text-accent"
-            >
-              v{row.versionNumber}
-            </Link>
-          ),
+          header: 'Snapshot',
+          render: (row) => <span className="font-medium text-ink">v{row.versionNumber}</span>,
         },
         {
           key: 'source',
@@ -49,28 +38,38 @@ export function DatasetVersionHistory({ datasetId, versions }) {
           render: (row) => <Badge tone="accent">{SOURCE_LABELS[row.source] ?? row.source}</Badge>,
         },
         {
-          key: 'sourceDetail',
-          header: 'Source detail',
-          render: (row) => <span className="text-ink-secondary">{row.sourceDetail}</span>,
+          key: 'coverage',
+          header: 'Coverage',
+          render: (row) => (
+            <span className="whitespace-nowrap">
+              {row.firstDate} → {row.lastDate}
+            </span>
+          ),
         },
-        {
-          key: 'adjustmentBasis',
-          header: 'Adjustment basis',
-          render: (row) => <Badge>{ADJUSTMENT_BASIS_LABELS[row.adjustmentBasis] ?? row.adjustmentBasis}</Badge>,
-        },
-        { key: 'barCount', header: 'Bars', align: 'right', render: (row) => row.barCount },
-        { key: 'firstDate', header: 'First date', render: (row) => row.firstDate },
-        { key: 'lastDate', header: 'Last date', render: (row) => row.lastDate },
+        { key: 'barCount', header: 'Bars', align: 'right', render: (row) => row.barCount.toLocaleString() },
+        { key: 'createdAt', header: 'Created', render: (row) => formatInstantDate(row.createdAt) },
         {
           key: 'contentHash',
-          header: 'Content hash',
+          header: 'Hash',
           render: (row) => (
             <div className="flex items-center gap-1.5">
               <span className="truncate font-mono text-xs text-ink-muted" title={row.contentHash}>
-                {row.contentHash.slice(0, 12)}…
+                {row.contentHash.slice(0, 10)}…
               </span>
-              <CopyButton value={row.contentHash} label="Copy hash" />
+              <CopyButton value={row.contentHash} label="Copy" />
             </div>
+          ),
+        },
+        {
+          key: 'open',
+          header: '',
+          render: (row) => (
+            <Link
+              to={`/datasets/${datasetId}/versions/${row.versionNumber}`}
+              className="whitespace-nowrap font-medium text-accent hover:underline"
+            >
+              Open snapshot →
+            </Link>
           ),
         },
       ]}

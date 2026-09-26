@@ -21,7 +21,8 @@ function renderDetail(datasetId = 7) {
     <MemoryRouter initialEntries={[`/datasets/${datasetId}`]}>
       <Routes>
         <Route path="/datasets/:id" element={<DatasetDetailPage datasetId={datasetId} />} />
-        <Route path="/datasets/:id/versions/:version" element={<p>dataset version page</p>} />
+        <Route path="/datasets/:id/versions/:version" element={<p>data snapshot page</p>} />
+        <Route path="/backtests/new" element={<p>new backtest page</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -29,7 +30,7 @@ function renderDetail(datasetId = 7) {
 
 const sampleDataset = {
   id: 7,
-  name: 'Apple daily',
+  name: 'Apple Inc.',
   symbol: 'AAPL',
   latestVersionNumber: 2,
   createdAt: '2024-01-01T00:00:00Z',
@@ -64,7 +65,7 @@ const sampleVersions = [
   },
 ];
 
-describe('DatasetDetailPage', () => {
+describe('DatasetDetailPage (Market)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -72,39 +73,41 @@ describe('DatasetDetailPage', () => {
   it('shows a loading state before data arrives', () => {
     globalThis.fetch = vi.fn(() => new Promise(() => {}));
     renderDetail();
-    expect(screen.getByText('Loading dataset…')).toBeTruthy();
+    expect(screen.getByText('Loading market…')).toBeTruthy();
   });
 
-  it('renders dataset metadata once loaded', async () => {
+  it('presents the current (latest) data snapshot', async () => {
     stubFetch({ dataset: sampleDataset, versions: sampleVersions });
     renderDetail();
 
-    expect(await screen.findByRole('heading', { name: 'Apple daily' })).toBeTruthy();
-    expect(screen.getAllByText('AAPL').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('v2').length).toBeGreaterThan(0);
-    expect(screen.getByText('2', { selector: 'dd' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'AAPL' })).toBeTruthy();
+    expect(screen.getByText(/Apple Inc\. · daily historical data/)).toBeTruthy();
+    expect(screen.getByText('Latest data snapshot')).toBeTruthy();
+    expect(screen.getByText('Snapshot v2 · immutable')).toBeTruthy();
+    expect(screen.getAllByText('2022-01-01 → 2023-06-01').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('250').length).toBeGreaterThan(0);
   });
 
-  it('renders the version history table with the actual backend fields', async () => {
+  it('renders the data-snapshots table with the actual backend fields', async () => {
     stubFetch({ dataset: sampleDataset, versions: sampleVersions });
     renderDetail();
 
-    await screen.findByRole('heading', { name: 'Apple daily' });
-    expect(screen.getByRole('link', { name: 'v2' })).toBeTruthy();
+    await screen.findByRole('heading', { name: 'AAPL' });
+    expect(screen.getByRole('heading', { name: 'Data snapshots (2)' })).toBeTruthy();
     expect(screen.getByText('CSV upload')).toBeTruthy();
-    expect(screen.getByText('Alpha Vantage')).toBeTruthy();
-    expect(screen.getByText('initial.csv')).toBeTruthy();
-    expect(screen.getByText('2023-01-01')).toBeTruthy();
+    expect(screen.getAllByText('Alpha Vantage').length).toBeGreaterThan(0);
+    expect(screen.getByText('2023-01-01 → 2023-06-01')).toBeTruthy();
   });
 
-  it('shows an empty state when a dataset has no versions yet', async () => {
+  it('shows an empty state when a market has no data snapshots yet', async () => {
     stubFetch({ dataset: { ...sampleDataset, latestVersionNumber: 0 }, versions: [] });
     renderDetail();
 
-    expect(await screen.findByText('No versions yet')).toBeTruthy();
+    expect(await screen.findByText('No data snapshots yet')).toBeTruthy();
+    expect(screen.getByText('No data snapshot yet. Load historical data below to begin.')).toBeTruthy();
   });
 
-  it('shows an error state when the dataset does not exist (404)', async () => {
+  it('shows an error state when the market does not exist (404)', async () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(jsonResponse({ title: 'Not found', detail: 'dataset 7 does not exist' }, 404));
@@ -113,13 +116,43 @@ describe('DatasetDetailPage', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
   });
 
-  it('navigates from version history to the version detail page', async () => {
+  it('offers "Create backtest" navigation to /backtests/new', async () => {
     stubFetch({ dataset: sampleDataset, versions: sampleVersions });
     renderDetail();
 
-    const link = await screen.findByRole('link', { name: 'v2' });
+    const link = await screen.findByRole('link', { name: 'Create backtest' });
     fireEvent.click(link);
 
-    expect(await screen.findByText('dataset version page')).toBeTruthy();
+    expect(await screen.findByText('new backtest page')).toBeTruthy();
+  });
+
+  it('navigates from the latest-snapshot panel to the snapshot detail page', async () => {
+    stubFetch({ dataset: sampleDataset, versions: sampleVersions });
+    renderDetail();
+
+    const link = await screen.findByRole('link', { name: 'Open snapshot' });
+    fireEvent.click(link);
+
+    expect(await screen.findByText('data snapshot page')).toBeTruthy();
+  });
+
+  it('navigates from the data-snapshots table to a specific snapshot', async () => {
+    stubFetch({ dataset: sampleDataset, versions: sampleVersions });
+    renderDetail();
+
+    await screen.findByRole('heading', { name: 'AAPL' });
+    const links = screen.getAllByRole('link', { name: /open snapshot/i });
+    fireEvent.click(links[links.length - 1]);
+
+    expect(await screen.findByText('data snapshot page')).toBeTruthy();
+  });
+
+  it('keeps CSV import available as a secondary, collapsed "Advanced data import" section', async () => {
+    stubFetch({ dataset: sampleDataset, versions: sampleVersions });
+    renderDetail();
+
+    await screen.findByRole('heading', { name: 'AAPL' });
+    expect(screen.getByText('Advanced data import - custom CSV')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Load historical data' })).toBeTruthy();
   });
 });

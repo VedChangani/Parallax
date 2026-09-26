@@ -80,22 +80,22 @@ describe('AppRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Strategy #42 — version 3' })).toBeTruthy();
   });
 
-  it('renders the datasets list route', () => {
+  it('renders the markets list route', () => {
     stubDatasetFetch();
     renderAt('/datasets');
-    expect(screen.getByRole('heading', { name: 'Datasets' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Markets' })).toBeTruthy();
   });
 
-  it('renders the dataset detail route using the route param', async () => {
+  it('renders the market detail route using the route param', async () => {
     stubDatasetFetch();
     renderAt('/datasets/7');
-    expect(await screen.findByRole('heading', { name: 'Apple daily' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'AAPL' })).toBeTruthy();
   });
 
-  it('renders the dataset version route using both route params', async () => {
+  it('renders the data snapshot route using both route params', async () => {
     stubDatasetFetch();
     renderAt('/datasets/7/versions/2');
-    expect(await screen.findByRole('heading', { name: 'AAPL — version 2' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'AAPL' })).toBeTruthy();
   });
 
   it('renders the new-backtest placeholder', () => {
