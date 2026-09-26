@@ -43,8 +43,14 @@ import java.util.regex.Pattern;
 @Component
 public final class StrategyDefinitionMapper {
 
-    /** {@code -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?} — the approved D-30 decimal grammar. */
-    static final Pattern DECIMAL = Pattern.compile("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?");
+    /**
+     * {@code -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?} — the approved
+     * D-30 decimal grammar. Public so a second, unrelated JSON boundary
+     * (D-34's {@code BacktestConfigMapper}) can reuse the exact same syntax
+     * rule rather than duplicating it; this is the only D-30 source change
+     * D-34 makes.
+     */
+    public static final Pattern DECIMAL = Pattern.compile("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?");
 
     // --- DTO -> engine -------------------------------------------------------
 

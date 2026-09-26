@@ -1933,10 +1933,26 @@ JPA entity/association. A `Fill`/`OrderRejection`'s triggering
 (`IndicatorSnapshotJson`), independent of the D-30 strategy-definition
 codec.
 
-Not yet implemented: run orchestration (`BacktestRunService`, invoking
-`Backtester`/`PerformanceMetrics`/`BuyAndHoldBenchmark` and mapping their
-output into the above), the read-time result-integrity verifier, REST
-endpoints, Spring Security/authentication (`password_hash`, BCrypt, HTTP
-Basic), and the frontend. See decisions.md's D-29/D-30/D-31/D-32/D-33
-entries and the Phase 7 design review for the approved plan and batch
-sequence.
+Run orchestration and read-time integrity verification are implemented
+(`BacktestRunService`): `createRun` verifies the owned, immutable strategy
+and dataset versions, validates the requested range against the dataset's
+actual bars, invokes `Backtester`/`PerformanceMetrics`/`BuyAndHoldBenchmark`
+outside any transaction, and persists the complete run atomically in one
+short write transaction (`BacktestRunWriter`).
+
+Reading a run has two deliberately different costs. `getRun` (one run)
+reconstructs every child row through its engine constructor and runs the
+full structural and cross-field integrity verification described above —
+this is the only place that check happens. `listRuns` (an owner's run
+history) returns cheap, owner-scoped `BacktestRunSummary` identity/metadata
+only, read directly off the `backtest_run` parent row; it does not load or
+verify any child row, so listing an owner's runs never touches the
+potentially many thousands of equity/fill/rejection rows behind them. A
+summary from `listRuns` is not a guarantee that a run's children pass
+integrity verification — only `getRun` establishes that, on demand, for one
+run at a time.
+
+Not yet implemented: REST endpoints, Spring Security/authentication
+(`password_hash`, BCrypt, HTTP Basic), and the frontend. See decisions.md's
+D-29/D-30/D-31/D-32/D-33 entries and the Phase 7 design review for the
+approved plan and batch sequence.
