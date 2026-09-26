@@ -118,12 +118,14 @@ class DatasetSchemaIT {
 
     @Test
     void sourceCheckRejectsAnUnknownSource() {
+        // 'ALPHA_VANTAGE' is no longer unknown (D-33 Batch 3) — this uses a value that is
+        // still not one of the two known DatasetSource values.
         long datasetId = createDatasetId(user(), "AAPL");
         assertThrows(DataAccessException.class, () -> jdbcTemplate.update("""
                 insert into dataset_version
                     (dataset_id, version_number, symbol, source, source_detail, adjustment_basis,
                      bar_count, first_date, last_date, content_hash)
-                values (?, 1, 'AAPL', 'ALPHA_VANTAGE', 'x', 'RAW', 1, '2024-01-02', '2024-01-02', ?)
+                values (?, 1, 'AAPL', 'MANUAL_ENTRY', 'x', 'RAW', 1, '2024-01-02', '2024-01-02', ?)
                 """, datasetId, "0".repeat(64)));
     }
 

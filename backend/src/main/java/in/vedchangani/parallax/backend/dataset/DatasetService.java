@@ -1,6 +1,9 @@
 package in.vedchangani.parallax.backend.dataset;
 
 import in.vedchangani.parallax.backend.dataset.csv.CsvBarParser;
+import in.vedchangani.parallax.backend.marketdata.DailyBars;
+import in.vedchangani.parallax.backend.marketdata.HistoryDepth;
+import in.vedchangani.parallax.backend.marketdata.MarketDataProvider;
 import in.vedchangani.parallax.backend.user.UserId;
 import in.vedchangani.parallax.engine.data.Bar;
 import in.vedchangani.parallax.engine.data.BarSeries;
@@ -12,6 +15,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -36,6 +40,15 @@ import java.util.Objects;
  * <p><strong>Every write to a {@link Dataset} row goes through {@link
  * DatasetRepository#lockByIdAndOwnerId}</strong> — including version-number
  * allocation — never only {@link DatasetRepository#findByIdAndOwnerId}.
+ *
+ * <p><strong>Alpha Vantage (D-33 Batch 3).</strong> {@link
+ * #createVersionFromAlphaVantage} follows the exact same shape as {@link
+ * #createVersionFromCsv} — fetch/canonicalize/hash entirely outside any
+ * transaction, then persist through the shared {@link #persistVersion}
+ * helper, so there is only one lock/allocate/insert code path for every
+ * {@link DatasetSource}, never a parallel one. {@code
+ * marketDataProvider.fetchDailyBars} is real network I/O and must never be
+ * called while the write transaction's row lock is held.
  */
 @Service
 public class DatasetService {
@@ -43,14 +56,17 @@ public class DatasetService {
     private final DatasetRepository datasetRepository;
     private final DatasetVersionRepository versionRepository;
     private final DatasetBarRepository barRepository;
+    private final MarketDataProvider marketDataProvider;
     private final TransactionTemplate writeTransactionTemplate;
     private final TransactionTemplate readOnlyTransactionTemplate;
 
     public DatasetService(DatasetRepository datasetRepository, DatasetVersionRepository versionRepository,
-                           DatasetBarRepository barRepository, PlatformTransactionManager transactionManager) {
+                           DatasetBarRepository barRepository, PlatformTransactionManager transactionManager,
+                           MarketDataProvider marketDataProvider) {
         this.datasetRepository = datasetRepository;
         this.versionRepository = versionRepository;
         this.barRepository = barRepository;
+        this.marketDataProvider = marketDataProvider;
 
         this.writeTransactionTemplate = new TransactionTemplate(transactionManager);
         this.writeTransactionTemplate.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -123,25 +139,51 @@ public class DatasetService {
         BarSeries series = new BarSeries(symbol, bars);
         DatasetContent content = DatasetContent.of(series);
 
-        DatasetVersion version = writeTransactionTemplate.execute(status -> {
-            Dataset dataset = datasetRepository.lockByIdAndOwnerId(datasetId, owner.value())
-                    .orElseThrow(() -> new DatasetNotFoundException(datasetId));
-            if (!dataset.symbol().equals(series.symbol())) {
-                // Unreachable given Dataset.symbol's immutability (D-32) — surfaced as an
-                // engine-bug-style failure rather than silently proceeding with a mismatch.
-                throw new IllegalStateException("dataset symbol changed between read and lock: "
-                        + dataset.symbol() + " vs " + series.symbol());
-            }
-            int nextVersionNumber = dataset.allocateNextVersionNumber();
-            datasetRepository.saveAndFlush(dataset);
+        DatasetVersion version = persistVersion(owner, datasetId, series, content, DatasetSource.CSV_UPLOAD,
+                sourceDetail, basis, bars);
 
-            DatasetVersion created = new DatasetVersion(dataset.id(), nextVersionNumber, dataset.symbol(),
-                    DatasetSource.CSV_UPLOAD, sourceDetail, basis, content);
-            DatasetVersion saved = saveVersionOrThrowConflict(created, datasetId);
+        return DatasetVersionSummary.of(version);
+    }
 
-            barRepository.insertAll(saved.id(), bars);
-            return saved;
-        });
+    /**
+     * Fetches Alpha Vantage daily bars for {@code datasetId}'s own symbol
+     * (D-32's {@code Dataset.symbol}, passed to the provider verbatim — no
+     * mapping or normalization), entirely before opening any transaction,
+     * then canonicalizes and hashes them exactly like {@link
+     * #createVersionFromCsv} before persisting through the shared {@link
+     * #persistVersion} sequence. Alpha Vantage's {@code TIME_SERIES_DAILY}
+     * is not split/dividend-adjusted, so {@code adjustmentBasis} is always
+     * {@link AdjustmentBasis#RAW} — never a caller-supplied value. {@code
+     * sourceDetail} is whatever {@link MarketDataProvider#fetchDailyBars}
+     * actually returned (e.g. {@code "TIME_SERIES_DAILY;outputsize=compact"}),
+     * not reconstructed here, so it can never drift from what was actually
+     * fetched.
+     *
+     * <p>Canonicalizing provider bars is required, not optional: {@link
+     * DatasetContent#of} rejects a non-canonical price, and the Alpha
+     * Vantage parser deliberately performs no canonicalization of its own
+     * (that is a dataset-layer concern, not a parser concern) — so without
+     * this step, identical logical bars from Alpha Vantage and a CSV
+     * upload could otherwise hash differently.
+     */
+    public DatasetVersionSummary createVersionFromAlphaVantage(UserId owner, long datasetId, HistoryDepth depth) {
+        Objects.requireNonNull(owner, "owner must not be null");
+        Objects.requireNonNull(depth, "depth must not be null");
+
+        // Outside any write transaction: resolve the dataset's immutable symbol first,
+        // so a nonexistent/cross-owner dataset 404s before the provider is ever called.
+        String symbol = readOnlyTransactionTemplate.execute(status -> loadOwned(owner, datasetId).symbol());
+
+        // Outside any transaction: fetch over the network, canonicalize, and hash. No
+        // database access happens here — network I/O must never occur while a row lock
+        // is held.
+        DailyBars daily = marketDataProvider.fetchDailyBars(symbol, depth);
+        List<Bar> bars = canonicalize(daily.bars());
+        BarSeries series = new BarSeries(symbol, bars);
+        DatasetContent content = DatasetContent.of(series);
+
+        DatasetVersion version = persistVersion(owner, datasetId, series, content, DatasetSource.ALPHA_VANTAGE,
+                daily.sourceDetail(), AdjustmentBasis.RAW, bars);
 
         return DatasetVersionSummary.of(version);
     }
@@ -205,6 +247,64 @@ public class DatasetService {
     }
 
     // --- internal helpers ----------------------------------------------------
+
+    /**
+     * The single lock/allocate/insert sequence shared by every {@link
+     * DatasetSource} (D-32's original algorithm, reused verbatim rather than
+     * duplicated for D-33 Batch 3): takes the owner-scoped row lock,
+     * allocates {@code latest + 1}, inserts the immutable version, then
+     * batch-inserts every bar. If anything here throws, the whole
+     * transaction — including the parent counter increment — rolls back, so
+     * a failed attempt never consumes a version number and never leaves an
+     * orphan bar row.
+     */
+    private DatasetVersion persistVersion(UserId owner, long datasetId, BarSeries series, DatasetContent content,
+                                           DatasetSource source, String sourceDetail, AdjustmentBasis basis,
+                                           List<Bar> bars) {
+        return writeTransactionTemplate.execute(status -> {
+            Dataset dataset = datasetRepository.lockByIdAndOwnerId(datasetId, owner.value())
+                    .orElseThrow(() -> new DatasetNotFoundException(datasetId));
+            if (!dataset.symbol().equals(series.symbol())) {
+                // Unreachable given Dataset.symbol's immutability (D-32) — surfaced as an
+                // engine-bug-style failure rather than silently proceeding with a mismatch.
+                throw new IllegalStateException("dataset symbol changed between read and lock: "
+                        + dataset.symbol() + " vs " + series.symbol());
+            }
+            int nextVersionNumber = dataset.allocateNextVersionNumber();
+            datasetRepository.saveAndFlush(dataset);
+
+            DatasetVersion created = new DatasetVersion(dataset.id(), nextVersionNumber, dataset.symbol(),
+                    source, sourceDetail, basis, content);
+            DatasetVersion saved = saveVersionOrThrowConflict(created, datasetId);
+
+            barRepository.insertAll(saved.id(), bars);
+            return saved;
+        });
+    }
+
+    /**
+     * Applies D-32's price canonicalization ({@link
+     * DatasetContent#canonicalPrice}) to every provider bar's O/H/L/C before
+     * it reaches {@link BarSeries}/{@link DatasetContent#of} — the same
+     * normalization {@link CsvBarParser} applies before constructing a
+     * {@link Bar}, just applied after construction here since {@link
+     * DailyBars} already hands back validated {@link Bar} objects. Never
+     * changes a bar's numeric value or its date/volume, only the scale of
+     * its prices, so this can never turn an already-valid {@link Bar} into
+     * an invalid one.
+     */
+    private static List<Bar> canonicalize(List<Bar> bars) {
+        List<Bar> canonical = new ArrayList<>(bars.size());
+        for (Bar bar : bars) {
+            canonical.add(new Bar(bar.date(),
+                    DatasetContent.canonicalPrice(bar.open()),
+                    DatasetContent.canonicalPrice(bar.high()),
+                    DatasetContent.canonicalPrice(bar.low()),
+                    DatasetContent.canonicalPrice(bar.close()),
+                    bar.volume()));
+        }
+        return canonical;
+    }
 
     private Dataset loadOwned(UserId owner, long datasetId) {
         return datasetRepository.findByIdAndOwnerId(datasetId, owner.value())

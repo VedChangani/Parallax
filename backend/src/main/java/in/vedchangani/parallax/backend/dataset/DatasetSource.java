@@ -1,12 +1,14 @@
 package in.vedchangani.parallax.backend.dataset;
 
 /**
- * Where a {@link DatasetVersion}'s bars came from (D-32). {@link
- * #CSV_UPLOAD} is the only value D-32 implements; a provider-backed source
- * (e.g. Alpha Vantage) is a later, separate batch — no {@code
- * MarketDataProvider} abstraction is introduced until a second source
- * actually exists.
+ * Where a {@link DatasetVersion}'s bars came from. {@link #CSV_UPLOAD} is
+ * D-32's original source; {@link #ALPHA_VANTAGE} is D-33 Batch 3's
+ * provider-backed source, fetched through the {@code
+ * in.vedchangani.parallax.backend.marketdata.MarketDataProvider}
+ * abstraction and persisted through the same {@code DatasetService}
+ * pipeline as a CSV upload.
  */
 public enum DatasetSource {
-    CSV_UPLOAD
+    CSV_UPLOAD,
+    ALPHA_VANTAGE
 }

@@ -1470,12 +1470,13 @@ in advance.
 
 ---
 
-# Backend Architecture (Phase 7 — D-29/D-30/D-31/D-32 implemented)
+# Backend Architecture (Phase 7 — D-29/D-30/D-31/D-32/D-33 implemented)
 
 Status: the foundation (D-29), the strategy-definition JSON boundary
-(D-30), strategy persistence/ownership/REST (D-31), and dataset
-persistence/CSV ingestion (D-32, below) are implemented. Backtests and
-security remain future checkpoints.
+(D-30), strategy persistence/ownership/REST (D-31), dataset
+persistence/CSV ingestion (D-32, below), and Alpha Vantage ingestion end to
+end — provider, dataset persistence, and REST (D-33, below) — are
+implemented. Backtests and security remain future checkpoints.
 
 ## Dependency direction
 
@@ -1791,20 +1792,126 @@ shape — exactly one `file` part, exactly one `adjustmentBasis` value
 unpaginated, with prices as JSON strings (the D-30 precedent) and volume
 as a JSON number.
 
-**Why no `MarketDataProvider` interface yet:** CLAUDE.md requires market
-data to be abstracted behind a provider interface eventually, but CSV
-upload is D-32's only source. Introducing the interface now, with one
-implementation, would be exactly the speculative abstraction CLAUDE.md
-warns against — it is added when Alpha Vantage (a genuinely second
-source) arrives.
-
 See decisions.md's D-32 entry for the exact rationale and rejected
+alternatives.
+
+## Alpha Vantage market data provider (D-33)
+
+Package `marketdata` (contracts: `MarketDataProvider`, `DailyBars`,
+`HistoryDepth`, the `MarketDataException` hierarchy — all Spring-free) and
+`marketdata.alphavantage` (the one implementation so far). `MarketDataProvider`
+is a single blocking `fetchDailyBars(symbol, depth)` method; it knows nothing
+about `Dataset`, persistence, or ownership — normalizing a fetched
+`DailyBars` into a `Dataset`/`DatasetVersion` is `DatasetService`'s job
+(D-33 Batch 3, below), not the provider's.
+
+**Parser** (`AlphaVantageDailyParser`, plain Java, no Spring dependency):
+parses/validates a `TIME_SERIES_DAILY` JSON document. Alpha Vantage's own
+control-response keys (`Error Message`, `Information`, `Note`) are
+classified before any success-shape validation runs; every other top-level
+and per-bar field is checked against the exact documented shape (no
+extra/missing fields, correct JSON types, strict date/price/volume
+grammars) — never repaired or silently skipped. `Bar` remains the sole
+semantic authority for OHLCV validity; its `IllegalArgumentException` is
+caught and rewrapped, never duplicated. A non-descending (including
+duplicate) provider date sequence is treated as a market-data problem, not
+a shape problem. Valid input is reversed once into the ascending order
+`DailyBars` exposes.
+
+**HTTP adapter** (`AlphaVantageMarketDataProvider`, JDK `HttpClient`,
+Spring-only insofar as it is wired as a bean — the class itself has no
+Spring import): one blocking GET per call, no retries, no throttling, no
+async behavior. Redirects are never followed (`HttpClient.Redirect.NEVER`)
+— an Alpha Vantage redirect is not a documented success path, and following
+one silently would risk sending the API key to an unintended host. The
+request query (`function=TIME_SERIES_DAILY&symbol=...&outputsize=
+compact|full&datatype=json&apikey=...`) is built by string concatenation of
+already percent-encoded (`URLEncoder`) values, then parsed once via
+`new URI(...)` — **not** the multi-argument `URI` constructor, which
+quotes its `query` argument as though it were unencoded and would corrupt
+an already-escaped `%XX` sequence (e.g. a symbol's encoded `&`). HTTP 429 →
+`MarketDataUnavailableException`; any other non-2xx, a connection/timeout/
+build failure, or an interrupted request (interrupt flag restored before
+rethrowing) → `MarketDataResponseException`. A blank/missing API key throws
+`MarketDataUnavailableException` before any request is sent. The response
+body is read in bounded chunks, up to `maxResponseSize + 1` bytes, so an
+oversized response is rejected (`MarketDataResponseException`) without
+buffering it unbounded. `AlphaVantageDailyParser` remains the sole authority
+for parsing a 2xx body; its exceptions propagate unwrapped.
+
+**Configuration** (`AlphaVantageProperties`, `parallax.alphavantage.*`, an
+immutable `@ConfigurationProperties` record): `api-key` (from
+`ALPHA_VANTAGE_API_KEY`, blank by default — a blank key never fails
+application startup, only a fetch request), `base-url`, `connect-timeout`
+(`5s`), `request-timeout` (`30s`), `max-response-size` (`8MB`). Every field
+except `api-key` is validated eagerly in the record's compact constructor
+(`base-url` must parse as an absolute `http`/`https` URL; the two timeouts
+and the max size must be positive) so a misconfigured deployment fails at
+startup. The API key is never logged, never included in an exception
+message, and never exposed through the provider's diagnostics.
+
+**Persistence integration (D-33 Batch 3):** `DatasetService` now takes a
+`MarketDataProvider` (constructor-injected — the sole
+`AlphaVantageMarketDataProvider` bean today; no registry/factory, since
+only one implementation exists) and exposes
+`createVersionFromAlphaVantage(owner, datasetId, depth)`. It follows the
+exact same shape as `createVersionFromCsv`: the dataset's own symbol is
+resolved and ownership checked in a short read-only transaction first;
+`fetchDailyBars` (network I/O) then runs entirely outside any
+transaction; the returned bars are canonicalized with D-32's own
+`DatasetContent.canonicalPrice` (the Alpha Vantage parser performs no
+canonicalization itself) before `BarSeries`/`DatasetContent.of` — so a CSV
+upload and an Alpha Vantage import of the same logical bars hash
+identically. Persistence itself is the shared `DatasetService.persistVersion`
+helper (D-32's lock/allocate/insert sequence, factored out and reused by
+both `createVersionFromCsv` and `createVersionFromAlphaVantage` — one code
+path per `DatasetSource`, never a parallel one). `source = ALPHA_VANTAGE`,
+`sourceDetail` is exactly whatever the provider returned (never
+reconstructed), `adjustmentBasis` is always `RAW` (Alpha Vantage's
+`TIME_SERIES_DAILY` is not split/dividend-adjusted — never a
+caller-supplied value for this source). A provider failure, or any
+exception before the write transaction opens, creates no `DatasetVersion`
+and consumes no version number, identical to a failed CSV upload.
+`ck_dataset_version_source` was widened (`V4__allow_alpha_vantage_dataset_source.sql`)
+to also allow `'ALPHA_VANTAGE'` — the only schema change in this batch.
+
+**REST endpoint (D-33 Batch 4):** `POST
+/api/datasets/{id}/versions/alpha-vantage`, request body `{"historyDepth":
+"COMPACT"|"FULL"}` (`AlphaVantageImportRequest`, read by the same strict
+D-30 reader as every other request body — unknown properties, a missing or
+null `historyDepth`, and an unrecognized `historyDepth` value all fail
+before Bean Validation runs). `DatasetController` only parses/validates the
+request and calls `DatasetService.createVersionFromAlphaVantage`; it never
+calls `MarketDataProvider` itself, performs no ownership check of its own,
+and contains no persistence or hashing logic. The response reuses
+`DatasetVersionResponse` unchanged (201 Created, same `Location` convention
+as CSV upload) — an Alpha Vantage-created version is not a different
+resource shape. No API key field exists anywhere in the request; the key
+remains configuration-only (D-33 Batch 2), never accepted from a client,
+logged, or echoed back.
+
+**Error mapping (`ApiExceptionHandler`, D-33 Batch 4):** each
+`MarketDataException` subclass maps to its own `ProblemDetail`, never
+collapsed into one generic error: `MarketDataRequestRejectedException` and
+`MarketDataCapabilityException` (the FULL-vs-compact-only-account case,
+never a fallback to `COMPACT`) → 422; `InvalidMarketDataException` → 422,
+with the failing bar's `date` attached when known; `MarketDataUnavailableException`
+(rate limit, temporary control response, or a missing/blank API key) →
+503; `MarketDataResponseException` (malformed body, unrecognized shape, or
+transport/protocol failure) → 502. Every message on these exceptions is
+already one of a small, backend-owned stable set (D-33 Batch 1/2) — never
+the provider's raw response, the request URI, or the API key — so no
+additional scrubbing is needed at this boundary. Ownership/not-found,
+version-conflict, and integrity-failure mapping are unchanged from D-32
+(§ above): a cross-owner or missing dataset is still 404 and the provider
+is never called in that case.
+
+See decisions.md's D-33 entry for the exact rationale and rejected
 alternatives.
 
 ## Not yet implemented
 
-Alpha Vantage/provider ingestion, backtest runs and
-result/metrics/benchmark persistence, Spring Security/authentication
-(`password_hash`, BCrypt, HTTP Basic), and the frontend. See decisions.md's
-D-29/D-30/D-31/D-32 entries and the Phase 7 design review for the approved
-plan and batch sequence.
+Backtest runs and result/metrics/benchmark persistence, Spring
+Security/authentication (`password_hash`, BCrypt, HTTP Basic), and the
+frontend. See decisions.md's D-29/D-30/D-31/D-32/D-33 entries and the
+Phase 7 design review for the approved plan and batch sequence.

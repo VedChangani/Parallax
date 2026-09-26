@@ -7,6 +7,11 @@ import in.vedchangani.parallax.backend.dataset.DatasetVersionNotFoundException;
 import in.vedchangani.parallax.backend.dataset.DuplicateDatasetNameException;
 import in.vedchangani.parallax.backend.dataset.csv.InvalidCsvDataException;
 import in.vedchangani.parallax.backend.dataset.csv.MalformedCsvException;
+import in.vedchangani.parallax.backend.marketdata.InvalidMarketDataException;
+import in.vedchangani.parallax.backend.marketdata.MarketDataCapabilityException;
+import in.vedchangani.parallax.backend.marketdata.MarketDataRequestRejectedException;
+import in.vedchangani.parallax.backend.marketdata.MarketDataResponseException;
+import in.vedchangani.parallax.backend.marketdata.MarketDataUnavailableException;
 import in.vedchangani.parallax.backend.strategy.DuplicateStrategyNameException;
 import in.vedchangani.parallax.backend.strategy.StrategyNotFoundException;
 import in.vedchangani.parallax.backend.strategy.StrategyVersionConflictException;
@@ -104,6 +109,72 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
         problem.setTitle("Invalid dataset data");
         problem.setProperty("line", e.line());
+        return problem;
+    }
+
+    /**
+     * Alpha Vantage explicitly rejected the request itself (D-33 Batch 4) →
+     * 422. Distinct from {@link #handleMarketDataCapability}: this is the
+     * provider refusing the request outright (e.g. an invalid symbol), not
+     * a standing account/plan limitation.
+     */
+    @ExceptionHandler(MarketDataRequestRejectedException.class)
+    public ProblemDetail handleMarketDataRequestRejected(MarketDataRequestRejectedException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        problem.setTitle("Market data request rejected");
+        return problem;
+    }
+
+    /**
+     * {@code HistoryDepth.FULL} requested against an Alpha Vantage account
+     * limited to compact history (D-33 Batch 4) → 422. No fallback to
+     * {@code COMPACT} is ever performed.
+     */
+    @ExceptionHandler(MarketDataCapabilityException.class)
+    public ProblemDetail handleMarketDataCapability(MarketDataCapabilityException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        problem.setTitle("Market data capability limit");
+        return problem;
+    }
+
+    /**
+     * The provider's response was correctly shaped, but the market data
+     * itself is semantically invalid (D-33 Batch 4) → 422, mirroring how
+     * {@link #handleInvalidCsvData} treats the same kind of failure for a
+     * CSV upload.
+     */
+    @ExceptionHandler(InvalidMarketDataException.class)
+    public ProblemDetail handleInvalidMarketData(InvalidMarketDataException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        problem.setTitle("Invalid market data");
+        e.date().ifPresent(date -> problem.setProperty("date", date));
+        return problem;
+    }
+
+    /**
+     * Alpha Vantage is temporarily unable to serve the request — a rate
+     * limit, a temporary control response, or a missing/blank API key
+     * (D-33 Batch 4) → 503. A missing key is a runtime condition here,
+     * never a startup failure.
+     */
+    @ExceptionHandler(MarketDataUnavailableException.class)
+    public ProblemDetail handleMarketDataUnavailable(MarketDataUnavailableException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+        problem.setTitle("Market data unavailable");
+        return problem;
+    }
+
+    /**
+     * The provider's response could not be understood as a valid response
+     * at all — malformed body, unrecognized shape, or a transport/protocol
+     * failure (D-33 Batch 4) → 502 (a bad response from an upstream
+     * server), distinct from {@link #handleMarketDataUnavailable}'s 503
+     * (a recognized, temporary provider condition).
+     */
+    @ExceptionHandler(MarketDataResponseException.class)
+    public ProblemDetail handleMarketDataResponse(MarketDataResponseException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY, e.getMessage());
+        problem.setTitle("Market data provider error");
         return problem;
     }
 

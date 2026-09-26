@@ -100,6 +100,32 @@ public class DatasetController {
         return ResponseEntity.created(location).body(DatasetVersionResponse.of(summary));
     }
 
+    /**
+     * D-33 Batch 4: creates a new {@code DatasetVersion} from Alpha
+     * Vantage's daily bars, using the exact same strict-JSON envelope
+     * pattern as {@link #createDataset}. This method only parses/validates
+     * the request and delegates to {@link
+     * DatasetService#createVersionFromAlphaVantage} — it never calls a
+     * {@code MarketDataProvider} itself, performs no ownership check of its
+     * own (the service is authoritative, exactly like every other
+     * endpoint here), and contains no persistence or canonicalization/hash
+     * logic. The response reuses {@link DatasetVersionResponse} unchanged —
+     * an Alpha Vantage-created version is not a different resource shape
+     * than a CSV-uploaded one.
+     */
+    @PostMapping(value = "/{id}/versions/alpha-vantage", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<DatasetVersionResponse> createVersionFromAlphaVantage(@PathVariable long id,
+                                                                                 @RequestBody String body) {
+        AlphaVantageImportRequest request = codec.parseRequest(body, AlphaVantageImportRequest.class);
+        validate(request);
+
+        DatasetVersionSummary summary =
+                datasetService.createVersionFromAlphaVantage(currentUser.id(), id, request.historyDepth());
+
+        URI location = URI.create("/api/datasets/" + id + "/versions/" + summary.versionNumber());
+        return ResponseEntity.created(location).body(DatasetVersionResponse.of(summary));
+    }
+
     @GetMapping("/{id}/versions")
     public List<DatasetVersionResponse> listVersions(@PathVariable long id) {
         return datasetService.listVersions(currentUser.id(), id).stream()
