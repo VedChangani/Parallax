@@ -103,7 +103,10 @@ Implemented (all packages below `engine`, plus `Backtester` at the engine
 root):
 
 - `Backtester`: the chronological run loop (`run(BarSeries,
-  StrategyDefinition, BacktestConfig) -> BacktestResult`), D-25
+  StrategyDefinition, BacktestConfig) -> BacktestResult`), D-25;
+  `Backtester.SEMANTICS_VERSION` (currently `1`) is the engine's persisted
+  chronological/execution-semantics identity, recorded by a stored
+  `BacktestRun` alongside its inputs
 - `data`: `Bar`, `BarSeries`
 - `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator` (including
   its `Indicator.create(IndicatorSpec)` factory method),
@@ -1909,9 +1912,31 @@ is never called in that case.
 See decisions.md's D-33 entry for the exact rationale and rejected
 alternatives.
 
-## Not yet implemented
+## Backtest run persistence foundation
 
-Backtest runs and result/metrics/benchmark persistence, Spring
-Security/authentication (`password_hash`, BCrypt, HTTP Basic), and the
-frontend. See decisions.md's D-29/D-30/D-31/D-32/D-33 entries and the
-Phase 7 design review for the approved plan and batch sequence.
+Package `backtest`: the schema and persistence foundation for a completed
+`BacktestRun` (`V5__create_backtest_run.sql`). `backtest_run` is an
+immutable, insert-once JPA entity (`@Immutable`, database triggers, no
+setters, no repository update/delete path — the same four-layer
+immutability D-31/D-32 established), built directly from an already-computed
+`BacktestResult`/`PerformanceMetrics`/`BuyAndHoldBenchmark` rather than by
+invoking `Backtester`. Its strategy and dataset identity are each tied to
+their immutable version by a composite foreign key (`(strategy_id,
+strategy_version_number, strategy_definition_hash) -> strategy_version(...)`,
+and likewise for the dataset), plus an owner composite foreign key onto
+`strategy`/`dataset`, so a persisted run can never reference a version or
+owner inconsistent with what is actually stored. `backtest_equity_point`,
+`backtest_fill`, and `backtest_rejection` are immutable children, accessed
+through plain JDBC repositories (`DatasetBarRepository`'s pattern), never a
+JPA entity/association. A `Fill`/`OrderRejection`'s triggering
+`IndicatorSnapshot` is stored as a small self-describing JSON array
+(`IndicatorSnapshotJson`), independent of the D-30 strategy-definition
+codec.
+
+Not yet implemented: run orchestration (`BacktestRunService`, invoking
+`Backtester`/`PerformanceMetrics`/`BuyAndHoldBenchmark` and mapping their
+output into the above), the read-time result-integrity verifier, REST
+endpoints, Spring Security/authentication (`password_hash`, BCrypt, HTTP
+Basic), and the frontend. See decisions.md's D-29/D-30/D-31/D-32/D-33
+entries and the Phase 7 design review for the approved plan and batch
+sequence.
