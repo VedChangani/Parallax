@@ -1,5 +1,10 @@
 package in.vedchangani.parallax.backend.api;
 
+import in.vedchangani.parallax.backend.backtest.BacktestRangeException;
+import in.vedchangani.parallax.backend.backtest.BacktestResultIntegrityException;
+import in.vedchangani.parallax.backend.backtest.BacktestRunNotFoundException;
+import in.vedchangani.parallax.backend.backtest.InvalidBacktestConfigException;
+import in.vedchangani.parallax.backend.backtest.MalformedBacktestConfigException;
 import in.vedchangani.parallax.backend.dataset.DatasetIntegrityException;
 import in.vedchangani.parallax.backend.dataset.DatasetNotFoundException;
 import in.vedchangani.parallax.backend.dataset.DatasetVersionConflictException;
@@ -60,6 +65,15 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
+    /** Malformed BacktestConfig request field (D-34 Batch 2/3: bad JSON shape or D-30 decimal grammar) → 400. */
+    @ExceptionHandler(MalformedBacktestConfigException.class)
+    public ProblemDetail handleMalformedBacktestConfig(MalformedBacktestConfigException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+        problem.setTitle("Malformed request");
+        problem.setProperty("field", e.path());
+        return problem;
+    }
+
     /** Malformed CSV syntax (D-32 §3/§4: encoding, header, field grammar, overflow) → 400. */
     @ExceptionHandler(MalformedCsvException.class)
     public ProblemDetail handleMalformedCsv(MalformedCsvException e) {
@@ -100,6 +114,32 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
         problem.setTitle("Invalid strategy definition");
         problem.setProperty("field", e.path());
+        return problem;
+    }
+
+    /** Semantically invalid BacktestConfig (D-34 Batch 2/3, engine semantics) → 422. */
+    @ExceptionHandler(InvalidBacktestConfigException.class)
+    public ProblemDetail handleInvalidBacktestConfig(InvalidBacktestConfigException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        problem.setTitle("Invalid backtest configuration");
+        problem.setProperty("field", e.path());
+        return problem;
+    }
+
+    /**
+     * The requested {@code [startDate, endDate]} range fails strict raw
+     * dataset coverage containment (D-34 Batch 2 §2) → 422: a semantically
+     * invalid request against a specific, otherwise-valid dataset, not a
+     * shape problem.
+     */
+    @ExceptionHandler(BacktestRangeException.class)
+    public ProblemDetail handleBacktestRange(BacktestRangeException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
+        problem.setTitle("Invalid backtest range");
+        problem.setProperty("requestedStartDate", e.requestedStartDate());
+        problem.setProperty("requestedEndDate", e.requestedEndDate());
+        problem.setProperty("datasetFirstDate", e.datasetFirstDate());
+        problem.setProperty("datasetLastDate", e.datasetLastDate());
         return problem;
     }
 
@@ -178,9 +218,10 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Missing resource, or another owner's resource (D-31 §10/D-32 §15: identical either way) → 404. */
+    /** Missing resource, or another owner's resource (D-31 §10/D-32 §15/D-34 Batch 2 §11: identical either way) → 404. */
     @ExceptionHandler({StrategyNotFoundException.class, StrategyVersionNotFoundException.class,
-            DatasetNotFoundException.class, DatasetVersionNotFoundException.class})
+            DatasetNotFoundException.class, DatasetVersionNotFoundException.class,
+            BacktestRunNotFoundException.class})
     public ProblemDetail handleNotFound(RuntimeException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
         problem.setTitle("Not found");
@@ -218,6 +259,22 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(DatasetIntegrityException.class)
     public ProblemDetail handleDatasetIntegrityFailure(DatasetIntegrityException e) {
         log.error("stored dataset integrity failure", e);
+        return genericServerError();
+    }
+
+    /**
+     * Stored backtest-run structural or cross-field integrity failure —
+     * corrupted or tampered equity/fill/rejection data, an unsupported
+     * engine semantics version, or a stored total that disagrees with its
+     * recomputation from the reconstructed fills (D-34 Batch 2 §8-9). Never
+     * client-facing detail: the cause is logged, and the response carries
+     * only a generic message (mirroring {@link StrategyDefinitionIntegrityException}'s
+     * own contract) — never a stack trace, SQL detail, or the wrapped
+     * exception's own text.
+     */
+    @ExceptionHandler(BacktestResultIntegrityException.class)
+    public ProblemDetail handleBacktestResultIntegrityFailure(BacktestResultIntegrityException e) {
+        log.error("stored backtest run failed integrity verification", e);
         return genericServerError();
     }
 

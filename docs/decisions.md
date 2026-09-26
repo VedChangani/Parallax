@@ -1334,10 +1334,148 @@ limits).
 `AlphaVantageMarketDataProvider` fetches, `DatasetService.createVersionFromAlphaVantage`
 persists through D-32's own algorithm, and `POST
 /api/datasets/{id}/versions/alpha-vantage` exposes it with the same
-ownership, validation, and error-mapping guarantees as CSV upload. No
-`BacktestRun` exists to consume a `DatasetVersion` yet; reconciling a
+ownership, validation, and error-mapping guarantees as CSV upload.
+`BacktestRun` (D-34) now consumes a `DatasetVersion` exactly as stored, with
+no trimming, regardless of which `DatasetSource` produced it; reconciling a
 fetched `DailyBars` against dataset identity/provenance (open question
 below) remains open.
+
+## D-34 Backtest run orchestration, persistence, read-time integrity, and REST API
+
+**Decision:** the first end-to-end consumer of `StrategyVersion`/
+`DatasetVersion`: synchronous run orchestration (`BacktestRunService`),
+atomic result persistence, read-time structural and cross-field integrity
+verification, and the `/api/backtest-runs` REST API. Packages `backtest`
+and `api`, alongside the existing ones. Delivered in three batches.
+
+- **Batch 1 — schema and persistence model** (`V5__create_backtest_run.sql`):
+  `backtest_run` is an immutable, insert-once JPA entity (`@Immutable`,
+  database triggers, no setters, no update/delete path — D-31/D-32's own
+  four-layer immutability), built directly from an already-computed
+  `BacktestResult`/`PerformanceMetrics`/`BuyAndHoldBenchmark`, never by
+  invoking `Backtester` itself. Its strategy and dataset identity are each
+  tied to their immutable version by a composite foreign key
+  (`(strategy_id, strategy_version_number, strategy_definition_hash) ->
+  strategy_version(...)`, and likewise for the dataset) plus an owner
+  composite foreign key onto `strategy`/`dataset` (`uq_strategy_id_owner`/
+  `uq_dataset_id_owner`), so a persisted run can never reference a version
+  or owner inconsistent with what is actually stored. There is no run
+  status column — a row is written only once a run has already finished.
+  `backtest_equity_point`/`backtest_fill`/`backtest_rejection` are
+  immutable children (no surrogate id, natural composite key, plain JDBC —
+  D-32's `dataset_bar` pattern), never a JPA entity or association. A
+  `Fill`/`OrderRejection`'s triggering `IndicatorSnapshot` is stored as a
+  small self-describing JSON array (`IndicatorSnapshotJson`), independent
+  of the D-30 codec. `engine_semantics_version` records `Backtester.
+  SEMANTICS_VERSION` (currently `1`) alongside every other input, so a
+  future reader can tell whether a stored run was produced under the
+  chronological/execution semantics this codebase currently implements.
+- **Batch 2 — orchestration, transactions, and read-time integrity**
+  (`BacktestRunService`): `createRun` calls owner-scoped `StrategyService.
+  getVersion`/`DatasetService.getVerifiedSeries` (unchanged 404/500
+  semantics), validates the requested range with a dedicated
+  `BacktestRangeValidator` (strict raw containment — `config.startDate() >=
+  dataset.firstDate()`, `config.endDate() <= dataset.lastDate()`, at least
+  one bar inside the range — `BacktestRangeException` otherwise), then runs
+  `Backtester.run`/`PerformanceMetrics.of`/`BuyAndHoldBenchmark.of` and maps
+  the result into persistence rows — all of this with **no database
+  transaction open**. `BacktestRunService` itself carries no
+  `@Transactional`; the complete parent-plus-children write happens in
+  exactly one short transaction on a separate bean, `BacktestRunWriter`
+  (self-invocation cannot make Spring's proxy-based transaction boundary
+  real), so a failure anywhere in that write — including a child-row
+  insert — rolls back the parent row too: no partial run is ever
+  observable. The backend does not duplicate indicator warm-up semantics —
+  a range in which the strategy's indicators never become ready is still
+  accepted; `Backtester`'s own `firstEvaluableDate` remains the sole
+  authority for that. The full verified `BarSeries` is passed to the engine
+  exactly as `DatasetService` returns it, never trimmed. `BacktestConfig`'s
+  monetary/rate fields are persisted as exact `BigDecimal` (`numeric`
+  columns) with no arbitrary magnitude or scale limit — an extreme
+  valid-syntax value the engine or PostgreSQL genuinely cannot represent
+  may surface as an uncaught 500-class failure rather than being capped.
+  Reading is split by cost: `getRun` (one run) reconstructs every child row
+  through its own engine constructor and performs the full structural check
+  (row shape, ascending equity/fill dates, rejection `seq`/date
+  chronology) and cross-field check (stored commission/slippage totals
+  equal the exact sum over reconstructed fills; the reconstructed
+  closed-trade count agrees with the stored metric; the benchmark's
+  `cash + costBasis` equals `initialCapital`; `engine_semantics_version` is
+  one this codebase still supports) — `BacktestResultIntegrityException` on
+  any failure, never client-facing detail. `listRuns` (an owner's history)
+  reads only the `backtest_run` parent row and never verifies a child row,
+  so it stays cheap regardless of how many equity/fill/rejection rows exist
+  behind it. Stored `PerformanceMetrics`/`BuyAndHoldBenchmark` values are
+  historical snapshots: `getRun` never calls `PerformanceMetrics.of(...)`,
+  `BuyAndHoldBenchmark.of(...)`, or `Backtester.run(...)`, and never reloads
+  the original `DatasetVersion` bars or re-decodes the original
+  `StrategyVersion` — a completed run remains readable on its own stored
+  integrity even after its inputs are later corrupted or superseded. There
+  is no result checksum/hash column: integrity comes from reconstructing
+  every value through its own engine type plus explicit cross-field
+  arithmetic, not a separate stored digest. Two identical `createRun` calls
+  are both accepted and produce two distinct rows — V1 has no idempotency
+  infrastructure. The D-30 decimal grammar
+  (`StrategyDefinitionMapper.DECIMAL`, made `public` — the only D-30 source
+  change) is reused unmodified by `BacktestConfigMapper` for
+  `initialCapital`/`commissionPerFill`/`slippageRate`, parsed directly into
+  `BigDecimal`, never through a `double`; `MalformedBacktestConfigException`
+  (shape) and `InvalidBacktestConfigException` (engine semantics) mirror
+  D-30's own client-facing split exactly.
+- **Batch 3 — REST API** (`api.BacktestRunController`, base path
+  `/api/backtest-runs`): `POST` (create), `GET` (list — exactly `listRuns`,
+  no child verification), `GET /{id}` (full detail), and three separate,
+  independently-integrity-verified child views — `GET /{id}/equity-curve`,
+  `GET /{id}/trades` (via `BacktestRunDetail.trades()`, a thin
+  `Trade.fromFills` delegate — no separate backend trade calculation), and
+  `GET /{id}/rejections`. Every read endpoint calls the same owner-scoped
+  `getRun`; the controller itself never invokes `Backtester`, computes a
+  metric, derives a trade independently, touches a repository/entity, or
+  performs an ownership check of its own. The create request is read by the
+  same strict D-30 `JsonMapper` every other envelope uses
+  (`StrategyDefinitionCodec.parseRequest`), so an unknown property
+  (including a client-supplied `ownerId`, hash, `engineSemanticsVersion`, or
+  status) is rejected before Bean Validation ever runs; `@Positive`/
+  `@Min(1)` cover the id/version-number bounds the strict reader has no
+  vocabulary for. Response DTOs render every `BigDecimal` as
+  `toPlainString()`, every metric `double` as a JSON number, an empty
+  `OptionalDouble` as JSON `null`, and never a JPA entity.
+  `MalformedBacktestConfigException` → 400, `InvalidBacktestConfigException`/
+  `BacktestRangeException` → 422, `BacktestRunNotFoundException` → 404
+  (grouped with the existing not-found mapping), `BacktestResultIntegrityException`
+  → 500 (logged server-side, generic body — D-30/D-32's own integrity-failure
+  contract, never a stack trace, SQL detail, or the wrapped cause's text).
+
+**Why:** synchronous, transaction-scoped execution keeps a run's engine
+step reproducible and easy to reason about without introducing a queue,
+worker, or status machine V1 does not need (CLAUDE.md). Splitting the write
+into its own bean is what makes "engine runs outside any transaction, only
+the final write is transactional" a checked, testable fact rather than a
+convention that Spring's self-invocation limitation could silently violate.
+Reconstructing every stored value through its own engine constructor,
+rather than trusting columns or a checksum, reuses the exact validation
+`Backtester`/`Portfolio`/`Trade` already define instead of inventing a
+parallel one. Making `listRuns` deliberately cheap and `getRun` the only
+place verification happens keeps a run's history browsable even if one run
+among thousands has a corrupted child row.
+
+**Rejected:** run status/state machine (`PENDING`/`RUNNING`/`FAILED`);
+asynchronous or queued execution; idempotency keys/infrastructure; a
+result hash/checksum column; recomputing `PerformanceMetrics`/
+`BuyAndHoldBenchmark`/`Backtester` on any read; reloading the original
+`DatasetVersion` bars or re-decoding the original `StrategyVersion` merely
+to display a completed run; trimming the dataset's lookback before handing
+it to the engine; an arbitrary magnitude/scale cap on `BacktestConfig`
+fields; full child-row integrity verification inside `listRuns`; pagination,
+PATCH/DELETE, a retry/rerun/status/export/comparison endpoint (all later
+features); a second decimal-grammar implementation for `BacktestConfig`
+(the D-30 grammar is reused verbatim).
+
+**Consequence:** D-34 is complete. `AlphaVantageMarketDataProvider` remains
+an ingestion-time concern only (D-33) — it is never called during a
+backtest run and is not a `Backtester`/`BacktestRunService` dependency of
+any kind. Spring Security/authentication and the frontend remain the only
+unimplemented pieces of the originally sketched Phase 7 path.
 
 ## Open questions
 

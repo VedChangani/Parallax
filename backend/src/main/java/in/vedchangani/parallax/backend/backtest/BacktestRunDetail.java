@@ -5,6 +5,7 @@ import in.vedchangani.parallax.engine.execution.OrderRejection;
 import in.vedchangani.parallax.engine.metrics.PerformanceMetrics;
 import in.vedchangani.parallax.engine.portfolio.EquityPoint;
 import in.vedchangani.parallax.engine.result.BacktestConfig;
+import in.vedchangani.parallax.engine.result.Trade;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -30,4 +31,17 @@ public record BacktestRunDetail(BacktestRunSummary summary, BacktestConfig confi
                                  List<Fill> fills, List<OrderRejection> rejections, PerformanceMetrics metrics,
                                  BigDecimal totalCommission, BigDecimal totalSlippageCost, BigDecimal benchmarkCash,
                                  long benchmarkQuantity, BigDecimal benchmarkCostBasis, double benchmarkTotalReturn) {
+
+    /**
+     * The trades derived from {@link #fills()} (D-34 Batch 3), parsed on
+     * every call via {@link Trade#fromFills(List)} — the same engine
+     * derivation {@code BacktestResult.trades()} uses (D-24), never a
+     * separate backend calculation. {@code BacktestResultReconstructor}
+     * already calls this once during read-time integrity verification, so
+     * a caller reaching this method on an already-returned {@link
+     * BacktestRunDetail} can never see it throw.
+     */
+    public List<Trade> trades() {
+        return Trade.fromFills(fills);
+    }
 }
