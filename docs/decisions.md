@@ -1477,6 +1477,100 @@ backtest run and is not a `Backtester`/`BacktestRunService` dependency of
 any kind. Spring Security/authentication and the frontend remain the only
 unimplemented pieces of the originally sketched Phase 7 path.
 
+## D-36 Defensive numeric input bounds at the JSON/mapper boundary (Phase 9 Batch 2b)
+
+**Decision:** two new, purely defensive bounds on externally supplied decimal
+literals, enforced at the JSON→engine mapper boundary — `StrategyDefinitionMapper`
+and `BacktestConfigMapper` — never in the engine itself. The goal is bounding
+the cost of a hostile input, not narrowing Parallax's mathematical domain: a
+valid value accepted before this decision is accepted identically after it,
+with identical engine behavior and identical persisted canonical
+representation/hash.
+
+- **Raw-length bound:** a decimal literal longer than **100 characters** is
+  rejected as malformed (400) — `StrategyDefinitionMapper.MAX_DECIMAL_LITERAL_LENGTH`,
+  checked (via the new shared `requireBoundedLength`) before any `BigDecimal`
+  or `double` parsing is attempted, ahead of the D-30 grammar regex itself.
+  Applies uniformly to every decimal literal parsed by either mapper: `Constant`,
+  `CashFraction`, and `BacktestConfig`'s `initialCapital`/`commissionPerFill`/
+  `slippageRate`.
+- **Canonical precision bound:** for a literal that is parsed into a
+  `BigDecimal`, its *canonical* value (`BigDecimal.stripTrailingZeros()` —
+  deliberately **not** `BacktestConfig`'s further `setScale(0)` floor for a
+  negative scale, which would materialize a huge digit string for an
+  astronomically negative scale, exactly the cost this bound exists to avoid)
+  may have at most **18 integer digits and 18 fractional digits** (36
+  significant digits total) — `MAX_INTEGER_DIGITS`/`MAX_FRACTION_DIGITS`,
+  enforced by the new shared `requireWithinCanonicalPrecisionBounds`, a
+  semantic-class (422) check layered after a successful parse and before the
+  engine constructor's own semantic checks. Digit counts are derived from
+  `BigDecimal.precision()`/`scale()` in `long` arithmetic
+  (`integerDigits = max(precision - scale, 1)`, `fractionalDigits =
+  max(scale, 0)`) — never from `toPlainString()` — so this never
+  materializes a large number even when `scale` itself is astronomically
+  large (for example `"1e2147483648"`, whose canonical integer-digit count
+  is computed without ever building a 2-billion-digit value). Applies to
+  `BacktestConfig`'s three fields and to `CashFraction`.
+- **`Constant` is deliberately exempt from the precision bound** — length
+  only. `Constant` is the one D-30 field that never becomes a `BigDecimal`
+  at all: it is parsed straight into a `double` (D-14/D-18's own design,
+  predating this decision), evaluated once per bar at O(1) cost regardless
+  of magnitude. The precision bound exists to cap the cost of exact
+  `BigDecimal` arithmetic — a cost `Constant` never incurs — and applying it
+  there would conflict with D-30's explicit, tested guarantee that the
+  *full* `double` range (down to `Double.MIN_VALUE` ≈ 4.9E-324, up to
+  `Double.MAX_VALUE` ≈ 1.8E308) round-trips exactly through the codec
+  (`StrategyDefinitionCodecTest#constantCanonicalFormsMatchDoubleToString`).
+  The length bound alone is the correct, non-conflicting defense for this
+  field.
+- **Failure classification**, preserving the existing malformed/invalid
+  split (D-30/D-34) exactly: malformed decimal syntax → 400 (unchanged);
+  raw literal over 100 characters → 400 (`Malformed*Exception`, the same
+  type the grammar check itself already throws); canonical precision bound
+  exceeded → 422 (`Invalid*Exception`, the same type an existing semantic
+  rule — range, finiteness — already throws). A value can still
+  independently fail the engine's own existing semantic rule (`CashFraction`
+  `0 < f <= 1`, `BacktestConfig` positivity/`[0,1)`/date ordering) exactly as
+  before; the precision bound is evaluated first only because it runs
+  earlier in the same method, not because it supersedes those rules.
+- **No change to**: the D-30 decimal grammar; `Constant`/`CashFraction`
+  underflow, overflow, `-0.0` folding, canonical JSON emission, or hashing;
+  `BacktestConfig`'s own constructor semantics; the engine in any way;
+  indicator period bounds (explicitly **no** maximum period — an
+  arbitrary trading restriction the design rejects; the Phase 9 Batch 2a
+  allocation changes already remove the O(period) memory cost that would
+  have motivated one); `SEMANTICS_VERSION`; the database schema (no
+  migration).
+
+**Why:** the bound belongs at the mapper boundary (the one place that still
+holds the original lexical literal) rather than in the engine, matching
+CLAUDE.md's dependency direction and D-30's own "mapper owns syntax, engine
+owns semantics" split. Sharing `requireBoundedLength`/
+`requireWithinCanonicalPrecisionBounds` as public static members of
+`StrategyDefinitionMapper` follows the exact precedent D-30/D-34 already set
+for the shared `DECIMAL` grammar pattern, rather than introducing a new
+shared utility type for two call sites. Measuring precision via
+`precision()`/`scale()` arithmetic rather than `toPlainString()` is what
+makes the bound itself safe to evaluate on a pathological input — the same
+property it exists to enforce on everything downstream of it.
+
+**Rejected:** applying the precision bound to `Constant` (conflicts with
+D-30's tested full-double-range guarantee, and `Constant` never does
+`BigDecimal` work in the first place — the actual resource this bound
+protects); a maximum indicator period (an arbitrary trading restriction; the
+real fix, delivered in Phase 9 Batch 2a, was removing the O(period)
+allocation, not capping how far back a strategy may look); a result/request
+body size limit (a distinct, transport-layer concern, deferred); a new
+generic numeric-bound abstraction shared across unrelated fields beyond the
+two genuinely shared call sites; recomputing or re-deriving any existing
+D-30/D-34 semantic rule.
+
+**Consequence:** an adversarial decimal literal can no longer force
+unbounded `BigDecimal` construction/arithmetic cost through either mapper.
+Every value a genuine client could reasonably supply — including every
+value any existing test exercised before this decision — remains accepted
+with an identical canonical representation and hash.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:

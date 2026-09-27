@@ -135,6 +135,72 @@ class BacktestConfigMapperTest {
         assertEquals("", e.path());
     }
 
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) --------------------
+
+    @Test
+    void decimalAtExactlyTheLengthBoundIsAcceptedBecauseItsCanonicalValueIsTiny() {
+        // "1" padded with trailing zeros after the decimal point to exactly 100 raw
+        // characters - canonically (stripTrailingZeros) this is just "1", 1 integer
+        // digit, 0 fractional digits, far inside the 18/18 precision bound.
+        String text = "1." + "0".repeat(98);
+        assertEquals(100, text.length());
+
+        BacktestConfig config = mapper.toEngine(request(text, "0", "0", "2020-01-02", "2020-01-03"));
+        assertEquals(0, new BigDecimal("1").compareTo(config.initialCapital()));
+    }
+
+    @Test
+    void decimalOneCharacterBeyondTheLengthBoundIsMalformedNotInvalid() {
+        String text = "1." + "0".repeat(99); // 101 characters
+        assertEquals(101, text.length());
+
+        MalformedBacktestConfigException e = assertThrows(MalformedBacktestConfigException.class,
+                () -> mapper.toEngine(request(text, "0", "0", "2020-01-02", "2020-01-03")));
+        assertEquals("initialCapital", e.path());
+    }
+
+    @Test
+    void initialCapitalWithExactlyEighteenIntegerDigitsIsAccepted() {
+        String text = "1" + "0".repeat(17); // 10^17, 18 integer digits
+        BacktestConfig config = mapper.toEngine(request(text, "0", "0", "2020-01-02", "2020-01-03"));
+        assertEquals(0, new BigDecimal(text).compareTo(config.initialCapital()));
+    }
+
+    @Test
+    void initialCapitalWithNineteenIntegerDigitsIsInvalidNotMalformed() {
+        // Still grammar-valid and still a genuinely positive capital (so it would
+        // have passed BacktestConfig's own initialCapital > 0 check) - isolates the
+        // NEW precision bound: must fail specifically on precision, as
+        // InvalidBacktestConfigException (422), never Malformed (400).
+        String text = "1" + "0".repeat(18); // 10^18, 19 integer digits
+        InvalidBacktestConfigException e = assertThrows(InvalidBacktestConfigException.class,
+                () -> mapper.toEngine(request(text, "0", "0", "2020-01-02", "2020-01-03")));
+        assertEquals("initialCapital", e.path());
+    }
+
+    @Test
+    void slippageRateWithExactlyEighteenFractionalDigitsIsAccepted() {
+        String text = "0." + "9".repeat(18); // < 1, satisfies slippageRate's [0,1) range too
+        BacktestConfig config = mapper.toEngine(request("100", "0", text, "2020-01-02", "2020-01-03"));
+        assertEquals(0, new BigDecimal(text).compareTo(config.slippageRate()));
+    }
+
+    @Test
+    void slippageRateWithNineteenFractionalDigitsIsInvalidNotMalformed() {
+        String text = "0." + "9".repeat(19); // still < 1 - isolates precision from the range check
+        InvalidBacktestConfigException e = assertThrows(InvalidBacktestConfigException.class,
+                () -> mapper.toEngine(request("100", "0", text, "2020-01-02", "2020-01-03")));
+        assertEquals("slippageRate", e.path());
+    }
+
+    @Test
+    void commissionAtExactlyEighteenIntegerAndEighteenFractionalDigitsIsAccepted() {
+        // Both bounds hit simultaneously (18 + 18 = 36 significant digits at most).
+        String text = "1".repeat(18) + "." + "9".repeat(18);
+        BacktestConfig config = mapper.toEngine(request("100", text, "0", "2020-01-02", "2020-01-03"));
+        assertEquals(0, new BigDecimal(text).compareTo(config.commissionPerFill()));
+    }
+
     // --- root path prefixing (mirrors StrategyDefinitionMapper's own overload) ---
 
     @Test

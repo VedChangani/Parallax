@@ -13,6 +13,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -51,6 +52,97 @@ public final class StrategyDefinitionMapper {
      * D-34 makes.
      */
     public static final Pattern DECIMAL = Pattern.compile("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?");
+
+    /**
+     * Phase 9 Batch 2b (D-35) defensive bound: the maximum raw decimal
+     * literal length accepted, checked before any {@link BigDecimal} or
+     * {@code double} parsing is attempted — a resource-bound input check,
+     * not a semantic rule. A literal this size (100 characters) is already
+     * far beyond any real monetary value or trading fraction; the bound
+     * exists to keep an adversarial literal (an enormous digit run, or an
+     * exponent with an enormous digit count) from ever reaching a parser.
+     * Public, following the {@link #DECIMAL} precedent, so {@code
+     * BacktestConfigMapper} shares the exact same bound rather than
+     * duplicating it.
+     */
+    public static final int MAX_DECIMAL_LITERAL_LENGTH = 100;
+
+    /**
+     * Phase 9 Batch 2b (D-35) defensive bound: the maximum number of
+     * integer digits a decimal literal's <em>canonical</em> value (after
+     * {@link BigDecimal#stripTrailingZeros()} — the same canonicalization
+     * {@code BacktestConfig}/{@code CashFraction} already apply) may have.
+     * Checked only after the literal is already known to satisfy {@link
+     * #DECIMAL} and {@link #MAX_DECIMAL_LITERAL_LENGTH}; this is the
+     * canonical-<em>magnitude</em> bound (18 integer + 18 fractional = 36
+     * significant digits at most), distinct from and layered on top of the
+     * raw-length bound above.
+     */
+    public static final int MAX_INTEGER_DIGITS = 18;
+
+    /**
+     * Phase 9 Batch 2b (D-35) defensive bound: the maximum number of
+     * fractional digits a decimal literal's canonical value may have. See
+     * {@link #MAX_INTEGER_DIGITS}.
+     */
+    public static final int MAX_FRACTION_DIGITS = 18;
+
+    /**
+     * Phase 9 Batch 2b (D-35): rejects {@code text} before it is ever
+     * passed to {@link BigDecimal} or {@link Double#parseDouble}
+     * construction if it exceeds {@link #MAX_DECIMAL_LITERAL_LENGTH} — a
+     * defensive parser-input bound, always a <em>malformed</em>-class
+     * (400) failure, never a semantic one, regardless of what the literal
+     * would otherwise parse to. {@code text} is assumed non-null (the
+     * caller's own null check runs first, so the "was null" message stays
+     * with the grammar check, not this one).
+     */
+    public static void requireBoundedLength(String text, String path,
+                                             BiFunction<String, String, ? extends RuntimeException> malformed) {
+        if (text.length() > MAX_DECIMAL_LITERAL_LENGTH) {
+            throw malformed.apply(path, "decimal literal exceeds the maximum length of "
+                    + MAX_DECIMAL_LITERAL_LENGTH + " characters, was " + text.length());
+        }
+    }
+
+    /**
+     * Phase 9 Batch 2b (D-35): rejects {@code value} — already
+     * successfully parsed from a grammar-valid, length-bounded literal —
+     * if its <em>canonical</em> form (after {@link
+     * BigDecimal#stripTrailingZeros()}; deliberately <strong>not</strong>
+     * {@code BacktestConfig}'s further {@code setScale(0)} floor, which
+     * would materialize a huge digit string for an astronomically
+     * negative scale — exactly the resource cost this bound exists to
+     * avoid) needs more than {@link #MAX_INTEGER_DIGITS} integer digits or
+     * {@link #MAX_FRACTION_DIGITS} fractional digits. {@link
+     * BigDecimal#precision()}/{@link BigDecimal#scale()} are O(1)-ish
+     * metadata reads (proportional only to the already length-bounded
+     * literal's own digit count), so this never materializes a large
+     * number even when {@code scale} itself is astronomically large (for
+     * example {@code "1e2147483648"}, whose canonical integer-digit count
+     * — computed here as {@code precision - scale}, in {@code long}
+     * arithmetic to avoid overflowing {@code int} — is far beyond the
+     * bound without ever building a 2-billion-digit value).
+     *
+     * <p>Always a semantic-class (422) failure: the literal parsed fine,
+     * its magnitude is simply outside the accepted domain — the same
+     * classification as an existing semantic rule (D-30/D-34), never a
+     * malformed/400 one.
+     */
+    public static void requireWithinCanonicalPrecisionBounds(BigDecimal value, String path,
+                                                               BiFunction<String, String, ? extends RuntimeException> invalid) {
+        BigDecimal canonical = value.stripTrailingZeros();
+        int precision = canonical.precision();
+        int scale = canonical.scale();
+        long fractionDigits = Math.max(scale, 0);
+        long integerDigits = Math.max((long) precision - scale, 1);
+        if (integerDigits > MAX_INTEGER_DIGITS || fractionDigits > MAX_FRACTION_DIGITS) {
+            throw invalid.apply(path, "canonical value exceeds the maximum precision of "
+                    + MAX_INTEGER_DIGITS + " integer digit(s) and " + MAX_FRACTION_DIGITS
+                    + " fractional digit(s) (had " + integerDigits + " integer digit(s) and " + fractionDigits
+                    + " fractional digit(s))");
+        }
+    }
 
     // --- DTO -> engine -------------------------------------------------------
 
@@ -167,6 +259,27 @@ public final class StrategyDefinitionMapper {
      * BigDecimal}'s scale is a 32-bit {@code int} and throws for such an
      * exponent. This keeps a raw {@link NumberFormatException} from ever
      * escaping constant parsing.
+     *
+     * <p><strong>Phase 9 Batch 2b (D-35) note:</strong> only the raw-length
+     * bound ({@link #requireBoundedLength}, applied inside {@link
+     * #matchDecimal} above, uniformly for every decimal literal this
+     * mapper parses) applies here — deliberately <strong>not</strong>
+     * {@link #requireWithinCanonicalPrecisionBounds}. That bound exists to
+     * cap the cost of exact {@link BigDecimal} arithmetic, and {@code
+     * Constant} is specifically the one D-30 field that never becomes a
+     * {@link BigDecimal} at all (this method's own long-standing design,
+     * documented above): it is a {@code double}, evaluated once per bar at
+     * O(1) cost regardless of magnitude. Applying the 18/18 canonical
+     * bound here would conflict with D-30's explicit, tested guarantee
+     * that the <em>full</em> {@code double} range — down to {@code
+     * Double.MIN_VALUE} (~4.9E-324) and up to {@code Double.MAX_VALUE}
+     * (~1.8E308) — round-trips exactly through this codec ({@code
+     * StrategyDefinitionCodecTest#constantCanonicalFormsMatchDoubleToString}).
+     * The length bound alone is the correct, non-conflicting defense for
+     * this field: it still rejects a pathologically long literal (the
+     * actual resource risk for a field that is parsed once and never
+     * stored as an arbitrary-precision value), without narrowing the
+     * legitimate double domain D-30 already commits to.
      */
     private double parseConstant(String text, String path) {
         Matcher m = matchDecimal(text, path);
@@ -203,15 +316,26 @@ public final class StrategyDefinitionMapper {
      * NumberFormatException} or {@link ArithmeticException} from the
      * constructor itself; both are treated as malformed client input, with
      * the field path, rather than allowed to escape raw.
+     *
+     * <p>Phase 9 Batch 2b (D-35): once the {@link BigDecimal} is
+     * successfully constructed, its canonical precision is bounded by
+     * {@link #requireWithinCanonicalPrecisionBounds} — a separate,
+     * semantic-class (422) check, layered after this method's own
+     * malformed-class (400) ones. {@code CashFraction}'s further {@code 0
+     * < fraction <= 1} range check remains the engine constructor's own
+     * concern (unchanged), so a value can fail either check independently.
      */
     private BigDecimal parseFraction(String text, String path) {
         matchDecimal(text, path);
+        BigDecimal value;
         try {
-            return new BigDecimal(text);
+            value = new BigDecimal(text);
         } catch (NumberFormatException | ArithmeticException e) {
             throw new MalformedStrategyDefinitionException(path,
                     "exponent is outside the representable range, was " + quote(text));
         }
+        requireWithinCanonicalPrecisionBounds(value, path, InvalidStrategyDefinitionException::new);
+        return value;
     }
 
     private Matcher matchDecimal(String text, String path) {
@@ -219,6 +343,9 @@ public final class StrategyDefinitionMapper {
             throw new MalformedStrategyDefinitionException(path,
                     "must match the decimal grammar " + DECIMAL.pattern() + ", was null");
         }
+        // Phase 9 Batch 2b (D-35): the raw-length bound runs before the grammar
+        // regex itself - the cheapest possible guard, ahead of everything else.
+        requireBoundedLength(text, path, MalformedStrategyDefinitionException::new);
         Matcher m = DECIMAL.matcher(text);
         if (!m.matches()) {
             throw new MalformedStrategyDefinitionException(path,

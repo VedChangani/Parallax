@@ -312,6 +312,91 @@ class StrategyDefinitionMapperTest {
         }
     }
 
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) --------------------
+
+    @Test
+    void fractionAtExactlyTheLengthBoundIsAcceptedBecauseItsCanonicalValueIsTiny() {
+        // "0.5" padded with trailing zeros to exactly 100 raw characters - the raw
+        // length bound (100) is satisfied at the boundary, and the CANONICAL value
+        // (after stripTrailingZeros, per requireWithinCanonicalPrecisionBounds) is
+        // just "0.5" - 1 fractional digit, far inside the 18/18 precision bound.
+        String text = "0.5" + "0".repeat(97);
+        assertEquals(100, text.length());
+
+        StrategyDefinition def = mapper.toEngine(definition(ALWAYS_TRUE, ALWAYS_FALSE, fraction(text)));
+        PositionSizing.CashFraction cf = (PositionSizing.CashFraction) def.positionSizing();
+        assertEquals(0, new BigDecimal("0.5").compareTo(cf.fraction()));
+    }
+
+    @Test
+    void fractionOneCharacterBeyondTheLengthBoundIsMalformedNotInvalid() {
+        String text = "0.5" + "0".repeat(98); // 101 characters
+        assertEquals(101, text.length());
+
+        MalformedStrategyDefinitionException e = assertThrows(MalformedStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(ALWAYS_TRUE, ALWAYS_FALSE, fraction(text))));
+        assertEquals("positionSizing", e.path());
+    }
+
+    @Test
+    void fractionWithExactlyEighteenFractionalDigitsIsAccepted() {
+        String text = "0." + "9".repeat(18);
+        StrategyDefinition def = mapper.toEngine(definition(ALWAYS_TRUE, ALWAYS_FALSE, fraction(text)));
+        PositionSizing.CashFraction cf = (PositionSizing.CashFraction) def.positionSizing();
+        assertEquals(0, new BigDecimal(text).compareTo(cf.fraction()));
+    }
+
+    @Test
+    void fractionWithNineteenFractionalDigitsIsInvalidNotMalformed() {
+        // Still grammar-valid, and still < 1 (so it would have passed CashFraction's own
+        // range check) - this isolates the NEW precision bound from the pre-existing
+        // range check: it must fail specifically because of precision, as an
+        // InvalidStrategyDefinitionException (422), never Malformed (400).
+        String text = "0." + "9".repeat(19);
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(ALWAYS_TRUE, ALWAYS_FALSE, fraction(text))));
+        assertEquals("positionSizing", e.path());
+    }
+
+    @Test
+    void fractionWithNineteenIntegerDigitsIsInvalid() {
+        // Already out of CashFraction's (0, 1] range too, but must still be rejected
+        // as InvalidStrategyDefinitionException (422), same class as the range check
+        // it would otherwise have hit - not Malformed (400).
+        String text = "1" + "0".repeat(18); // 10^18, 19 integer digits
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(ALWAYS_TRUE, ALWAYS_FALSE, fraction(text))));
+        assertEquals("positionSizing", e.path());
+    }
+
+    @Test
+    void constantLiteralOverTheLengthBoundIsMalformed() {
+        // The length bound applies uniformly to every decimal literal this mapper
+        // parses, Constant included - even though Constant has no canonical
+        // precision bound (see constantFullDoubleRangeRemainsAcceptedByMagnitude).
+        String text = "1." + "0".repeat(99); // 101 characters, canonically just "1"
+        ConditionDto entry = compare(constant(text), OperatorDto.GT, constant("0"));
+
+        MalformedStrategyDefinitionException e = assertThrows(MalformedStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL)));
+        assertEquals("entryCondition.left", e.path());
+    }
+
+    @Test
+    void constantFullDoubleRangeRemainsAcceptedNotBoundedByMagnitude() {
+        // D-30's guarantee (StrategyDefinitionCodecTest#constantCanonicalFormsMatchDoubleToString)
+        // that the full double range round-trips exactly through Constant must survive
+        // Batch 2b unchanged: Constant never becomes a BigDecimal in the engine, so it
+        // is deliberately NOT subject to the 18/18 canonical precision bound - only
+        // to the raw-length bound, which short literals like these easily satisfy.
+        for (String text : List.of("1e300", "1e-300", "1e-323")) {
+            ConditionDto entry = compare(constant(text), OperatorDto.GT, constant("0"));
+            StrategyDefinition def = mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL));
+            Condition.Compare c = (Condition.Compare) def.entryCondition();
+            assertEquals(Double.parseDouble(text), ((Operand.Constant) c.left()).value(), "for input " + text);
+        }
+    }
+
     // --- indicator bounds ----------------------------------------------------
 
     @Test

@@ -231,6 +231,41 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$.field").value("config.initialCapital"));
     }
 
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) ---------------------
+
+    @Test
+    void over100CharDecimalLiteralIsBadRequest() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        String text = "1." + "0".repeat(99); // 101 characters
+        mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, text, "0", "0",
+                                "2024-01-02", "2024-01-09")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("config.initialCapital"));
+    }
+
+    @Test
+    void over18IntegerDigitsIsUnprocessable() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        String text = "1" + "0".repeat(18); // 19 integer digits, still grammar-valid and positive
+        mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, text, "0", "0",
+                                "2024-01-02", "2024-01-09")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.field").value("config.initialCapital"));
+    }
+
+    @Test
+    void over18FractionalDigitsIsUnprocessable() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        String text = "0." + "9".repeat(19); // 19 fractional digits, still < 1
+        mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, "10000", "0", text,
+                                "2024-01-02", "2024-01-09")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.field").value("config.slippageRate"));
+    }
+
     @Test
     void missingRequiredFieldIsBadRequest() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());

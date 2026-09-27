@@ -13,19 +13,25 @@ import java.math.BigDecimal;
  *
  * <pre>ema = alpha * close + (1 - alpha) * previousEma</pre>
  *
- * with {@code alpha = 2 / (period + 1)}.
+ * with {@code alpha = 2 / (period + 1)}, computed as
+ * {@code 2.0 / (period + 1.0)} so the addition happens in {@code double}
+ * arithmetic rather than {@code int} arithmetic — {@code period + 1} as an
+ * {@code int} overflows for {@code period == Integer.MAX_VALUE}, silently
+ * producing a negative alpha. {@code period + 1.0} promotes {@code period}
+ * to {@code double} before the addition, which is exact for every
+ * representable {@code int} and so is bit-for-bit identical to the old
+ * expression for every period that did not already overflow.
  *
- * <p>During warm-up, a fixed-size buffer of the first {@code period}
- * closes is kept to compute the seed — O(period) memory. Once seeded, the
- * buffer is discarded and only the current EMA value is retained — O(1)
- * memory thereafter.
+ * <p>During warm-up, only a running sum of the first {@code period} closes
+ * is kept to compute the seed — O(1) memory, not O(period): no buffer of
+ * the individual warm-up closes is ever allocated. Once seeded, only the
+ * current EMA value is retained — O(1) memory thereafter, unchanged.
  */
 public final class ExponentialMovingAverage implements Indicator {
 
     private final int period;
     private final double alpha;
 
-    private double[] seedBuffer;
     private int seedCount;
     private double seedSum;
 
@@ -37,8 +43,7 @@ public final class ExponentialMovingAverage implements Indicator {
             throw new IllegalArgumentException("period must be >= 1, was " + period);
         }
         this.period = period;
-        this.alpha = 2.0 / (period + 1);
-        this.seedBuffer = new double[period];
+        this.alpha = 2.0 / (period + 1.0);
     }
 
     @Override
@@ -46,14 +51,12 @@ public final class ExponentialMovingAverage implements Indicator {
         double value = close.doubleValue();
 
         if (!seeded) {
-            seedBuffer[seedCount] = value;
             seedSum += value;
             seedCount++;
 
             if (seedCount == period) {
                 ema = seedSum / period;
                 seeded = true;
-                seedBuffer = null;
             }
         } else {
             ema = alpha * value + (1 - alpha) * ema;

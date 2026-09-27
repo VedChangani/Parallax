@@ -275,6 +275,32 @@ class StrategyControllerIT {
                 .andExpect(jsonPath("$.field").value("definition.positionSizing"));
     }
 
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) --------------------
+
+    @Test
+    void over100CharCashFractionLiteralIsBadRequest() throws Exception {
+        String text = "0.5" + "0".repeat(98); // 101 characters
+        String bad = SIMPLE_DEFINITION.replace("\"fraction\":\"1\"", "\"fraction\":\"" + text + "\"");
+
+        mockMvc.perform(post("/api/strategies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createRequestJson(uniqueName(), "", bad)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("definition.positionSizing"));
+    }
+
+    @Test
+    void over18FractionalDigitCashFractionIsUnprocessable() throws Exception {
+        String text = "0." + "9".repeat(19); // still < 1 - isolates precision from the range check
+        String bad = SIMPLE_DEFINITION.replace("\"fraction\":\"1\"", "\"fraction\":\"" + text + "\"");
+
+        mockMvc.perform(post("/api/strategies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createRequestJson(uniqueName(), "", bad)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.field").value("definition.positionSizing"));
+    }
+
     @Test
     void emptyAllGroupIsUnprocessable() throws Exception {
         String bad = "{\"entryCondition\":{\"type\":\"all\",\"conditions\":[]},"

@@ -41,14 +41,46 @@ import java.util.Optional;
 public final class Backtester {
 
     /**
-     * The engine's chronological/execution semantics identity (D-34): a
-     * persisted result records this value alongside its inputs, so a
-     * future reader can tell whether a stored run was produced under the
-     * same engine behavior this class currently implements. It changes
-     * only when {@code run}'s chronological algorithm, sizing/execution
-     * formulas, or portfolio accounting rules change in a way that could
-     * alter results for identical inputs — never for a refactor, a new
-     * indicator/condition type, or persistence/API work.
+     * The engine's result-semantics identity (D-34, scope broadened by
+     * Phase 9 Batch 2a): a persisted result records this value alongside
+     * its inputs, so a future reader can tell whether a stored run was
+     * produced under the same result-affecting behavior this codebase
+     * currently implements. This is a <strong>semantics identity, not a
+     * software version or build number</strong> — it does not track
+     * releases, refactors, or unrelated feature work, only whether two
+     * runs over identical inputs are guaranteed to produce identical
+     * output.
+     *
+     * <p>It must be incremented whenever <em>any</em> change is capable of
+     * altering a persisted result value for identical inputs (identical
+     * {@code BarSeries} content, {@code StrategyDefinition},
+     * {@code BacktestConfig}, and initial capital). That includes, but is
+     * not limited to:
+     *
+     * <ul>
+     *   <li>the chronological run loop in {@code Backtester.run} itself;
+     *   <li>indicator formulas (SMA/EMA/RSI value computation, seeding, or
+     *       readiness/warm-up rules) — not their memory representation;
+     *   <li>sizing and execution formulas (D-7/D-23);
+     *   <li>{@code Portfolio} accounting rules;
+     *   <li>trading-cost derivation ({@code totalCommission}/
+     *       {@code totalSlippageCost}, D-27);
+     *   <li>{@code PerformanceMetrics} formulas and conventions (D-26) —
+     *       annualization, CAGR/Sharpe/volatility/drawdown conventions,
+     *       the risk-free rate, trade-statistics rules;
+     *   <li>{@code BuyAndHoldBenchmark} behavior (D-28) — entry timing,
+     *       sizing, or cost treatment;
+     *   <li>any other numerical convention capable of changing a result
+     *       (rounding, operation order, annualization constants).
+     * </ul>
+     *
+     * <p>It must <strong>not</strong> be incremented for a refactor that
+     * preserves identical output (for example, an indicator's internal
+     * memory layout), a new indicator/condition type that does not change
+     * existing ones, or persistence/API work. A change that touches this
+     * value's meaning without changing its numeric value (as in Batch 2a)
+     * is exactly the "refactor, not semantics" case this constant exists
+     * to distinguish.
      */
     public static final int SEMANTICS_VERSION = 1;
 

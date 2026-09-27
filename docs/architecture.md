@@ -1528,7 +1528,14 @@ of this boundary without changing its canonical/hash/strictness behavior.
   `CashFraction` bounds and canonicalization — is left entirely to the
   engine constructors, whose `IllegalArgumentException` it rewraps as
   `InvalidStrategyDefinitionException(path, message)` (e.g.
-  `entryCondition.conditions[1].right`).
+  `entryCondition.conditions[1].right`). It also owns two defensive input
+  bounds on every decimal literal it parses (D-36): a 100-character raw
+  literal length (malformed/400), and — for fields that become a
+  `BigDecimal` (`CashFraction`, and `BacktestConfigMapper`'s three fields,
+  which reuse these same shared bound checks) but deliberately **not**
+  `Constant` (which stays a `double` and never incurs the `BigDecimal` cost
+  this bound protects against) — a canonical 18-integer/18-fractional-digit
+  precision bound (invalid/422).
 - **`StrategyDefinitionCodec`:** a strict request reader (`parseRequest`,
   via its own explicitly configured Jackson `JsonMapper` — rejecting
   unknown/duplicate/null/missing properties, trailing tokens, unknown type
@@ -1983,7 +1990,10 @@ an owner inconsistent with what is actually stored. `engine_semantics_version`
 records `Backtester.SEMANTICS_VERSION` (currently `1`) alongside every other
 input. `BacktestConfig`'s monetary/rate fields are stored as exact
 `BigDecimal` (`numeric` columns, D-14) with no arbitrary magnitude or scale
-limit introduced. `backtest_equity_point`, `backtest_fill`, and
+limit at the database/schema level — the defensive raw-length and
+canonical-precision bounds a request must already satisfy are enforced
+earlier, at the `BacktestConfigMapper` JSON boundary (D-36), never as a
+column `CHECK` constraint. `backtest_equity_point`, `backtest_fill`, and
 `backtest_rejection` are immutable children, accessed through plain JDBC
 repositories (`DatasetBarRepository`'s pattern), never a JPA entity or
 association. A `Fill`/`OrderRejection`'s triggering `IndicatorSnapshot` is
@@ -2059,9 +2069,11 @@ by the same strict D-30 `JsonMapper` every other envelope uses
 (`StrategyDefinitionCodec.parseRequest`), so an unknown property —
 including a client-supplied `ownerId`, hash, `engineSemanticsVersion`, or
 status — is rejected before Bean Validation ever runs; the D-30 decimal
-grammar (`StrategyDefinitionMapper.DECIMAL`, made `public` — the only D-30
-source change D-34 makes) is reused unmodified by `BacktestConfigMapper`,
-parsed directly into `BigDecimal`, never through a `double`. Response DTOs
+grammar (`StrategyDefinitionMapper.DECIMAL`, made `public`) and the D-36
+defensive length/precision bound checks (also public on
+`StrategyDefinitionMapper`, the same sharing precedent) are reused
+unmodified by `BacktestConfigMapper`, parsed directly into `BigDecimal`,
+never through a `double`. Response DTOs
 render every `BigDecimal` as `toPlainString()`, every metric `double` as a
 JSON number, an empty `OptionalDouble` as JSON `null`, and never a JPA
 entity. `MalformedBacktestConfigException` → 400,
