@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { createBacktestRun } from '../../api/backtests.js';
 import { getDatasetVersion, listDatasetVersions, listDatasets } from '../../api/datasets.js';
 import { getStrategyVersion, listStrategies, listStrategyVersions } from '../../api/strategies.js';
@@ -26,16 +26,26 @@ import { useApiResource } from '../../hooks/useApiResource.js';
  */
 export function BacktestNewPage() {
   const navigate = useNavigate();
+  // Arriving from a market's or strategy's own page (e.g. "Create backtest")
+  // carries that resource's id as router state, so the form opens already
+  // scoped to it instead of always defaulting to the first list entry.
+  const location = useLocation();
+  const preselectedMarketId = location.state?.marketId;
+  const preselectedStrategyId = location.state?.strategyId;
 
   // --- market / snapshot ---------------------------------------------------
 
   const markets = useApiResource(listDatasets, []);
   const [explicitMarketId, setExplicitMarketId] = useState(undefined);
-  // Falls back to the first loaded market whenever nothing has been
-  // explicitly chosen - a plain derived value, recomputed fresh every
-  // render, rather than state "seeded" from a fetch: there is nothing to
-  // reset when the market list itself never changes shape after mount.
-  const marketId = explicitMarketId ?? (markets.data && markets.data.length > 0 ? markets.data[0].id : undefined);
+  // Falls back to the incoming preselected market, then the first loaded
+  // market, whenever nothing has been explicitly chosen - a plain derived
+  // value, recomputed fresh every render, rather than state "seeded" from a
+  // fetch: there is nothing to reset when the market list itself never
+  // changes shape after mount.
+  const marketId =
+    explicitMarketId ??
+    markets.data?.find((market) => market.id === preselectedMarketId)?.id ??
+    (markets.data && markets.data.length > 0 ? markets.data[0].id : undefined);
 
   const fetchVersions = useCallback(
     (signal) => (marketId !== undefined ? listDatasetVersions(marketId, signal) : Promise.resolve([])),
@@ -73,7 +83,10 @@ export function BacktestNewPage() {
 
   const strategies = useApiResource(listStrategies, []);
   const [explicitStrategyId, setExplicitStrategyId] = useState(undefined);
-  const strategyId = explicitStrategyId ?? (strategies.data && strategies.data.length > 0 ? strategies.data[0].id : undefined);
+  const strategyId =
+    explicitStrategyId ??
+    strategies.data?.find((strategy) => strategy.id === preselectedStrategyId)?.id ??
+    (strategies.data && strategies.data.length > 0 ? strategies.data[0].id : undefined);
 
   const fetchStrategyVersions = useCallback(
     (signal) => (strategyId !== undefined ? listStrategyVersions(strategyId, signal) : Promise.resolve([])),

@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { getStrategy, getStrategyVersion, listStrategyVersions } from '../../api/strategies.js';
 import { Button } from '../../components/Button.jsx';
+import { buttonClasses } from '../../components/buttonStyles.js';
 import { EmptyState } from '../../components/EmptyState.jsx';
 import { ErrorState } from '../../components/ErrorState.jsx';
 import { LoadingState } from '../../components/LoadingState.jsx';
@@ -77,9 +78,12 @@ export function StrategyDetailPage({ strategyId }) {
             <Button variant="secondary" onClick={() => setEditing((open) => !open)} aria-expanded={editing}>
               {editing ? 'Cancel' : 'Edit'}
             </Button>
-            <Button variant="primary" onClick={() => navigate(`/strategies/${strategyId}/versions/new`)}>
+            <Button variant="secondary" onClick={() => navigate(`/strategies/${strategyId}/versions/new`)}>
               Create new version
             </Button>
+            <Link to="/backtests/new" state={{ strategyId }} className={buttonClasses('primary')}>
+              Create backtest
+            </Link>
           </div>
         }
       />

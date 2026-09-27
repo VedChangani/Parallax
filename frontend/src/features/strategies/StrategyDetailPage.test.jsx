@@ -1,8 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as immutableCache from '../../api/immutableCache.js';
 import { StrategyDetailPage } from './StrategyDetailPage.jsx';
+
+function NewBacktestProbe() {
+  const location = useLocation();
+  return <p>new backtest page · strategyId={String(location.state?.strategyId)}</p>;
+}
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -33,6 +38,7 @@ function renderDetail() {
         <Route path="/strategies" element={<p>strategies list page</p>} />
         <Route path="/strategies/:id" element={<StrategyDetailPage strategyId={42} />} />
         <Route path="/strategies/:id/versions/new" element={<p>new version page</p>} />
+        <Route path="/backtests/new" element={<NewBacktestProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -118,6 +124,20 @@ describe('StrategyDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create new version' }));
 
     expect(await screen.findByText('new version page')).toBeTruthy();
+  });
+
+  it('links "Create backtest" to /backtests/new with this strategy preselected', async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (/\/versions\/1$/.test(url)) return Promise.resolve(jsonResponse(versionDetail));
+      if (/\/versions$/.test(url)) return Promise.resolve(jsonResponse(versionSummaries));
+      return Promise.resolve(jsonResponse(strategyV1));
+    });
+
+    renderDetail();
+    await screen.findByRole('heading', { name: 'Momentum Cross' });
+    fireEvent.click(screen.getByRole('link', { name: 'Create backtest' }));
+
+    expect(await screen.findByText('new backtest page · strategyId=42')).toBeTruthy();
   });
 
   it('shows an empty state when there are no versions yet', async () => {
