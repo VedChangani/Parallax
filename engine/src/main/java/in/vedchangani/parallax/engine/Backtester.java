@@ -41,6 +41,18 @@ import java.util.Optional;
 public final class Backtester {
 
     /**
+     * The engine's chronological/execution semantics identity (D-34): a
+     * persisted result records this value alongside its inputs, so a
+     * future reader can tell whether a stored run was produced under the
+     * same engine behavior this class currently implements. It changes
+     * only when {@code run}'s chronological algorithm, sizing/execution
+     * formulas, or portfolio accounting rules change in a way that could
+     * alter results for identical inputs — never for a refactor, a new
+     * indicator/condition type, or persistence/API work.
+     */
+    public static final int SEMANTICS_VERSION = 1;
+
+    /**
      * Runs one backtest.
      *
      * @throws NullPointerException     if any argument is null

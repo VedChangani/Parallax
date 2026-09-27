@@ -732,15 +732,760 @@ consumer concerns, computed by the backend/frontend, not part of this
 decision. Price basis (raw vs. adjusted) remains open question 1;
 dividends and corporate actions are not modeled.
 
+## D-29 Backend foundation: dependency direction, persistence stack, and package root
+
+**Decision:** the first Phase 7 backend batch. `backend` depends on
+`engine` as an ordinary Maven module dependency
+(`in.vedchangani:engine:0.0.1-SNAPSHOT`) — the dependency direction
+remains `backend → engine`, never the reverse, matching D-1. No engine
+Java source or the engine `pom.xml` is touched.
+
+Persistence stack, chosen now so later batches build on one foundation:
+Spring Data JPA, the PostgreSQL JDBC driver (`runtime` scope), and Flyway
+(`flyway-core` + `flyway-database-postgresql`, plus the separate
+`spring-boot-flyway` autoconfiguration module — Spring Boot 4.x split
+Flyway's autoconfiguration out of `spring-boot-autoconfigure`, unlike
+Boot 3.x). `spring.jpa.hibernate.ddl-auto=validate`: schema changes are
+owned by Flyway migrations, never by Hibernate. `spring.jpa.open-in-view
+=false`. The datasource is environment-backed
+(`PARALLAX_DB_URL`/`_USERNAME`/`_PASSWORD`) with local defaults, so a
+developer machine needs no extra configuration to run the application.
+No `spring.flyway.*` datasource properties are set — Flyway always
+migrates the application's own `DataSource` bean, never a separate
+connection.
+
+Integration tests use a real **Testcontainers PostgreSQL** (`postgres:
+16-alpine`), wired in through Spring Boot's `@ServiceConnection`
+mechanism, which registers a `JdbcConnectionDetails` bean that Boot's
+datasource autoconfiguration prefers over `spring.datasource.*` — so a
+developer's local `PARALLAX_DB_*` environment is never read by tests, and
+no second/parallel test-configuration system exists. This is proven, not
+assumed: an integration test compares the live `DataSource`'s connection
+URL against the container's own `getJdbcUrl()`, and confirms
+`flyway_schema_history` exists after context startup. This requires
+Docker on the development machine; no other infrastructure (Docker
+Compose, application containers) is added.
+
+The backend root package is renamed `in.vedchangani.backend` →
+`in.vedchangani.parallax.backend`, matching the engine's
+`in.vedchangani.parallax.engine` root. A stateless `Backtester` is
+exposed as a single `@Bean` from `EngineConfiguration` — the only point
+of contact between Spring configuration and the engine in this batch.
+
+**Why:** `ddl-auto=validate` (never `update`) keeps schema evolution
+explicit and reviewable as migrations, consistent with CLAUDE.md's
+"never silently invent" principle applied to persistence. A real
+PostgreSQL in tests (not H2) means constraint, numeric-scale and
+transaction behavior in later batches is actually verified, not merely
+approximated.
+
+**Rejected:** H2 or a local PostgreSQL instance for tests (§ design
+review — exact behavior over convenience); `ddl-auto=update` (schema
+drift with no reviewable history); reusing the engine's package root for
+the backend (they are different modules with different concerns);
+building service/entity/REST scaffolding in this batch (no persistence
+model exists yet to build it against — see the Phase 7 batch sequence).
+
+**Consequence:** no entities, repositories, migrations, REST endpoints,
+DTOs, or security exist yet — this batch is foundation only. Every later
+Phase 7 batch builds on this datasource/Flyway/Testcontainers setup
+without revisiting it.
+
+## D-30 StrategyDefinition DTO mapping and canonical JSON codec
+
+**Decision:** a backend-only, engine-unmodified boundary
+(`backend.strategy.definition`) between JSON and the engine's
+`StrategyDefinition`: a sealed DTO tree, a path-tracked mapper, and a
+deterministic canonical-JSON/SHA-256 codec. No persistence, no REST.
+Resolves open question 2.
+
+- **DTO tree:** sealed interfaces mirroring the engine's shape
+  (`ConditionDto{Compare,All,Any}`, `OperandDto{Indicator,Close,Constant}`,
+  `PositionSizingDto{CashFraction}`), each discriminated by a `"type"`
+  property (`compare`/`all`/`any`/`indicator`/`close`/`constant`/
+  `cashFraction`) via `@JsonTypeInfo`/`@JsonSubTypes`. Backend-owned
+  `IndicatorTypeDto`/`OperatorDto` enums, never the engine's, so the
+  stored/transport format never depends on an engine enum's identifiers.
+  `StrategyDefinitionDto` (the transport root) carries no
+  `schemaVersion` — only `StoredStrategyDocument` (internal, decode-only)
+  does.
+- **`Constant.value` and `CashFraction.fraction` are JSON strings
+  everywhere** (request, response, storage) — never JSON numbers, enforced
+  by explicit Jackson coercion config, not merely convention. `Constant`
+  round-trips via `Double.toString`/`Double.parseDouble` exactly (Java 19+
+  guarantees this bit-exactly for every finite value); `CashFraction`
+  parses straight into `BigDecimal`, never through a `double`. A JSON
+  string survives PostgreSQL `jsonb` untouched, where a JSON number would
+  be rewritten into `numeric` notation (e.g. `1.0E-300` → a 300-digit
+  literal).
+- **Mapper-owned rules are exactly two**, both syntax, not semantics: the
+  decimal grammar `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?` for both
+  string fields, and rejecting a nonzero literal that underflows to `0.0`
+  as a `double` (e.g. `"1e-400"`) — both `MalformedStrategyDefinitionException`
+  and `InvalidStrategyDefinitionException` respectively, per the table
+  below. Overflow (`"1e400"` → `Infinity`) is deliberately *not* caught by
+  the mapper; it is let through so the engine's own finiteness check
+  rejects it. Every other rule (finiteness, the `-0.0` fold, non-empty
+  condition groups, indicator period/RSI bounds, `CashFraction` bounds and
+  `stripTrailingZeros` canonicalization) is left entirely to the engine
+  constructors — the mapper catches only their `IllegalArgumentException`
+  and rewraps it as `InvalidStrategyDefinitionException(path, message)`,
+  with a depth-first field path such as
+  `entryCondition.conditions[1].right`. An engine `NullPointerException`
+  is never caught (a strictly-parsed DTO tree cannot produce one; if it
+  does, that is a backend bug and propagates unchanged).
+- **Canonical JSON** is never produced by Jackson serialization — a
+  hand-written recursive emitter (exhaustive `switch`, no `default`) over
+  `mapper.toDto(validatedEngineObject)` writes it, so it can never depend
+  on Jackson's field ordering and is always derived from an
+  already-validated engine object, never a raw client request. Grammar:
+  fixed property order (`type` first; the document starts with
+  `schemaVersion`), no whitespace, no trailing newline, engine list order
+  preserved exactly, no nulls, JSON numbers only for `schemaVersion`/
+  `period`. `schemaVersion` (`= 1`) is embedded as the document's own
+  leading property — inside the hashed bytes — so a stored `definition_
+  schema_version` column can never be tampered with independently of the
+  hash.
+- **Hash:** `lowercase-hex(SHA-256(canonicalJson.getBytes(UTF_8)))`,
+  computed only over the codec's own canonical text — never over a raw
+  client request and never over PostgreSQL's `jsonb` rendering. Loading
+  stored data always re-parses, re-maps to the engine, re-encodes
+  canonically, and re-hashes before comparing.
+- **Decode/integrity** (`decode(schemaVersion, documentJson,
+  expectedSha256)`): unsupported schema version → fail; malformed stored
+  JSON → fail; document's own `schemaVersion` disagreeing with the
+  supplied one → fail; semantically invalid stored tree → fail; malformed
+  expected-hash string → fail; recomputed hash ≠ expected → fail. Every
+  failure is `StrategyDefinitionIntegrityException` — a 500-class,
+  never-client-facing type distinct from the two client-facing exceptions
+  (`Malformed…`/`Invalid…`, both path-carrying). Because the comparison is
+  against the *re-encoded* hash rather than raw byte equality with `
+  documentJson`, a `jsonb`-reformatted (reordered/whitespaced) stored
+  document still verifies correctly.
+- **Unknown-field policy:** rejected everywhere — unknown/duplicate/
+  missing/null properties, null list elements, trailing tokens, unknown or
+  missing type ids, and every scalar coercion (number/boolean → string,
+  string/float → int, case-insensitive enums). One private, explicitly
+  configured Jackson `JsonMapper` inside the codec enforces this — never
+  Spring's global (lenient) mapper. Reproducibility outweighs forward
+  compatibility in V1: a stored document must never silently carry
+  information the engine doesn't understand, and a client typo must never
+  be silently dropped.
+
+**Why:** the DTO tree stays intentionally close to the engine's shape so
+the mapper is a straightforward structural walk rather than a translation
+layer, while numeric fields diverge from the engine's native types
+(`double`/`BigDecimal`) specifically where a JSON number would lose
+exactness. Input canonicalization happens from the validated *engine*
+object, never from raw request bytes, so two requests describing the same
+definition with different formatting (whitespace, key order, `"0.500"` vs
+`"5E-1"`) always produce identical canonical text and hash — this is what
+makes `definition_hash` a property of the definition, not of how a client
+happened to write it.
+
+**Rejected:** JSON numbers for `Constant`/`CashFraction` (loses exactness
+through `jsonb` and through lenient JSON libraries); accepting both JSON
+numbers and strings for those fields (two input paths per field, no real
+benefit); silently rounding constant underflow to `0.0` (would let a
+nonzero threshold silently become always-true/false); duplicating engine
+semantic rules as Bean Validation annotations on the DTO tree; a separate
+hash-utility class (SHA-256 stays a private codec method until a second
+genuine use case appears — D-31's dataset content hash — justifies
+sharing it); accepting unknown JSON properties for forward compatibility
+(reproducibility wins in V1); hashing raw request JSON or a database's
+`jsonb` text representation directly.
+
+**Consequence:** open question 2 is resolved. The codec's output
+(canonical text + hash + schema version) is designed to be stored
+directly as-is by a later persistence batch (D-31): `jsonb` for the text,
+a `char(64)` for the hash, an `int` for the schema version — no format
+change anticipated at that boundary.
+
+## D-31 Strategy persistence, ownership seam, and strategy REST
+
+**Decision:** the first persistent, user-owned resources:
+`AppUser → Strategy → immutable StrategyVersion`, plus the owner-scoped
+strategy REST API (`/api/strategies`). Packages: `user`, `strategy`,
+`api`, alongside the unmodified D-30 `strategy.definition`.
+
+- **Schema** (`V1__create_user_and_strategy.sql`): `app_user` (username
+  unique); `strategy` (`owner_id` FK `ON DELETE RESTRICT`, `name`/
+  `description`, `latest_version_number`, unique on `(owner_id, name)`);
+  `strategy_version` (`strategy_id` FK `ON DELETE RESTRICT`,
+  `version_number`, `definition jsonb`, `definition_schema_version`,
+  `definition_hash`, unique on `(strategy_id, version_number)`). No
+  `owner_id` on `strategy_version` — ownership is always resolved through
+  a join to `strategy`. A CHECK ties `definition_schema_version` to the
+  document's own embedded `schemaVersion`; another CHECK enforces a
+  lowercase-hex 64-character hash. `definition_hash` is **`varchar(64)`**,
+  not the `char(64)` D-30 anticipated — `bpchar` pads, and the CHECK
+  already enforces the exact length, so a plain `varchar` plus regex is
+  the cleaner Hibernate `validate` mapping. `V2__seed_development_user.sql`
+  inserts the deterministic `dev` user.
+- **Immutability** (`strategy_version`: no update, no delete) is enforced
+  at four layers: database `BEFORE UPDATE OR DELETE`/`BEFORE TRUNCATE`
+  triggers; Hibernate `@Immutable` plus `updatable=false` on every column;
+  no entity setters; no repository or REST update/delete method.
+- **Entities** use plain `long` foreign-key columns, never JPA
+  associations/collections (safe under `open-in-view=false`, since there
+  is no lazy graph to fetch outside a transaction). Construction/mutators
+  are package-private; `StrategyService` is the only write path.
+  `StrategyVersion` is built only from D-30 `CanonicalStrategyDefinition`
+  output, stored via `@ColumnTransformer(write = "?::jsonb")` — never a
+  second serializer. Reads always go through D-30 `decode(...)`, which
+  re-parses/re-maps/re-encodes/re-hashes rather than trusting PostgreSQL's
+  own `jsonb` rendering byte-for-byte.
+- **Version allocation:** `codec.encode` runs before any transaction
+  opens; the transaction takes an owner-scoped `SELECT ... FOR UPDATE` on
+  `Strategy` (READ COMMITTED — the PostgreSQL default, never raised),
+  allocates `latest + 1`, updates the parent, and inserts the version.
+  `uq_strategy_version_number` is the backstop; a failed attempt rolls
+  back the whole transaction (parent counter included), so no number is
+  consumed. Creating a new `Strategy` plus version 1 needs no lock (the
+  row is invisible to others until commit) — `uq_strategy_owner_name`
+  alone decides a concurrent duplicate name. **Every write to a
+  `Strategy` row, including a metadata PATCH, takes the same lock** — an
+  unlocked PATCH could otherwise race a concurrent `createVersion` and
+  silently revert `latest_version_number`, since Hibernate's default
+  UPDATE writes every column.
+- **Ownership:** every repository method `StrategyService` uses is
+  owner-scoped (`findByIdAndOwnerId`, `lockByIdAndOwnerId`,
+  `findOwned`/`findAllOwned` joining through `Strategy`) — no
+  `findAll`/unrestricted `findById`. A nonexistent resource and another
+  owner's resource are indistinguishable, both 404. `CurrentUser`
+  (`SeededCurrentUser` today, resolving the seeded `dev` user on every
+  call) is the sole source of the owner id — no request ever supplies
+  one, and a later Spring Security-backed `CurrentUser` replaces only
+  that bean.
+- **REST + D-30 boundary:** every strategy-definition-bearing body is
+  read with `@RequestBody String` and parsed exactly once by the D-30
+  strict codec, never Spring's global JSON binding. Two additive D-30
+  overloads make this possible, both delegated to by the original method
+  with unchanged behavior: `StrategyDefinitionCodec.parseRequest(String,
+  Class<T extends Record>)` and `StrategyDefinitionMapper.toEngine(
+  StrategyDefinitionDto, String rootPath)` (prefixes every
+  semantic-validation path, e.g. `definition.entryCondition.left`, for a
+  definition nested inside a request envelope). **These two overloads are
+  the only D-30 source changes in this decision** — canonical JSON,
+  hashing, strictness configuration, the DTO hierarchy, and every existing
+  D-30 test are unchanged. Envelope Bean Validation (`@NotBlank`/`@Size`
+  on `name`/`description`) is invoked explicitly against the parsed
+  record, since `@Valid` cannot apply to a raw `String` parameter.
+  Responses carry the D-30 transport DTO shape for a definition (never
+  canonical text, never `schemaVersion`), so a `GET .../versions/{n}` body
+  posts back unchanged and produces the same `definitionHash`.
+- **Errors** (`ProblemDetail`): malformed body/envelope validation → 400;
+  semantically invalid definition → 422; not-found/cross-owner → 404
+  (identical either way); duplicate name/version conflict → 409 (matched
+  against the actual database constraint name, not a racy `exists()`
+  pre-check); stored-data integrity failure or any other unexpected
+  error → 500, logged, generic body — never an exception class name,
+  stack trace, SQL, or constraint name.
+
+**Why:** D-30 remains the sole authority for strategy-definition
+semantics, syntax, canonicalization, and hashing — D-31 only adds the two
+narrow overloads needed to run that same strict parser against a request
+envelope rather than a bare document. The pessimistic lock (not optimistic
+versioning) makes version-number allocation trivially reason-about: one
+row lock serializes every writer, so 1..n-with-no-gaps is enforced by
+construction rather than by retry logic.
+
+**Rejected:** `char(64)` for the hash column (D-30's original suggestion —
+padding and `validate` friction outweigh the benefit over `varchar` plus a
+CHECK); JPA associations/collections between `Strategy` and
+`StrategyVersion` (an unnecessary entity graph under
+`open-in-view=false`); an `owner_id` column on `strategy_version`
+(ownership is already inherited through `Strategy`); binding the request
+envelope with Spring's lenient global mapper and re-serializing the
+nested definition into the strict codec (a second, competing JSON reader,
+and the lenient read would already have silently accepted duplicate keys
+or an unknown `ownerId` field); a racy `exists()` pre-check for duplicate
+names/versions (the database constraint is authoritative); deleting the
+seeded `dev` user once it owns strategies (its future lifecycle is
+disabling/replacing it, never deleting — `ON DELETE RESTRICT` already
+prevents this); `password_hash` in this batch (added by the later
+authentication migration); PATCH as a partial update (full metadata
+replacement only — `name` and `description` both required); deduplicating
+identical-content `StrategyVersion`s (versions record events, not unique
+contents); pagination, DELETE/PUT endpoints, Spring Security, datasets,
+and backtests (out of scope for this batch).
+
+**Consequence:** the ownership and immutable-versioning model every later
+dataset and backtest run will build on is now in place. A run will
+reference a `StrategyVersion`, never a `Strategy`.
+
+## D-32 Dataset persistence, CSV ingestion, and content-hash integrity
+
+**Decision:** the first persistent market-data layer: `AppUser → Dataset →
+immutable DatasetVersion → immutable dataset_bar rows`, plus a V1 CSV
+upload REST API (`/api/datasets`). Packages: `dataset`, `dataset.csv`,
+alongside the existing `api`. No Alpha Vantage, no `MarketDataProvider`
+interface, no `BacktestRun` — this batch establishes the exact dataset
+snapshot a future run will reference.
+
+- **Schema** (`V3__create_dataset.sql`): `dataset` (`owner_id` FK `ON
+  DELETE RESTRICT`, `name`/`symbol` both fixed at creation — no PATCH in
+  this batch, `latest_version_number` starting at **0** since a dataset
+  may exist with no versions yet; unique on `(owner_id, name)` and on
+  `(id, symbol)`); `dataset_version` (immutable snapshot: `symbol` a
+  copy of the parent's, tied to it by a **composite FK** `(dataset_id,
+  symbol) -> dataset(id, symbol)` so a version's symbol can never
+  disagree with its dataset's; `source`, `source_detail`,
+  `adjustment_basis`, `bar_count`, `first_date`, `last_date`,
+  `content_hash`; unique on `(dataset_id, version_number)`); `dataset_bar`
+  (no surrogate id — PK `(dataset_version_id, bar_date)`; unconstrained
+  `numeric` OHLC columns, preserving whatever scale is inserted).
+  Immutability on `dataset_version`/`dataset_bar` is enforced the same
+  way as D-31's `strategy_version`: `BEFORE UPDATE OR DELETE`/`BEFORE
+  TRUNCATE` triggers, plus (for `dataset_version`) Hibernate `@Immutable`
+  and `updatable=false`. No OHLC semantic CHECK is added in SQL — `Bar`
+  remains the sole semantic authority (CLAUDE.md); the database only
+  enforces syntax-level constraints (hash format, symbol grammar,
+  non-blank name, known enum values, `bar_count >= 1`, `first_date <=
+  last_date`).
+- **Symbol grammar:** `^[A-Z0-9][A-Z0-9._-]{0,31}$` (1–32 chars,
+  uppercase ASCII letters/digits plus `.`/`_`/`-`, alphanumeric start).
+  Lowercase is rejected outright, never uppercased — comparison is exact
+  and case-sensitive. Enforced identically as Bean Validation on the
+  create request and as `ck_dataset_symbol_format`.
+- **CSV contract** (`dataset.csv.CsvBarParser`, plain Java, no CSV
+  library — the fixed, unquoted, 6-field-comma-separated shape never
+  needs one): an optional single leading UTF-8 BOM is stripped; every
+  remaining byte must be 7-bit ASCII; LF/CRLF/mixed line endings are all
+  accepted with the final terminator optional; the header must be
+  exactly `date,open,high,low,close,volume`; every data row must have
+  exactly six unquoted, unwhitespaced fields. Dates/prices/volume are
+  parsed under strict regex grammars — never through `double` — then
+  `new Bar(...)` is the sole semantic authority; its
+  `IllegalArgumentException` is caught and rewrapped as
+  `InvalidCsvDataException(line, message)`, never duplicated. The one
+  deliberate exception is date ordering: the parser itself tracks the
+  previous row's date so a duplicate/out-of-order date can be reported
+  with its exact line — `BarSeries` still re-validates the complete
+  sequence as the final authority. `MalformedCsvException` (syntax) maps
+  to 400; `InvalidCsvDataException` (semantics/ordering/empty-dataset) to
+  422.
+- **Price canonicalization:** `stripTrailingZeros()`, then `setScale(0)`
+  if scale is negative — the same rule as `BacktestConfig`/`CashFraction`,
+  copied into a small backend-local `DatasetContent.canonicalPrice`
+  method rather than exposed from the engine. Applied to O/H/L/C only,
+  before `Bar` construction, so the validated `BarSeries`, the stored
+  `dataset_bar` rows, and the content hash all agree on scale (`100`,
+  `100.0`, `100.00` all become one value).
+- **Content hash** (`DatasetContent`): SHA-256, lowercase hex, over the
+  payload `PARALLAX-BARS/1\n<symbol>\n<date>,<open>,<high>,<low>,<close>,
+  <volume>\n...` (UTF-8, every line including the last ending in one LF;
+  dates via `toString()`, prices via canonical `toPlainString()`, volume
+  via `Long.toString`). Computed from the **normalized `BarSeries`**,
+  never raw CSV bytes — different byte-level formatting that parses to
+  the same series produces the same hash. `DatasetContent.of` rejects a
+  non-canonical price rather than silently normalizing it. SHA-256 stays
+  a private `DatasetContent` method rather than a shared helper with
+  D-30's codec: the two hash entirely different payload shapes, and
+  duplicating six lines is cheaper than a shared package for that (this
+  closes D-30's "Rejected" note anticipating this batch as the second use
+  case).
+- **Transaction/version allocation:** identical shape to D-31 — CSV
+  parsing, `BarSeries` construction, canonicalization, and hashing all
+  happen **before** any transaction opens; a short transaction then takes
+  an owner-scoped `SELECT ... FOR UPDATE` on `Dataset`, allocates `latest
+  + 1`, updates the parent, inserts the `DatasetVersion`, and batch-inserts
+  every `dataset_bar` row (JDBC batch size 1000) — all on one connection,
+  no network/file I/O while the lock is held. A failed attempt rolls back
+  the counter, the version row, and every bar row; `uq_dataset_version_number`
+  is the backstop, mapped to `DatasetVersionConflictException` (409).
+- **`dataset_bar` is plain JDBC, not a JPA entity** (a deliberate
+  departure from D-31's all-Spring-Data style): an assigned composite key
+  with no surrogate id would make Spring Data's `save` issue a `merge`
+  (one `SELECT` per row), and thousands of managed entities per read add
+  nothing for rows that are never individually edited. A package-private
+  `DatasetBarRepository` (`JdbcTemplate`) exposes only a batch
+  `insertAll` and an owner-scoped, date-ordered `findOwned` — no
+  update/delete method exists, matching the table's own immutability
+  triggers. It is the only place a `BarSeries` can be assembled outside
+  this decision's own verification path.
+- **Ownership:** identical shape to D-31 §10 — every repository method
+  owner-scoped (`findByIdAndOwnerId`/`lockByIdAndOwnerId` on `Dataset`;
+  `findOwned`/`findAllOwned` on `DatasetVersion` joining through
+  `Dataset`; `DatasetBarRepository.findOwned` joining through both).
+  Missing and cross-owner resources are indistinguishable, both 404.
+- **Integrity verification** (`DatasetService.getVerifiedSeries` — the
+  **only** way a `BarSeries` leaves the `dataset` package): reconstructs
+  the series from stored bars, then `DatasetContent.verify` recomputes
+  the hash/count/first/last date and compares against the stored values
+  exactly. Any mismatch — including a non-canonical stored price, caught
+  the same way `DatasetContent.of` catches it — is a
+  `DatasetIntegrityException` (500, logged, generic body). Nothing is
+  ever repaired or resaved. A metadata-only `getVersion` never reads bars
+  and therefore never verifies.
+- **Adjustment basis:** required on every version, no default (silently
+  defaulting to `RAW` would risk mislabeling adjusted data); an
+  unverified uploader declaration, excluded from the content hash, and
+  ignored by the engine. D-32 performs no adjustment calculation of any
+  kind.
+- **REST:** `POST`/`GET`/`GET {id}` for datasets;
+  `POST`/`GET`/`GET {version}`/`GET {version}/bars` under
+  `.../{id}/versions` — no PATCH/PUT/DELETE, no pagination. The dataset
+  create body is read by the same strict D-30 codec reader used for every
+  other request envelope (`StrategyDefinitionCodec.parseRequest`, no
+  strategy-definition content involved) — never Spring's lenient global
+  binding. Version creation reads a raw `MultipartHttpServletRequest`
+  directly (not `@RequestParam` binding) to enforce the exact multipart
+  shape: exactly one `file` part, exactly one `adjustmentBasis` value
+  (case-sensitive, no default), nothing else. Bars are returned
+  unpaginated, with prices as JSON strings (the D-30 precedent) and
+  volume as a JSON number.
+
+**Why:** market data must be abstracted behind a provider interface
+eventually (CLAUDE.md), but CSV upload is the only source D-32 has —
+introducing `MarketDataProvider` now, with one implementation, would be
+exactly the kind of speculative abstraction CLAUDE.md warns against; it
+is added when Alpha Vantage (a second, genuinely different source)
+arrives. The composite FK (rather than relying on the hash alone to catch
+symbol drift) makes an inconsistent version unrepresentable at the
+database level, not merely detectable after the fact.
+
+**Rejected:** a `MarketDataProvider` interface before a second source
+exists; a shared SHA-256 helper package (D-30's anticipated one — the two
+payload shapes never overlap); OHLC semantic CHECK constraints in SQL
+(would duplicate `Bar`'s authority); a JPA entity for `dataset_bar`; a
+Dataset metadata PATCH in this batch; defaulting `adjustmentBasis` to
+`RAW`; a CSV library for a fixed, unquoted 6-field format; sorting or
+repairing out-of-order/duplicate CSV rows; trusting a stored `content_hash`
+without recomputing it; pagination on the bars endpoint; dataset
+sharing/public datasets.
+
+**Consequence:** the exact historical dataset snapshot a future
+`BacktestRun` will reference now exists and is independently verifiable.
+Alpha Vantage integration, backtest orchestration, and result persistence
+remain future checkpoints.
+
+## D-33 Alpha Vantage `MarketDataProvider`: contracts, parser, HTTP adapter, and dataset persistence integration
+
+**Decision:** the first genuinely second market-data source. Packages
+`marketdata` (`MarketDataProvider`, `DailyBars`, `HistoryDepth`, the
+`MarketDataException` hierarchy — no Spring dependency) and
+`marketdata.alphavantage` (`AlphaVantageDailyParser`, plain Java;
+`AlphaVantageMarketDataProvider`, JDK `HttpClient`; `AlphaVantageProperties`,
+an `@ConfigurationProperties` record; `AlphaVantageConfiguration`, the
+minimal Spring wiring). Delivered in four batches: contracts/parser, the
+HTTP adapter/configuration, integrating the provider into D-32's existing
+`Dataset`/`DatasetVersion` persistence pipeline (Batch 3), then the REST
+endpoint and error-boundary mapping (Batch 4, below) — the ingestion path
+is now end to end.
+
+- **Exception hierarchy:** `MarketDataException` (abstract) with four
+  concrete subclasses distinguishing *why* a fetch failed —
+  `MarketDataRequestRejectedException` (provider rejected the request
+  itself — an `"Error Message"` response), `MarketDataCapabilityException`
+  (a standing account/plan limitation — `FULL` history requested against a
+  compact-only account), `MarketDataUnavailableException` (temporary —
+  rate-limit/`"Note"`/`"Information"` control responses, HTTP 429, or a
+  blank API key), `MarketDataResponseException` (the fallback — malformed
+  JSON, an unrecognized shape, any other non-2xx status, or a transport
+  failure), and `InvalidMarketDataException` (the response parsed but the
+  market data itself is semantically invalid). No subclass, and no thrown
+  exception message anywhere in the hierarchy, ever carries a provider raw
+  response body, a request URI, or the API key.
+- **Parser strictness** (`AlphaVantageDailyParser`): control-response
+  classification runs before success-shape validation; top-level, `Meta
+  Data`, and per-bar shapes are all checked against the exact documented
+  Alpha Vantage fields (no extra/missing property, correct JSON type),
+  under strict date/price/volume regex grammars — never through `double`.
+  `Bar` remains the sole semantic authority (CLAUDE.md); its
+  `IllegalArgumentException` is caught and rewrapped as
+  `InvalidMarketDataException`, never duplicated. A non-descending
+  (including duplicate) provider date sequence is a market-data problem,
+  not a shape problem, so it is also `InvalidMarketDataException`. Valid
+  input is reversed once into the ascending order `DailyBars` exposes.
+- **HTTP adapter** (`AlphaVantageMarketDataProvider`): one blocking JDK
+  `HttpClient` GET per call — no retries, no throttling, no async behavior.
+  Redirects are never followed (`HttpClient.Redirect.NEVER`); a redirect is
+  not a documented Alpha Vantage success path, and following one silently
+  would risk leaking the API key to an unintended host. The query
+  (`function`, `symbol`, `outputsize`, `datatype=json`, `apikey`) is
+  assembled by concatenating already `URLEncoder`-encoded values onto
+  `baseUrl`, then parsed once via the single-string `URI` constructor —
+  **not** the multi-argument `URI(scheme, authority, path, query,
+  fragment)` constructor, which treats `query` as unencoded text and
+  re-quotes it, corrupting an already-escaped `%XX` sequence (caught by a
+  test with an `&` in the symbol). HTTP 429 →
+  `MarketDataUnavailableException`; any other non-2xx status, a connection
+  failure, a request timeout, a malformed-URI/build failure, or an
+  interrupted request (interrupt flag restored via
+  `Thread.currentThread().interrupt()` before rethrowing) →
+  `MarketDataResponseException`. A blank/missing API key is rejected
+  (`MarketDataUnavailableException`) before any request is sent — the
+  server receives nothing. The response body is read in bounded chunks, at
+  most `maxResponseSize + 1` bytes, so an oversized response is rejected
+  deterministically without buffering an unbounded body.
+  `AlphaVantageDailyParser` remains the sole parser; its exceptions
+  propagate unwrapped, never re-classified by the adapter.
+- **Configuration** (`AlphaVantageProperties`, prefix
+  `parallax.alphavantage`, an immutable `@ConfigurationProperties` record):
+  `api-key` (`${ALPHA_VANTAGE_API_KEY:}`, blank by default), `base-url`
+  (`https://www.alphavantage.co/query`), `connect-timeout` (`5s`),
+  `request-timeout` (`30s`), `max-response-size` (`8MB`). Every field
+  except `api-key` is validated eagerly in the record's compact
+  constructor (`base-url` must parse as an absolute `http`/`https` URL with
+  a host; the timeouts and max size must be positive) — a misconfigured
+  deployment fails at startup. `api-key` is deliberately unvalidated there:
+  a blank key must never fail application startup, since D-33 introduces
+  no consumer yet that requires one; `AlphaVantageMarketDataProvider` is
+  the sole place that rejects a blank key, at request time.
+
+- **Batch 3 — persistence integration:** `DatasetService` gains a
+  constructor-injected `MarketDataProvider` (the sole
+  `AlphaVantageMarketDataProvider` bean; no registry/factory, since only
+  one implementation exists today) and a new
+  `createVersionFromAlphaVantage(owner, datasetId, depth)`, following
+  `createVersionFromCsv`'s exact shape: resolve the dataset's own symbol
+  and check ownership in a short read-only transaction; call
+  `fetchDailyBars` (real network I/O) entirely outside any transaction;
+  canonicalize the returned bars with D-32's own
+  `DatasetContent.canonicalPrice` (the parser itself performs none) before
+  `BarSeries`/`DatasetContent.of`, so identical logical bars from Alpha
+  Vantage and a CSV upload hash identically; persist through a new shared
+  `persistVersion` helper factored out of D-32's lock/allocate/insert
+  sequence, so `createVersionFromCsv` and `createVersionFromAlphaVantage`
+  are two callers of one algorithm, never two parallel ones. `source =
+  ALPHA_VANTAGE`; `sourceDetail` is exactly what the provider returned,
+  never reconstructed; `adjustmentBasis` is always `RAW` (Alpha Vantage's
+  `TIME_SERIES_DAILY` is not split/dividend-adjusted), never a
+  caller-supplied value for this source. A provider failure, or any
+  failure before the write transaction opens, creates no `DatasetVersion`
+  and consumes no version number — identical to a failed CSV upload.
+  `DatasetSource` gains `ALPHA_VANTAGE`; `V4__allow_alpha_vantage_dataset_source.sql`
+  widens `ck_dataset_version_source` to allow it (the only schema change
+  in this batch — approved as a deliberate, minimal exception to "no
+  migration this batch," since the CHECK constraint would otherwise make
+  the feature unable to persist anything at all). No REST endpoint,
+  controller, or DTO is added in this batch.
+- **Batch 4 — REST endpoint and error boundary:** `POST
+  /api/datasets/{id}/versions/alpha-vantage`, body `{"historyDepth":
+  "COMPACT"|"FULL"}` (`api.AlphaVantageImportRequest`, a one-field record
+  read by the same strict D-30 `StrategyDefinitionCodec.parseRequest`
+  reader as every other request body — mirroring `CreateDatasetRequest`).
+  `DatasetController` only parses/validates and calls
+  `DatasetService.createVersionFromAlphaVantage`: no ownership check of
+  its own, no direct `MarketDataProvider` call, no persistence or
+  hashing logic — the service remains the sole authority for all three,
+  exactly as for CSV upload. The response reuses the existing
+  `DatasetVersionResponse` (201 Created, same `Location` convention as
+  CSV upload) — no second `DatasetVersion` representation. `ApiExceptionHandler`
+  gains one `@ExceptionHandler` per `MarketDataException` subclass, never
+  collapsed: `MarketDataRequestRejectedException` and
+  `MarketDataCapabilityException` (FULL requested against a compact-only
+  account — never a fallback to `COMPACT`) → 422;
+  `InvalidMarketDataException` → 422 (with the failing bar's date attached
+  when known); `MarketDataUnavailableException` (rate limit, temporary
+  control response, or a missing/blank API key — still a runtime
+  condition, never a startup failure) → 503; `MarketDataResponseException`
+  (malformed body, unrecognized shape, or transport/protocol failure) →
+  502. Ownership/not-found (404), version-conflict (409), and integrity
+  failure (500) are unchanged from D-32's own mapping — a cross-owner or
+  missing dataset never reaches the provider. No API key field exists in
+  the request shape (the strict reader rejects one as an unknown
+  property); the key is never accepted from the client, logged, or
+  echoed back.
+
+**Why:** CLAUDE.md requires market data to be abstracted behind a provider
+interface, and requires the engine and its data abstraction to never depend
+on a specific external provider; introducing `MarketDataProvider` only now
+(D-32 deferred it) is the first point a second, genuinely different source
+exists. Splitting parsing (Batch 1, plain Java, exhaustively unit-testable
+with local fixtures) from HTTP transport (Batch 2) keeps the one class that
+touches the network thin and keeps the parser's own tests free of any
+server/timing concerns. Batch 3 reuses D-32's exact persistence algorithm
+rather than introducing a second one, and canonicalizes provider bars for
+the same reason CSV bars are canonicalized: `DatasetContent` is defined
+only over canonical data, and a dataset's identity (its content hash) must
+not depend on which source produced it. Batch 4 maps each
+`MarketDataException` subclass to its own status rather than one generic
+502/500 because the subclasses already encode operationally distinct
+situations (a temporary provider condition, a permanent capability limit,
+a malformed upstream response, invalid market data) that a client or
+operator needs to tell apart.
+
+**Rejected:** retries, throttling, or async HTTP (none are part of the V1
+scope, and the JDK `HttpClient` default of blocking/single-attempt is
+sufficient); building the request URI with the multi-argument `URI`
+constructor (double-encodes an already-percent-encoded query); failing
+application startup on a blank API key (D-33 has no consumer yet that
+requires one; CLAUDE.md's "keep application startup successful" bar); a
+generic HTTP/utility framework or shared abstraction beyond this one
+adapter; wrapping `AlphaVantageDailyParser`'s exceptions in a transport-
+generic exception (would discard Batch 1's classification); a real Alpha
+Vantage smoke test in the automated suite (all HTTP tests run against a
+local `com.sun.net.httpserver.HttpServer` fixture); a `MarketDataProvider`
+registry/factory (Batch 3 — exactly one implementation exists); a
+caller-supplied `adjustmentBasis` or `sourceDetail` for an Alpha Vantage
+import (Batch 3 — both are determined entirely by the source and the
+provider's own response); a second persistence/hashing code path for
+provider-sourced versions (Batch 3 — `persistVersion` is shared); a second
+`DatasetVersion` REST representation, an ownership check inside the
+controller, a direct controller-to-`MarketDataProvider` call, a fallback
+from `FULL` to `COMPACT` on a capability failure, date-range parameters,
+retries/throttling/caching/async import jobs, and an endpoint for changing
+the API key (Batch 4 — none fit this batch's scope or CLAUDE.md's V1
+limits).
+
+**Consequence:** the D-33 Alpha Vantage ingestion path is now end to end —
+`AlphaVantageMarketDataProvider` fetches, `DatasetService.createVersionFromAlphaVantage`
+persists through D-32's own algorithm, and `POST
+/api/datasets/{id}/versions/alpha-vantage` exposes it with the same
+ownership, validation, and error-mapping guarantees as CSV upload.
+`BacktestRun` (D-34) now consumes a `DatasetVersion` exactly as stored, with
+no trimming, regardless of which `DatasetSource` produced it; reconciling a
+fetched `DailyBars` against dataset identity/provenance (open question
+below) remains open.
+
+## D-34 Backtest run orchestration, persistence, read-time integrity, and REST API
+
+**Decision:** the first end-to-end consumer of `StrategyVersion`/
+`DatasetVersion`: synchronous run orchestration (`BacktestRunService`),
+atomic result persistence, read-time structural and cross-field integrity
+verification, and the `/api/backtest-runs` REST API. Packages `backtest`
+and `api`, alongside the existing ones. Delivered in three batches.
+
+- **Batch 1 — schema and persistence model** (`V5__create_backtest_run.sql`):
+  `backtest_run` is an immutable, insert-once JPA entity (`@Immutable`,
+  database triggers, no setters, no update/delete path — D-31/D-32's own
+  four-layer immutability), built directly from an already-computed
+  `BacktestResult`/`PerformanceMetrics`/`BuyAndHoldBenchmark`, never by
+  invoking `Backtester` itself. Its strategy and dataset identity are each
+  tied to their immutable version by a composite foreign key
+  (`(strategy_id, strategy_version_number, strategy_definition_hash) ->
+  strategy_version(...)`, and likewise for the dataset) plus an owner
+  composite foreign key onto `strategy`/`dataset` (`uq_strategy_id_owner`/
+  `uq_dataset_id_owner`), so a persisted run can never reference a version
+  or owner inconsistent with what is actually stored. There is no run
+  status column — a row is written only once a run has already finished.
+  `backtest_equity_point`/`backtest_fill`/`backtest_rejection` are
+  immutable children (no surrogate id, natural composite key, plain JDBC —
+  D-32's `dataset_bar` pattern), never a JPA entity or association. A
+  `Fill`/`OrderRejection`'s triggering `IndicatorSnapshot` is stored as a
+  small self-describing JSON array (`IndicatorSnapshotJson`), independent
+  of the D-30 codec. `engine_semantics_version` records `Backtester.
+  SEMANTICS_VERSION` (currently `1`) alongside every other input, so a
+  future reader can tell whether a stored run was produced under the
+  chronological/execution semantics this codebase currently implements.
+- **Batch 2 — orchestration, transactions, and read-time integrity**
+  (`BacktestRunService`): `createRun` calls owner-scoped `StrategyService.
+  getVersion`/`DatasetService.getVerifiedSeries` (unchanged 404/500
+  semantics), validates the requested range with a dedicated
+  `BacktestRangeValidator` (strict raw containment — `config.startDate() >=
+  dataset.firstDate()`, `config.endDate() <= dataset.lastDate()`, at least
+  one bar inside the range — `BacktestRangeException` otherwise), then runs
+  `Backtester.run`/`PerformanceMetrics.of`/`BuyAndHoldBenchmark.of` and maps
+  the result into persistence rows — all of this with **no database
+  transaction open**. `BacktestRunService` itself carries no
+  `@Transactional`; the complete parent-plus-children write happens in
+  exactly one short transaction on a separate bean, `BacktestRunWriter`
+  (self-invocation cannot make Spring's proxy-based transaction boundary
+  real), so a failure anywhere in that write — including a child-row
+  insert — rolls back the parent row too: no partial run is ever
+  observable. The backend does not duplicate indicator warm-up semantics —
+  a range in which the strategy's indicators never become ready is still
+  accepted; `Backtester`'s own `firstEvaluableDate` remains the sole
+  authority for that. The full verified `BarSeries` is passed to the engine
+  exactly as `DatasetService` returns it, never trimmed. `BacktestConfig`'s
+  monetary/rate fields are persisted as exact `BigDecimal` (`numeric`
+  columns) with no arbitrary magnitude or scale limit — an extreme
+  valid-syntax value the engine or PostgreSQL genuinely cannot represent
+  may surface as an uncaught 500-class failure rather than being capped.
+  Reading is split by cost: `getRun` (one run) reconstructs every child row
+  through its own engine constructor and performs the full structural check
+  (row shape, ascending equity/fill dates, rejection `seq`/date
+  chronology) and cross-field check (stored commission/slippage totals
+  equal the exact sum over reconstructed fills; the reconstructed
+  closed-trade count agrees with the stored metric; the benchmark's
+  `cash + costBasis` equals `initialCapital`; `engine_semantics_version` is
+  one this codebase still supports) — `BacktestResultIntegrityException` on
+  any failure, never client-facing detail. `listRuns` (an owner's history)
+  reads only the `backtest_run` parent row and never verifies a child row,
+  so it stays cheap regardless of how many equity/fill/rejection rows exist
+  behind it. Stored `PerformanceMetrics`/`BuyAndHoldBenchmark` values are
+  historical snapshots: `getRun` never calls `PerformanceMetrics.of(...)`,
+  `BuyAndHoldBenchmark.of(...)`, or `Backtester.run(...)`, and never reloads
+  the original `DatasetVersion` bars or re-decodes the original
+  `StrategyVersion` — a completed run remains readable on its own stored
+  integrity even after its inputs are later corrupted or superseded. There
+  is no result checksum/hash column: integrity comes from reconstructing
+  every value through its own engine type plus explicit cross-field
+  arithmetic, not a separate stored digest. Two identical `createRun` calls
+  are both accepted and produce two distinct rows — V1 has no idempotency
+  infrastructure. The D-30 decimal grammar
+  (`StrategyDefinitionMapper.DECIMAL`, made `public` — the only D-30 source
+  change) is reused unmodified by `BacktestConfigMapper` for
+  `initialCapital`/`commissionPerFill`/`slippageRate`, parsed directly into
+  `BigDecimal`, never through a `double`; `MalformedBacktestConfigException`
+  (shape) and `InvalidBacktestConfigException` (engine semantics) mirror
+  D-30's own client-facing split exactly.
+- **Batch 3 — REST API** (`api.BacktestRunController`, base path
+  `/api/backtest-runs`): `POST` (create), `GET` (list — exactly `listRuns`,
+  no child verification), `GET /{id}` (full detail), and three separate,
+  independently-integrity-verified child views — `GET /{id}/equity-curve`,
+  `GET /{id}/trades` (via `BacktestRunDetail.trades()`, a thin
+  `Trade.fromFills` delegate — no separate backend trade calculation), and
+  `GET /{id}/rejections`. Every read endpoint calls the same owner-scoped
+  `getRun`; the controller itself never invokes `Backtester`, computes a
+  metric, derives a trade independently, touches a repository/entity, or
+  performs an ownership check of its own. The create request is read by the
+  same strict D-30 `JsonMapper` every other envelope uses
+  (`StrategyDefinitionCodec.parseRequest`), so an unknown property
+  (including a client-supplied `ownerId`, hash, `engineSemanticsVersion`, or
+  status) is rejected before Bean Validation ever runs; `@Positive`/
+  `@Min(1)` cover the id/version-number bounds the strict reader has no
+  vocabulary for. Response DTOs render every `BigDecimal` as
+  `toPlainString()`, every metric `double` as a JSON number, an empty
+  `OptionalDouble` as JSON `null`, and never a JPA entity.
+  `MalformedBacktestConfigException` → 400, `InvalidBacktestConfigException`/
+  `BacktestRangeException` → 422, `BacktestRunNotFoundException` → 404
+  (grouped with the existing not-found mapping), `BacktestResultIntegrityException`
+  → 500 (logged server-side, generic body — D-30/D-32's own integrity-failure
+  contract, never a stack trace, SQL detail, or the wrapped cause's text).
+
+**Why:** synchronous, transaction-scoped execution keeps a run's engine
+step reproducible and easy to reason about without introducing a queue,
+worker, or status machine V1 does not need (CLAUDE.md). Splitting the write
+into its own bean is what makes "engine runs outside any transaction, only
+the final write is transactional" a checked, testable fact rather than a
+convention that Spring's self-invocation limitation could silently violate.
+Reconstructing every stored value through its own engine constructor,
+rather than trusting columns or a checksum, reuses the exact validation
+`Backtester`/`Portfolio`/`Trade` already define instead of inventing a
+parallel one. Making `listRuns` deliberately cheap and `getRun` the only
+place verification happens keeps a run's history browsable even if one run
+among thousands has a corrupted child row.
+
+**Rejected:** run status/state machine (`PENDING`/`RUNNING`/`FAILED`);
+asynchronous or queued execution; idempotency keys/infrastructure; a
+result hash/checksum column; recomputing `PerformanceMetrics`/
+`BuyAndHoldBenchmark`/`Backtester` on any read; reloading the original
+`DatasetVersion` bars or re-decoding the original `StrategyVersion` merely
+to display a completed run; trimming the dataset's lookback before handing
+it to the engine; an arbitrary magnitude/scale cap on `BacktestConfig`
+fields; full child-row integrity verification inside `listRuns`; pagination,
+PATCH/DELETE, a retry/rerun/status/export/comparison endpoint (all later
+features); a second decimal-grammar implementation for `BacktestConfig`
+(the D-30 grammar is reused verbatim).
+
+**Consequence:** D-34 is complete. `AlphaVantageMarketDataProvider` remains
+an ingestion-time concern only (D-33) — it is never called during a
+backtest run and is not a `Backtester`/`BacktestRunService` dependency of
+any kind. Spring Security/authentication and the frontend remain the only
+unimplemented pieces of the originally sketched Phase 7 path.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:
 
 1. **Price adjustment basis** (raw vs split/dividend-adjusted) for
    supplied datasets — a data-layer/provenance decision.
-2. **Persisting `Constant(double)`** in the backend: needs a form that
-   round-trips exactly (e.g. `Double.toString`) so reloaded strategy
-   versions stay equal.
+2. **Persisting `Constant(double)`** in the backend: **resolved by D-30**
+   — `Double.toString`, as a JSON string, so reloaded strategy versions
+   stay exactly equal.
 3. **Identical entry/exit conditions** are legal (D-19) but would churn
    (enter, then exit next bar). The engine won't reject them; a backend/UI
    warning may be wanted later.
