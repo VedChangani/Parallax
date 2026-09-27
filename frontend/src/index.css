@@ -33,6 +33,19 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Equity chart (uPlot) - restrained integration with the Parallax type
+   system; uPlot itself owns the canvas rendering and default class names. */
+.parallax-equity-chart .u-legend {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  color: var(--color-ink-secondary);
+}
+
+.parallax-equity-chart .u-legend th {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
