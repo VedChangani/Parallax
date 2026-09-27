@@ -127,12 +127,21 @@ class BacktestRunServiceIT {
         assertEquals(refs.dataset().datasetId(), summary.datasetId());
         assertEquals(refs.dataset().versionNumber(), summary.datasetVersionNumber());
         assertEquals(Backtester.SEMANTICS_VERSION, summary.engineSemanticsVersion());
+        // I8 (Phase 9 Batch 1): the cheap summary already carries startDate/endDate/
+        // totalReturn/benchmarkTotalReturn straight off the backtest_run parent row.
+        assertEquals(tradingConfig().startDate(), summary.startDate());
+        assertEquals(tradingConfig().endDate(), summary.endDate());
 
         BacktestRunDetail detail = backtestRunService.getRun(refs.owner(), summary.id());
         assertEquals(6, detail.equityCurve().size());
         assertEquals(2, detail.fills().size());
         assertEquals(0, detail.rejections().size());
         assertEquals(1, detail.metrics().closedTradeCount());
+        // The summary's totalReturn/benchmarkTotalReturn must agree exactly with the
+        // fully reconstructed, integrity-verified detail - same stored doubles, read
+        // through two different paths.
+        assertEquals(detail.metrics().totalReturn(), summary.totalReturn());
+        assertEquals(detail.benchmarkTotalReturn(), summary.benchmarkTotalReturn());
     }
 
     // --- transaction boundary (D-34 Batch 2 §3, §15) ----------------------------
@@ -216,6 +225,12 @@ class BacktestRunServiceIT {
         List<BacktestRunSummary> aRuns = backtestRunService.listRuns(a.owner());
         assertEquals(1, aRuns.size());
         assertEquals(runA.id(), aRuns.get(0).id());
+        // I8: listRuns is the cheap history path - confirm the new fields are
+        // populated there too, not only on the just-created summary.
+        assertEquals(tradingConfig().startDate(), aRuns.get(0).startDate());
+        assertEquals(tradingConfig().endDate(), aRuns.get(0).endDate());
+        assertEquals(runA.totalReturn(), aRuns.get(0).totalReturn());
+        assertEquals(runA.benchmarkTotalReturn(), aRuns.get(0).benchmarkTotalReturn());
     }
 
     // --- atomic rollback (D-34 Batch 2 §6) ---------------------------------------

@@ -161,7 +161,13 @@
  */
 
 /**
- * The cheap `GET /api/backtest-runs` list item - identity/metadata only.
+ * The cheap `GET /api/backtest-runs` list item - identity/metadata only,
+ * plus (Phase 9 Batch 1, I8) the date range and returns read straight off
+ * the parent row, so a run's history can read as a useful research log
+ * without a per-row detail fetch. `totalReturn`/`benchmarkTotalReturn` are
+ * plain JSON numbers, matching {@link PerformanceMetricsResponse#totalReturn}
+ * and {@link BenchmarkResponse#totalReturn} exactly - never a decimal
+ * string, since these are derived statistics, not ledger values (D-26).
  * @typedef {object} BacktestRunSummaryResponse
  * @property {number} id
  * @property {number} strategyId
@@ -171,6 +177,10 @@
  * @property {number} datasetVersion
  * @property {string} contentHash
  * @property {number} engineSemanticsVersion
+ * @property {string} startDate - ISO-8601 date
+ * @property {string} endDate - ISO-8601 date
+ * @property {number} totalReturn
+ * @property {number} benchmarkTotalReturn
  * @property {string} createdAt
  */
 

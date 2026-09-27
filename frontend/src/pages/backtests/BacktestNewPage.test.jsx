@@ -126,6 +126,13 @@ describe('BacktestNewPage', () => {
     vi.restoreAllMocks();
   });
 
+  it('explains that lookback bars before the start date warm up indicators without generating trades (C1)', async () => {
+    globalThis.fetch = mockFetch();
+    renderPage();
+
+    expect(await screen.findByText(/Indicators may need bars before the start date to warm up/)).toBeTruthy();
+  });
+
   it('loads markets and strategies and defaults to the latest snapshot/version', async () => {
     globalThis.fetch = mockFetch();
     renderPage();

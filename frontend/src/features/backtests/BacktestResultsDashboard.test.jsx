@@ -13,6 +13,11 @@ function jsonResponse(body, status = 200) {
 
 const STRATEGY = { id: 1, name: 'Momentum Cross', description: 'SMA trend-following', latestVersionNumber: 2, createdAt: '2024-01-01T00:00:00Z' };
 const DATASET = { id: 1, name: 'Reliance Industries', symbol: 'RELIANCE', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' };
+const DATASET_VERSION = {
+  datasetId: 1, versionNumber: 1, symbol: 'RELIANCE', source: 'CSV_UPLOAD', sourceDetail: 'reliance.csv',
+  adjustmentBasis: 'RAW', barCount: 60, firstDate: '2024-01-01', lastDate: '2024-03-22',
+  contentHash: 'b'.repeat(64), createdAt: '2024-01-01T00:00:00Z',
+};
 
 const RUN = {
   id: 1,
@@ -118,15 +123,24 @@ const REJECTIONS = [
  * @param {object[]} [overrides.trades]
  * @param {object[]} [overrides.rejections]
  * @param {object[]} [overrides.equity]
+ * @param {object} [overrides.datasetVersion]
  * @param {(url: string) => Response | undefined} [overrides.runHandler] - overrides the run-detail response entirely
  */
-function mockFetch({ run = RUN, trades = [CLOSED_TRADE, OPEN_TRADE], rejections = REJECTIONS, equity = EQUITY, runHandler } = {}) {
+function mockFetch({
+  run = RUN,
+  trades = [CLOSED_TRADE, OPEN_TRADE],
+  rejections = REJECTIONS,
+  equity = EQUITY,
+  datasetVersion = DATASET_VERSION,
+  runHandler,
+} = {}) {
   return vi.fn((url) => {
     if (/\/api\/backtest-runs\/1\/equity-curve$/.test(url)) return Promise.resolve(jsonResponse(equity));
     if (/\/api\/backtest-runs\/1\/trades$/.test(url)) return Promise.resolve(jsonResponse(trades));
     if (/\/api\/backtest-runs\/1\/rejections$/.test(url)) return Promise.resolve(jsonResponse(rejections));
     if (/\/api\/backtest-runs\/1$/.test(url)) return Promise.resolve(runHandler ? runHandler(url) : jsonResponse(run));
     if (/\/api\/strategies\/1$/.test(url)) return Promise.resolve(jsonResponse(STRATEGY));
+    if (/\/api\/datasets\/1\/versions\/1$/.test(url)) return Promise.resolve(jsonResponse(datasetVersion));
     if (/\/api\/datasets\/1$/.test(url)) return Promise.resolve(jsonResponse(DATASET));
     throw new Error(`unhandled request: ${url}`);
   });
@@ -328,6 +342,7 @@ describe('Backtest results dashboard', () => {
         if (/\/rejections$/.test(url)) return Promise.resolve(jsonResponse([]));
         if (/\/api\/backtest-runs\/1$/.test(url)) return Promise.resolve(jsonResponse(RUN));
         if (/\/api\/strategies\/1$/.test(url)) return Promise.resolve(jsonResponse(STRATEGY));
+        if (/\/api\/datasets\/1\/versions\/1$/.test(url)) return Promise.resolve(jsonResponse(DATASET_VERSION));
         if (/\/api\/datasets\/1$/.test(url)) return Promise.resolve(jsonResponse(DATASET));
         throw new Error(`unhandled: ${url}`);
       });
@@ -352,6 +367,97 @@ describe('Backtest results dashboard', () => {
     });
   });
 
+  describe('warm-up notice (C1)', () => {
+    it('shows no warm-up notice when firstEvaluableDate equals startDate (CASE 1)', async () => {
+      globalThis.fetch = mockFetch({ run: { ...RUN, firstEvaluableDate: RUN.startDate } });
+      renderRun('/backtests/1');
+      await screen.findByText('Performance');
+
+      expect(screen.queryByText(/Warm-up period/)).toBeNull();
+      expect(screen.queryByText(/Never evaluated/)).toBeNull();
+    });
+
+    it('explains a delayed firstEvaluableDate without implying the strategy underperformed (CASE 2)', async () => {
+      globalThis.fetch = mockFetch(); // RUN.firstEvaluableDate '2024-03-08' > RUN.startDate '2024-01-01'
+      renderRun('/backtests/1');
+
+      expect(await screen.findByText('Warm-up period')).toBeTruthy();
+      expect(screen.getByText(/could not be evaluated until/)).toBeTruthy();
+      // Also rendered separately in ResearchInputsPanel's own "First evaluable
+      // date" field - so this must allow more than one match.
+      expect(screen.getAllByText(RUN.firstEvaluableDate).length).toBeGreaterThan(0);
+      // EQUITY has 2 points: 2024-01-01 (before firstEvaluableDate) and 2024-03-22 (after) -
+      // derived from the already-fetched equity curve, no new endpoint.
+      const notice = await screen.findByRole('status');
+      expect(notice.textContent).toMatch(/No signal could be generated on 1 of 2 bars in range/);
+      // Scoped to the notice itself - "Average loss" is a legitimate, unrelated
+      // performance-metric label rendered elsewhere on the same page.
+      expect(notice.textContent).not.toMatch(/lost|underperform|loss/i);
+    });
+
+    it('explains a null firstEvaluableDate as "never ready", never as a strategy loss (CASE 3)', async () => {
+      globalThis.fetch = mockFetch({ run: { ...RUN, firstEvaluableDate: null } });
+      renderRun('/backtests/1');
+
+      expect(await screen.findByText('Never evaluated')).toBeTruthy();
+      const notice = screen.getByRole('status');
+      expect(notice.textContent).toMatch(/never had enough history/);
+      expect(notice.textContent).toMatch(/no entry or exit signal was possible at any point/);
+      await waitFor(() => expect(notice.textContent).toMatch(/No signal could be generated on any of the 2 bars in range/));
+      expect(notice.textContent).not.toMatch(/lost|underperform|loss/i);
+    });
+  });
+
+  describe('assumptions (I4)', () => {
+    it('discloses the dataset source, adjustment basis, and a RAW warning', async () => {
+      globalThis.fetch = mockFetch(); // DATASET_VERSION.adjustmentBasis is RAW
+      renderRun('/backtests/1');
+      await screen.findByText('Assumptions');
+
+      expect(await screen.findByText('CSV upload')).toBeTruthy();
+      expect(screen.getByText('Raw')).toBeTruthy();
+      expect(screen.getByText('Raw prices are not split-adjusted.')).toBeTruthy();
+    });
+
+    it('omits the RAW warning for split-adjusted data', async () => {
+      globalThis.fetch = mockFetch({ datasetVersion: { ...DATASET_VERSION, adjustmentBasis: 'SPLIT_ADJUSTED' } });
+      renderRun('/backtests/1');
+
+      expect(await screen.findByText('Split-adjusted')).toBeTruthy();
+      expect(screen.queryByText('Raw prices are not split-adjusted.')).toBeNull();
+    });
+
+    it('explains the execution model, open-position treatment, benchmark definition, and disclaimer', async () => {
+      globalThis.fetch = mockFetch();
+      renderRun('/backtests/1');
+      await screen.findByText('Assumptions');
+
+      expect(screen.getByText(/generated at a bar’s close/)).toBeTruthy();
+      expect(screen.getByText(/executes at the next bar’s open/)).toBeTruthy();
+      expect(screen.getByText(/reserves one commission in cash at entry/)).toBeTruthy();
+      expect(screen.getByText(/never force-liquidated/)).toBeTruthy();
+      expect(screen.getByText(/Buy & hold represents the same starting capital/)).toBeTruthy();
+      expect(screen.getByText('Historical simulation — not indicative of future results.')).toBeTruthy();
+    });
+
+    it('still shows the static assumptions text even if the dataset snapshot fails to load', async () => {
+      globalThis.fetch = vi.fn((url) => {
+        if (/\/api\/datasets\/1\/versions\/1$/.test(url)) return Promise.resolve(jsonResponse({ title: 'Internal error' }, 500));
+        if (/\/api\/backtest-runs\/1\/equity-curve$/.test(url)) return Promise.resolve(jsonResponse(EQUITY));
+        if (/\/api\/backtest-runs\/1\/trades$/.test(url)) return Promise.resolve(jsonResponse([]));
+        if (/\/api\/backtest-runs\/1\/rejections$/.test(url)) return Promise.resolve(jsonResponse([]));
+        if (/\/api\/backtest-runs\/1$/.test(url)) return Promise.resolve(jsonResponse(RUN));
+        if (/\/api\/strategies\/1$/.test(url)) return Promise.resolve(jsonResponse(STRATEGY));
+        if (/\/api\/datasets\/1$/.test(url)) return Promise.resolve(jsonResponse(DATASET));
+        throw new Error(`unhandled: ${url}`);
+      });
+      renderRun('/backtests/1');
+
+      expect(await screen.findByText('Historical simulation — not indicative of future results.')).toBeTruthy();
+      expect(screen.queryByText('CSV upload')).toBeNull();
+    });
+  });
+
   describe('research inputs', () => {
     it('shows market/strategy identity, period, capital/commission/slippage, and copyable hashes', async () => {
       globalThis.fetch = mockFetch();
@@ -365,6 +471,15 @@ describe('Backtest results dashboard', () => {
       expect(screen.getByText('0.05%')).toBeTruthy(); // slippageRate "0.0005" -> percent display
       expect(screen.getAllByText(RUN.definitionHash).length).toBeGreaterThan(0);
       expect(screen.getAllByText(RUN.contentHash).length).toBeGreaterThan(0);
+    });
+
+    it('shows the first evaluable date as a plain fact (C1)', async () => {
+      globalThis.fetch = mockFetch();
+      renderRun('/backtests/1');
+      await screen.findByText('Research inputs');
+
+      expect(screen.getByText('First evaluable date')).toBeTruthy();
+      expect(screen.getAllByText(RUN.firstEvaluableDate).length).toBeGreaterThan(0);
     });
 
     it('navigates to the market and strategy detail pages without reloading their versions', async () => {

@@ -1,5 +1,6 @@
 package in.vedchangani.parallax.backend.api;
 
+import com.jayway.jsonpath.JsonPath;
 import in.vedchangani.parallax.backend.TestcontainersConfiguration;
 import in.vedchangani.parallax.backend.dataset.AdjustmentBasis;
 import in.vedchangani.parallax.backend.dataset.DatasetService;
@@ -40,6 +41,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
@@ -333,10 +335,33 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$.length()").value(1));
 
         when(currentUser.id()).thenReturn(owner);
-        mockMvc.perform(get("/api/backtest-runs"))
+        MvcResult listResult = mockMvc.perform(get("/api/backtest-runs"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].id").value(runId));
+                .andExpect(jsonPath("$[0].id").value(runId))
+                // I8 (Phase 9 Batch 1): the cheap list endpoint carries the run's date
+                // range and returns, not only identity/hash fields.
+                .andExpect(jsonPath("$[0].startDate").value("2024-01-02"))
+                .andExpect(jsonPath("$[0].endDate").value("2024-01-09"))
+                .andExpect(jsonPath("$[0].totalReturn").isNumber())
+                .andExpect(jsonPath("$[0].benchmarkTotalReturn").isNumber())
+                .andReturn();
+
+        // Cross-check against the fully reconstructed detail response - same stored
+        // doubles, read through the cheap list path and the verified detail path.
+        String listJson = listResult.getResponse().getContentAsString();
+        MvcResult detailResult = mockMvc.perform(get("/api/backtest-runs/" + runId))
+                .andExpect(status().isOk())
+                .andReturn();
+        String detailJson = detailResult.getResponse().getContentAsString();
+
+        Double listTotalReturn = JsonPath.read(listJson, "$[0].totalReturn");
+        Double detailTotalReturn = JsonPath.read(detailJson, "$.metrics.totalReturn");
+        assertEquals(detailTotalReturn, listTotalReturn);
+
+        Double listBenchmarkReturn = JsonPath.read(listJson, "$[0].benchmarkTotalReturn");
+        Double detailBenchmarkReturn = JsonPath.read(detailJson, "$.benchmark.totalReturn");
+        assertEquals(detailBenchmarkReturn, listBenchmarkReturn);
     }
 
     @Test

@@ -100,6 +100,16 @@ export function BacktestConfigFields({
           error={fieldErrors.endDate}
         />
       </div>
+
+      {/* C1 (Phase 9 Batch 1): a factual note only - this never changes the
+          engine's start/lookback semantics (D-6) or silently rewrites either
+          date; it just explains why a run's evaluable range can start later
+          than the date entered above. */}
+      <p className="text-xs text-ink-muted">
+        Indicators may need bars before the start date to warm up. Those lookback bars never produce trades, equity,
+        or signals - the strategy only becomes evaluable once every indicator is ready, which can be later than the
+        start date above.
+      </p>
     </div>
   );
 }
