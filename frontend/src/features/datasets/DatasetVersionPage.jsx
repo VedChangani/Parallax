@@ -8,14 +8,8 @@ import { ErrorState } from '../../components/ErrorState.jsx';
 import { LoadingState } from '../../components/LoadingState.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
+import { ADJUSTMENT_BASIS_LABELS, SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { DatasetBarsTable } from './DatasetBarsTable.jsx';
-
-const SOURCE_LABELS = { CSV_UPLOAD: 'CSV upload', ALPHA_VANTAGE: 'Alpha Vantage' };
-const ADJUSTMENT_BASIS_LABELS = {
-  RAW: 'Raw',
-  SPLIT_ADJUSTED: 'Split-adjusted',
-  SPLIT_AND_DIVIDEND_ADJUSTED: 'Split & dividend-adjusted',
-};
 
 /**
  * One immutable data snapshot - the user-facing name for the backend's

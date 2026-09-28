@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/apiError.js';
+import * as immutableCache from '../api/immutableCache.js';
 import { useApiResource } from './useApiResource.js';
 
 describe('useApiResource', () => {
@@ -80,5 +81,28 @@ describe('useApiResource', () => {
     });
 
     expect(result.current.data).toEqual({ id: 'second' });
+  });
+
+  it('drops a cache write from a response that resolves after the identity epoch has moved on (D-39)', async () => {
+    let resolveFetch;
+    const fetcher = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    renderHook(() => useApiResource(fetcher, [], { cacheKey: 'stale-epoch-key' }));
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalled());
+
+    // Simulates a login/logout/401 elsewhere in the app while this request is still in flight.
+    immutableCache.bumpEpoch();
+
+    await act(async () => {
+      resolveFetch({ id: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(immutableCache.has('stale-epoch-key')).toBe(false);
   });
 });

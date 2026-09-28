@@ -7,7 +7,9 @@ import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * D-33 Batch 2 {@link AlphaVantageProperties} validation: plain Java, no
@@ -76,6 +78,27 @@ class AlphaVantagePropertiesTest {
                 new AlphaVantageProperties("key", BASE_URL, CONNECT_TIMEOUT, REQUEST_TIMEOUT, DataSize.ofBytes(0)));
         assertThrows(IllegalArgumentException.class, () ->
                 new AlphaVantageProperties("key", BASE_URL, CONNECT_TIMEOUT, REQUEST_TIMEOUT, DataSize.ofBytes(-1)));
+    }
+
+    @Test
+    void toStringRedactsANonBlankApiKey() {
+        AlphaVantageProperties properties = new AlphaVantageProperties("super-secret-key", BASE_URL, CONNECT_TIMEOUT,
+                REQUEST_TIMEOUT, MAX_RESPONSE_SIZE);
+
+        String text = properties.toString();
+
+        assertFalse(text.contains("super-secret-key"));
+        assertTrue(text.contains("REDACTED"));
+        // Every other field remains visible - only the key is sensitive.
+        assertTrue(text.contains(BASE_URL));
+    }
+
+    @Test
+    void toStringDoesNotClaimRedactionForABlankApiKey() {
+        AlphaVantageProperties properties =
+                new AlphaVantageProperties("", BASE_URL, CONNECT_TIMEOUT, REQUEST_TIMEOUT, MAX_RESPONSE_SIZE);
+
+        assertFalse(properties.toString().contains("REDACTED"));
     }
 
     @Test

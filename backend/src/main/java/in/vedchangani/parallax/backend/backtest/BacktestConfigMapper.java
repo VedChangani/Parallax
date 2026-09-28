@@ -71,15 +71,26 @@ public final class BacktestConfigMapper {
      * throws {@link NumberFormatException}/{@link ArithmeticException} from
      * the constructor itself; both are treated as malformed input, with the
      * field path, rather than allowed to escape raw.
+     *
+     * <p>Phase 9 Batch 2b (D-36): once parsed, the value's canonical
+     * precision is bounded by {@code StrategyDefinitionMapper}'s shared
+     * {@link StrategyDefinitionMapper#requireWithinCanonicalPrecisionBounds}
+     * — a semantic-class (422) check, layered after this method's own
+     * malformed-class (400) ones and before {@code BacktestConfig}'s own
+     * semantic checks (positivity, {@code [0,1)}, {@code startDate <=
+     * endDate}), which remain entirely unchanged.
      */
     private static BigDecimal parseDecimal(String text, String path) {
         requireDecimalGrammar(text, path);
+        BigDecimal value;
         try {
-            return new BigDecimal(text);
+            value = new BigDecimal(text);
         } catch (NumberFormatException | ArithmeticException e) {
             throw new MalformedBacktestConfigException(path,
                     "exponent is outside the representable range, was " + quote(text));
         }
+        StrategyDefinitionMapper.requireWithinCanonicalPrecisionBounds(value, path, InvalidBacktestConfigException::new);
+        return value;
     }
 
     private static void requireDecimalGrammar(String text, String path) {
@@ -87,6 +98,9 @@ public final class BacktestConfigMapper {
             throw new MalformedBacktestConfigException(path,
                     "must match the decimal grammar " + StrategyDefinitionMapper.DECIMAL.pattern() + ", was null");
         }
+        // Phase 9 Batch 2b (D-36): the raw-length bound runs before the grammar
+        // regex itself, shared with StrategyDefinitionMapper's identical check.
+        StrategyDefinitionMapper.requireBoundedLength(text, path, MalformedBacktestConfigException::new);
         Matcher matcher = StrategyDefinitionMapper.DECIMAL.matcher(text);
         if (!matcher.matches()) {
             throw new MalformedBacktestConfigException(path,

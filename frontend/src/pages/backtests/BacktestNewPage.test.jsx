@@ -12,6 +12,7 @@ function jsonResponse(body, status = 200) {
 }
 
 const MARKET = { id: 7, name: 'Reliance Industries', symbol: 'RELIANCE', latestVersionNumber: 3, createdAt: '2024-01-01T00:00:00Z' };
+const MARKET_2 = { id: 9, name: 'Apple Inc.', symbol: 'AAPL', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' };
 
 const SNAPSHOT_V3 = {
   datasetId: 7,
@@ -27,6 +28,7 @@ const SNAPSHOT_V3 = {
   createdAt: '2024-01-01T00:00:00Z',
 };
 const SNAPSHOT_V2 = { ...SNAPSHOT_V3, versionNumber: 2, barCount: 1900, firstDate: '2016-01-01', lastDate: '2023-01-01' };
+const SNAPSHOT_MARKET_2_V1 = { ...SNAPSHOT_V3, datasetId: 9, symbol: 'AAPL', versionNumber: 1 };
 
 const STRATEGY = { id: 42, name: 'Momentum Cross', description: 'SMA trend-following', latestVersionNumber: 4, createdAt: '2024-01-01T00:00:00Z' };
 
@@ -68,6 +70,8 @@ function mockFetch({ markets = [MARKET], strategies = [STRATEGY], postHandler } 
     if (url === '/api/datasets/7/versions') return Promise.resolve(jsonResponse([SNAPSHOT_V3, SNAPSHOT_V2]));
     if (url === '/api/datasets/7/versions/3') return Promise.resolve(jsonResponse(SNAPSHOT_V3));
     if (url === '/api/datasets/7/versions/2') return Promise.resolve(jsonResponse(SNAPSHOT_V2));
+    if (url === '/api/datasets/9/versions') return Promise.resolve(jsonResponse([SNAPSHOT_MARKET_2_V1]));
+    if (url === '/api/datasets/9/versions/1') return Promise.resolve(jsonResponse(SNAPSHOT_MARKET_2_V1));
     if (url === '/api/strategies') return Promise.resolve(jsonResponse(strategies));
     if (url === '/api/strategies/42/versions') {
       return Promise.resolve(
@@ -89,8 +93,12 @@ function mockFetch({ markets = [MARKET], strategies = [STRATEGY], postHandler } 
 }
 
 function renderPage() {
+  return renderPageAt({ pathname: '/backtests/new' });
+}
+
+function renderPageAt(initialEntry) {
   return render(
-    <MemoryRouter initialEntries={['/backtests/new']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route path="/backtests/new" element={<BacktestNewPage />} />
         <Route path="/backtests/:runId" element={<p>run detail page</p>} />
@@ -118,6 +126,26 @@ describe('BacktestNewPage', () => {
     vi.restoreAllMocks();
   });
 
+  it('explains that lookback bars before the start date warm up indicators without generating trades (C1)', async () => {
+    globalThis.fetch = mockFetch();
+    renderPage();
+
+    expect(await screen.findByText(/Indicators may need bars before the start date to warm up/)).toBeTruthy();
+  });
+
+  it('warns when the selected strategy needs lookback bars but the default start date leaves none (I-3)', async () => {
+    globalThis.fetch = mockFetch();
+    renderPage();
+
+    // DEFINITION_V4 needs SMA(50) - the largest of SMA(20)/SMA(50)/RSI(14)+1 -
+    // and the default start date is the snapshot's own first date (2018-01-01),
+    // so there is no lookback at all until the user moves it.
+    expect(await screen.findByText(/needs at least 50 prior bars/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2019-01-01' } });
+    expect(screen.queryByText(/needs at least 50 prior bars/)).toBeNull();
+  });
+
   it('loads markets and strategies and defaults to the latest snapshot/version', async () => {
     globalThis.fetch = mockFetch();
     renderPage();
@@ -128,6 +156,24 @@ describe('BacktestNewPage', () => {
 
     expect(await screen.findByDisplayValue('Momentum Cross')).toBeTruthy();
     expect(screen.getByLabelText('Version')).toHaveProperty('value', '4');
+  });
+
+  it('preselects the market carried in router state (e.g. from a market\'s own "Create backtest" link)', async () => {
+    globalThis.fetch = mockFetch({ markets: [MARKET, MARKET_2] });
+    renderPageAt({ pathname: '/backtests/new', state: { marketId: 9 } });
+
+    expect(await screen.findByDisplayValue('Apple Inc. (AAPL)')).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText('Data snapshot')).toHaveProperty('value', '1'));
+  });
+
+  it('preselects the strategy carried in router state (e.g. from a strategy\'s own "Create backtest" link)', async () => {
+    const strategy2 = { id: 43, name: 'Mean Reversion', description: '', latestVersionNumber: 3, createdAt: '2024-01-01T00:00:00Z' };
+    // strategy2 is listed first, so this proves the preselection - not the
+    // default first-list-entry fallback - is what picks Momentum Cross.
+    globalThis.fetch = mockFetch({ strategies: [strategy2, STRATEGY] });
+    renderPageAt({ pathname: '/backtests/new', state: { strategyId: 42 } });
+
+    expect(await screen.findByDisplayValue('Momentum Cross')).toBeTruthy();
   });
 
   it('shows a useful empty state and no fake data when there are no markets', async () => {

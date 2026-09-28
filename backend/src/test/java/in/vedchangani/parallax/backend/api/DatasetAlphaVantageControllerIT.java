@@ -10,6 +10,7 @@ import in.vedchangani.parallax.backend.marketdata.MarketDataProvider;
 import in.vedchangani.parallax.backend.marketdata.MarketDataRequestRejectedException;
 import in.vedchangani.parallax.backend.marketdata.MarketDataResponseException;
 import in.vedchangani.parallax.backend.marketdata.MarketDataUnavailableException;
+import in.vedchangani.parallax.backend.security.AuthenticatedMockMvcConfig;
 import in.vedchangani.parallax.backend.strategy.TestUsers;
 import in.vedchangani.parallax.backend.user.CurrentUser;
 import in.vedchangani.parallax.backend.user.UserId;
@@ -56,7 +57,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
 class DatasetAlphaVantageControllerIT {
 
     @Autowired

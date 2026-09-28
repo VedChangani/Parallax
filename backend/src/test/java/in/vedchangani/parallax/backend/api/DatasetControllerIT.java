@@ -3,6 +3,7 @@ package in.vedchangani.parallax.backend.api;
 import com.jayway.jsonpath.JsonPath;
 import in.vedchangani.parallax.backend.TestcontainersConfiguration;
 import in.vedchangani.parallax.backend.dataset.DatasetFixtures;
+import in.vedchangani.parallax.backend.security.AuthenticatedMockMvcConfig;
 import in.vedchangani.parallax.backend.strategy.TestUsers;
 import in.vedchangani.parallax.backend.user.CurrentUser;
 import in.vedchangani.parallax.backend.user.UserId;
@@ -41,7 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
 class DatasetControllerIT {
 
     private static final String SIMPLE_CSV = "date,open,high,low,close,volume\n"

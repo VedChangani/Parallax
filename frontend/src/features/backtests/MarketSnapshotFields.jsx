@@ -3,9 +3,8 @@ import { Badge } from '../../components/Badge.jsx';
 import { buttonClasses } from '../../components/buttonStyles.js';
 import { ErrorState } from '../../components/ErrorState.jsx';
 import { LoadingState } from '../../components/LoadingState.jsx';
+import { ADJUSTMENT_BASIS_LABELS, SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { selectClasses } from '../strategies/formStyles.js';
-
-const SOURCE_LABELS = { CSV_UPLOAD: 'CSV upload', ALPHA_VANTAGE: 'Alpha Vantage' };
 
 /**
  * The "Market" section of the New Backtest form (D-34 Batch 4): choose an
@@ -119,7 +118,10 @@ export function MarketSnapshotFields({
           <Stat label="Source" value={<Badge tone="accent">{SOURCE_LABELS[snapshotDetail.data.source] ?? snapshotDetail.data.source}</Badge>} />
           <Stat label="Coverage" value={`${snapshotDetail.data.firstDate} → ${snapshotDetail.data.lastDate}`} />
           <Stat label="Bars" value={snapshotDetail.data.barCount.toLocaleString()} />
-          <Stat label="Adjustment" value={<Badge>{snapshotDetail.data.adjustmentBasis}</Badge>} />
+          <Stat
+            label="Adjustment"
+            value={<Badge>{ADJUSTMENT_BASIS_LABELS[snapshotDetail.data.adjustmentBasis] ?? snapshotDetail.data.adjustmentBasis}</Badge>}
+          />
         </dl>
       ) : null}
     </div>

@@ -57,6 +57,7 @@ export function useApiResource(fetcher, deps, options = {}) {
     }
 
     const controller = new AbortController();
+    const requestEpoch = immutableCache.currentEpoch();
 
     Promise.resolve().then(() => {
       if (requestIdRef.current !== requestId) return; // superseded by a later call
@@ -66,7 +67,9 @@ export function useApiResource(fetcher, deps, options = {}) {
     fetcherRef.current(controller.signal).then(
       (data) => {
         if (requestIdRef.current !== requestId) return; // superseded by a later call
-        if (cacheKey) immutableCache.set(cacheKey, data);
+        // D-39: a write captured from before a login/logout/401 is dropped
+        // by immutableCache.set itself if the epoch has since moved on.
+        if (cacheKey) immutableCache.set(cacheKey, data, requestEpoch);
         setState({ data, error: undefined, loading: false });
       },
       (error) => {

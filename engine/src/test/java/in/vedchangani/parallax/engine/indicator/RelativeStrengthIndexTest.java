@@ -184,4 +184,19 @@ class RelativeStrengthIndexTest {
         // avgGain = (0 * 1 + 10) / 2 = 5, avgLoss = (0 * 1 + 0) / 2 = 0 -> RSI 100
         assertEquals(100.0, rsi.value(), TOLERANCE);
     }
+
+    // --- Phase 9 Batch 2a: RSI was already O(1) memory (no array of any size) -
+    // this only confirms construction/update for a huge period stays unaffected.
+
+    @Test
+    void hugePeriodConstructsAndAcceptsAFewUpdatesWithoutAllocatingPeriodSizedMemory() {
+        RelativeStrengthIndex rsi = new RelativeStrengthIndex(Integer.MAX_VALUE);
+
+        assertFalse(rsi.isReady());
+        rsi.update(price("100"));
+        rsi.update(price("101"));
+        rsi.update(price("99"));
+        assertFalse(rsi.isReady());
+        assertThrows(IllegalStateException.class, rsi::value);
+    }
 }

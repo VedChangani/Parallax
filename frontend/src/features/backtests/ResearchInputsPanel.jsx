@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import { CopyButton } from '../../components/CopyButton.jsx';
 import { fractionTextToPercentText } from '../../lib/decimal.js';
-import { formatMoney } from '../../lib/format.js';
+import { formatDate, formatMoney } from '../../lib/format.js';
 
 /**
  * The compact reproducibility panel (D-34 Batch 5 §9): makes it obvious the
@@ -49,6 +49,14 @@ export function ResearchInputsPanel({ run, marketName, marketSymbol, strategyNam
           <dd className="tabular-nums font-semibold text-ink">
             {run.startDate} → {run.endDate}
           </dd>
+        </div>
+
+        <div>
+          {/* C1 (Phase 9 Batch 1): the same firstEvaluableDate WarmupNotice
+              explains above, stated here as a plain fact regardless of case -
+              equal to the start date needs no special treatment here either. */}
+          <dt className="text-xs text-ink-muted">First evaluable date</dt>
+          <dd className="tabular-nums font-semibold text-ink">{formatDate(run.firstEvaluableDate)}</dd>
         </div>
 
         <div>

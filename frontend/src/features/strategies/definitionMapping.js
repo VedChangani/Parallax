@@ -302,3 +302,43 @@ export function fractionToPercentText(fraction) {
 export function percentTextToFraction(percentText) {
   return shiftDecimalText(percentText, -2, (n) => n / 100);
 }
+
+// --- indicator warm-up lookback (Phase 10 Batch 4, I-3) ---------------------
+//
+// A presentation-only mirror of the engine's own warm-up rule (D-8;
+// architecture.md §8: SMA(n)/EMA(n) ready after n closes, RSI(n) after n+1).
+// Used only to warn the New Backtest form when a strategy's own indicators
+// would have no lookback bars to warm up on - never to compute an actual
+// date, never sent to the backend, and never a substitute for the engine's
+// own firstEvaluableDate.
+
+const RSI_EXTRA_WARMUP_CLOSE = 1;
+
+/** @param {object} operand - an OperandDto or builder node @returns {number} */
+function operandLookbackBars(operand) {
+  if (operand.type !== 'indicator') return 0;
+  const period = Number(operand.period);
+  if (!Number.isFinite(period) || period < 1) return 0;
+  return operand.indicator === 'RSI' ? period + RSI_EXTRA_WARMUP_CLOSE : period;
+}
+
+/** @param {object} condition - a ConditionDto or builder node @returns {number} */
+function conditionLookbackBars(condition) {
+  if (condition.type === 'compare') {
+    return Math.max(operandLookbackBars(condition.left), operandLookbackBars(condition.right));
+  }
+  return condition.conditions.reduce((max, child) => Math.max(max, conditionLookbackBars(child)), 0);
+}
+
+/**
+ * The largest number of prior closes any indicator referenced by
+ * `definition`'s entry/exit conditions needs before it becomes ready. `0`
+ * when the strategy references no indicator at all (e.g. Close-only
+ * conditions).
+ *
+ * @param {import('../../api/types.js').StrategyDefinitionDto} definition
+ * @returns {number}
+ */
+export function requiredLookbackBars(definition) {
+  return Math.max(conditionLookbackBars(definition.entryCondition), conditionLookbackBars(definition.exitCondition));
+}

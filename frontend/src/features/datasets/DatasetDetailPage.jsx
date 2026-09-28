@@ -8,11 +8,10 @@ import { ErrorState } from '../../components/ErrorState.jsx';
 import { LoadingState } from '../../components/LoadingState.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
+import { SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { AlphaVantageImportForm } from './AlphaVantageImportForm.jsx';
 import { CsvUploadForm } from './CsvUploadForm.jsx';
 import { DatasetVersionHistory } from './DatasetVersionHistory.jsx';
-
-const SOURCE_LABELS = { CSV_UPLOAD: 'CSV upload', ALPHA_VANTAGE: 'Alpha Vantage' };
 
 /**
  * The Market workspace - the user-facing presentation of the backend's
@@ -58,7 +57,7 @@ export function DatasetDetailPage({ datasetId }) {
         title={market.symbol}
         description={`${market.name} · daily historical data`}
         actions={
-          <Link to="/backtests/new" className={buttonClasses('primary')}>
+          <Link to="/backtests/new" state={{ marketId: datasetId }} className={buttonClasses('primary')}>
             Create backtest
           </Link>
         }

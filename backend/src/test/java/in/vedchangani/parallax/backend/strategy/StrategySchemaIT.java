@@ -3,7 +3,6 @@ package in.vedchangani.parallax.backend.strategy;
 import in.vedchangani.parallax.backend.TestcontainersConfiguration;
 import in.vedchangani.parallax.backend.strategy.definition.CanonicalStrategyDefinition;
 import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionCodec;
-import in.vedchangani.parallax.backend.user.CurrentUser;
 import in.vedchangani.parallax.backend.user.UserId;
 import in.vedchangani.parallax.engine.strategy.StrategyDefinition;
 import org.junit.jupiter.api.Test;
@@ -19,11 +18,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * D-31 schema-level proof, against real PostgreSQL (Testcontainers, D-29):
  * successful context startup already proves Flyway ran and Hibernate {@code
- * validate} passed against it. This class additionally proves: the seeded
- * development user resolves, {@code strategy_version}'s database-layer
- * immutability trigger rejects UPDATE/DELETE/TRUNCATE, its CHECK constraints
- * reject malformed rows, and D-30 {@code decode} tolerates PostgreSQL's own
- * jsonb reformatting of a stored document.
+ * validate} passed against it. This class additionally proves: {@code
+ * strategy_version}'s database-layer immutability trigger rejects
+ * UPDATE/DELETE/TRUNCATE, its CHECK constraints reject malformed rows, and
+ * D-30 {@code decode} tolerates PostgreSQL's own jsonb reformatting of a
+ * stored document.
+ *
+ * <p>Uses {@link TestUsers}, never the real {@code CurrentUser} bean
+ * (D-37: since {@code AuthenticatedCurrentUser} resolves an owner only
+ * from an authenticated request, there is no request here to resolve one
+ * from — exactly {@code StrategyOwnershipIT}'s existing pattern for the
+ * same reason).
  */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -33,9 +38,6 @@ class StrategySchemaIT {
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
-    private CurrentUser currentUser;
-
-    @Autowired
     private StrategyService strategyService;
 
     @Autowired
@@ -43,14 +45,6 @@ class StrategySchemaIT {
 
     @Autowired
     private StrategyVersionRepository versionRepository;
-
-    @Test
-    void seededDevelopmentUserResolves() {
-        UserId id = currentUser.id();
-        String username = jdbcTemplate.queryForObject(
-                "select username from app_user where id = ?", String.class, id.value());
-        assertEquals("dev", username);
-    }
 
     @Test
     void updatingAStrategyVersionRowIsRejectedByTheDatabase() {
@@ -95,7 +89,7 @@ class StrategySchemaIT {
 
     @Test
     void postgresJsonbReformattingStillVerifiesThroughD30Decode() {
-        UserId owner = currentUser.id();
+        UserId owner = TestUsers.create(jdbcTemplate, "schema");
         StrategyDefinition definition = StrategyFixtures.simple();
         CanonicalStrategyDefinition canonical = codec.encode(definition);
         StrategySummary strategy = strategyService.createStrategy(owner, uniqueName(), "", definition);
@@ -123,7 +117,7 @@ class StrategySchemaIT {
     }
 
     private long createStrategyAndReturnId() {
-        UserId owner = currentUser.id();
+        UserId owner = TestUsers.create(jdbcTemplate, "schema");
         StrategySummary summary = strategyService.createStrategy(owner, uniqueName(), "", StrategyFixtures.simple());
         return summary.id();
     }

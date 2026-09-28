@@ -1,18 +1,31 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AuthProvider } from './auth/AuthProvider.jsx';
 import { AppRoutes } from './routes.jsx';
 
 function renderAt(path) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <AppRoutes />
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
     </MemoryRouter>,
   );
 }
 
 function jsonResponse(body) {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+/** D-39: every protected route now needs GET /api/auth/me to resolve before it renders. */
+function authenticatedMeResponse(url) {
+  return /\/api\/auth\/me$/.test(url) ? Promise.resolve(jsonResponse({ username: 'test-user' })) : undefined;
+}
+
+/** For a test that fetches nothing else - resolves identity, everything else returns an empty list. */
+function stubAuthenticatedOnlyFetch() {
+  globalThis.fetch = vi.fn((url) => authenticatedMeResponse(url) ?? Promise.resolve(jsonResponse([])));
 }
 
 const SAMPLE_DEFINITION = {
@@ -34,6 +47,8 @@ const SAMPLE_DEFINITION = {
 /** Routes to real Strategy endpoint shapes so /strategies/* pages resolve deterministically. */
 function stubStrategyFetch() {
   globalThis.fetch = vi.fn((url) => {
+    const me = authenticatedMeResponse(url);
+    if (me) return me;
     if (/\/api\/strategies\/42\/versions\/3$/.test(url)) {
       return Promise.resolve(
         jsonResponse({
@@ -65,6 +80,8 @@ function stubStrategyFetch() {
 /** Routes to real Dataset endpoint shapes so /datasets/* pages resolve deterministically. */
 function stubDatasetFetch() {
   globalThis.fetch = vi.fn((url) => {
+    const me = authenticatedMeResponse(url);
+    if (me) return me;
     if (/\/api\/datasets\/7\/versions\/2$/.test(url)) {
       return Promise.resolve(
         jsonResponse({
@@ -109,6 +126,8 @@ const SAMPLE_METRICS = {
 /** Routes to real backtest-run endpoint shapes so /backtests/7/* pages resolve deterministically. */
 function stubBacktestRunFetch() {
   globalThis.fetch = vi.fn((url) => {
+    const me = authenticatedMeResponse(url);
+    if (me) return me;
     if (/\/api\/backtest-runs\/7\/equity-curve$/.test(url)) return Promise.resolve(jsonResponse([]));
     if (/\/api\/backtest-runs\/7\/trades$/.test(url)) return Promise.resolve(jsonResponse([]));
     if (/\/api\/backtest-runs\/7\/rejections$/.test(url)) return Promise.resolve(jsonResponse([]));
@@ -156,20 +175,22 @@ describe('AppRoutes', () => {
     vi.restoreAllMocks();
   });
 
-  it('redirects the root route to /backtests', () => {
+  it('redirects the root route to /backtests', async () => {
+    stubAuthenticatedOnlyFetch();
     renderAt('/');
-    expect(screen.getByRole('heading', { name: 'Backtests' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Backtests' })).toBeTruthy();
   });
 
-  it('renders the strategies list route', () => {
+  it('renders the strategies list route', async () => {
     stubStrategyFetch();
     renderAt('/strategies');
-    expect(screen.getByRole('heading', { name: 'Strategies' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Strategies' })).toBeTruthy();
   });
 
-  it('renders the new-strategy route', () => {
+  it('renders the new-strategy route', async () => {
+    stubAuthenticatedOnlyFetch();
     renderAt('/strategies/new');
-    expect(screen.getByRole('heading', { name: 'New strategy' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'New strategy' })).toBeTruthy();
   });
 
   it('renders the strategy detail route using the route param', async () => {
@@ -190,10 +211,10 @@ describe('AppRoutes', () => {
     expect(await screen.findByRole('heading', { name: 'New version — Momentum Cross' })).toBeTruthy();
   });
 
-  it('renders the markets list route', () => {
+  it('renders the markets list route', async () => {
     stubDatasetFetch();
     renderAt('/datasets');
-    expect(screen.getByRole('heading', { name: 'Markets' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Markets' })).toBeTruthy();
   });
 
   it('renders the market detail route using the route param', async () => {

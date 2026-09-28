@@ -2,12 +2,8 @@ import { Link } from 'react-router';
 import { Badge } from '../../components/Badge.jsx';
 import { CopyButton } from '../../components/CopyButton.jsx';
 import { DataTable } from '../../components/DataTable.jsx';
+import { SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { formatInstantDate } from '../../lib/format.js';
-
-const SOURCE_LABELS = {
-  CSV_UPLOAD: 'CSV upload',
-  ALPHA_VANTAGE: 'Alpha Vantage',
-};
 
 /**
  * "Data snapshots" - the user-facing name for the backend's DatasetVersion

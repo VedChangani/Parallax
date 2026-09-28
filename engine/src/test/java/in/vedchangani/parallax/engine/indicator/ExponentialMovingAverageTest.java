@@ -2,6 +2,7 @@ package in.vedchangani.parallax.engine.indicator;
 
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -184,5 +185,55 @@ class ExponentialMovingAverageTest {
     @Test
     void rejectsAPeriodBelowOne() {
         assertThrows(IllegalArgumentException.class, () -> new ExponentialMovingAverage(0));
+    }
+
+    // --- Phase 9 Batch 2a: no O(period) warm-up allocation, and alpha overflow safety ---
+
+    @Test
+    void hugePeriodConstructsAndAcceptsAFewUpdatesWithoutAllocatingPeriodSizedMemory() {
+        // The old implementation allocated a dead double[period] seed buffer that was
+        // never read - for this period that alone would need ~16 GB. Construction and a
+        // handful of updates must succeed without it.
+        ExponentialMovingAverage ema = new ExponentialMovingAverage(Integer.MAX_VALUE);
+
+        assertFalse(ema.isReady());
+        ema.update(price("100"));
+        ema.update(price("101"));
+        ema.update(price("102"));
+        assertFalse(ema.isReady());
+        assertThrows(IllegalStateException.class, ema::value);
+    }
+
+    @Test
+    void alphaForAHugePeriodIsATinyPositiveValueNotANegativeOneFromIntOverflow() throws Exception {
+        // period + 1 as int arithmetic overflows to Integer.MIN_VALUE for
+        // period == Integer.MAX_VALUE, which would silently produce a negative alpha
+        // (2.0 / -2147483648.0). The fixed expression (period + 1.0) computes in double
+        // arithmetic and must never do this, for any period.
+        ExponentialMovingAverage ema = new ExponentialMovingAverage(Integer.MAX_VALUE);
+
+        Field alphaField = ExponentialMovingAverage.class.getDeclaredField("alpha");
+        alphaField.setAccessible(true);
+        double alpha = (double) alphaField.get(ema);
+
+        assertTrue(alpha > 0.0, "alpha must be positive, was " + alpha);
+        assertEquals(2.0 / (Integer.MAX_VALUE + 1.0), alpha, 0.0);
+    }
+
+    @Test
+    void alphaMatchesTheDocumentedFormulaExactlyForRepresentativePeriods() throws Exception {
+        // period + 1.0 (double arithmetic) must be bit-for-bit identical to the old
+        // period + 1 (int arithmetic, widened to double for the division) for every
+        // period that did not already overflow - i.e. normal, real-world periods.
+        for (int period : new int[] {2, 14, 20, 50}) {
+            ExponentialMovingAverage ema = new ExponentialMovingAverage(period);
+            Field alphaField = ExponentialMovingAverage.class.getDeclaredField("alpha");
+            alphaField.setAccessible(true);
+            double alpha = (double) alphaField.get(ema);
+
+            double expectedOldExpression = 2.0 / (period + 1);
+            assertEquals(expectedOldExpression, alpha, 0.0,
+                    "alpha for period " + period + " must be bit-identical to the pre-change expression");
+        }
     }
 }
