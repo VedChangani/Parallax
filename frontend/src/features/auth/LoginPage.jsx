@@ -17,9 +17,28 @@ const inputClasses =
 const GENERIC_LOGIN_FAILURE = 'Invalid username or password.';
 
 /**
+ * Restricts a post-login redirect target to a same-origin, in-app path
+ * (M-5): it must start with exactly one `/` — never an absolute URL
+ * (`https://evil.example`, no leading `/` at all) and never a
+ * protocol-relative one (`//evil.example`, which a browser resolves as
+ * `https://evil.example`, or the equivalent `/\evil.example` some browsers
+ * also normalize that way). Anything else falls back to `/`, exactly as an
+ * absent `next` already does.
+ *
+ * @param {string | null} value
+ * @returns {string}
+ */
+function safeNextPath(value) {
+  if (typeof value !== 'string' || value === '') return '/';
+  if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return '/';
+  return value;
+}
+
+/**
  * The login page (D-39). Redirects back to `next` (the route {@link
  * import('../../auth/RequireAuth.jsx').RequireAuth} was guarding when it
- * sent the visitor here) on success, or `/` if there was none.
+ * sent the visitor here) on success, or `/` if there was none — or if
+ * `next` was not a safe in-app path ({@link safeNextPath}).
  */
 export function LoginPage() {
   const { login } = useAuth();
@@ -37,7 +56,7 @@ export function LoginPage() {
     setSubmitting(true);
     try {
       await login(username, password);
-      navigate(searchParams.get('next') || '/', { replace: true });
+      navigate(safeNextPath(searchParams.get('next')), { replace: true });
     } catch {
       setError(GENERIC_LOGIN_FAILURE);
     } finally {

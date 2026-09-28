@@ -10,6 +10,7 @@ import { BacktestConfigFields } from '../../features/backtests/BacktestConfigFie
 import { MarketSnapshotFields } from '../../features/backtests/MarketSnapshotFields.jsx';
 import { RunIdentitySummary } from '../../features/backtests/RunIdentitySummary.jsx';
 import { StrategySelectionFields } from '../../features/backtests/StrategySelectionFields.jsx';
+import { requiredLookbackBars } from '../../features/strategies/definitionMapping.js';
 import { useApiResource } from '../../hooks/useApiResource.js';
 
 /**
@@ -159,6 +160,11 @@ export function BacktestNewPage() {
   const selectedMarket = markets.data?.find((market) => market.id === marketId);
   const selectedStrategy = strategies.data?.find((strategy) => strategy.id === strategyId);
 
+  // I-3: the selected strategy's own largest indicator warm-up requirement,
+  // purely for BacktestConfigFields' own lookback warning below - never sent
+  // to the backend, never used to compute or rewrite a date itself.
+  const lookbackBars = strategyVersionDetail.data ? requiredLookbackBars(strategyVersionDetail.data.definition) : 0;
+
   const canSubmit =
     marketId !== undefined &&
     snapshotVersion !== undefined &&
@@ -270,6 +276,7 @@ export function BacktestNewPage() {
                 onEndDateChange={handleEndDateChange}
                 fieldErrors={fieldErrors}
                 coverage={snapshotDetail.data ? { firstDate: snapshotDetail.data.firstDate, lastDate: snapshotDetail.data.lastDate } : undefined}
+                requiredLookbackBars={lookbackBars}
               />
 
               {rangeError ? (

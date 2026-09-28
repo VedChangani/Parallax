@@ -14,6 +14,8 @@ import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionInt
 import in.vedchangani.parallax.backend.dataset.VerifiedDatasetVersion;
 import in.vedchangani.parallax.backend.user.UserId;
 import in.vedchangani.parallax.engine.Backtester;
+import in.vedchangani.parallax.engine.indicator.IndicatorSpec;
+import in.vedchangani.parallax.engine.indicator.IndicatorType;
 import in.vedchangani.parallax.engine.metrics.BuyAndHoldBenchmark;
 import in.vedchangani.parallax.engine.metrics.PerformanceMetrics;
 import in.vedchangani.parallax.engine.portfolio.EquityPoint;
@@ -58,6 +60,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * benchmark/ledger value has no reason to agree with what the engine would
  * actually derive from the same fills once {@code getRun} fully recomputes
  * and replays instead of trusting stored values structurally.
+ *
+ * <p><strong>Phase 10 Batch 1</strong> (§14, below) extends this matrix to
+ * the causal-verification checks identified by the Phase 9 final audit:
+ * fill/InsufficientCash execution timing, signal-vs-equity close
+ * consistency, indicator-snapshot spec matching (including a duplicate spec
+ * that must not be silently collapsed), strategy-condition truth,
+ * InsufficientCash's {@code availableCash}, and the flat/long position-state
+ * rule at every signal. Two new fixtures support it: {@link
+ * #createIndicatorStrategyRun} (a strategy that actually references an
+ * indicator) and {@link #createInsufficientCashRun} (a dedicated, minimal
+ * scenario that genuinely produces an {@code InsufficientCash} rejection —
+ * no existing fixture did before this batch).
  */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -485,5 +499,261 @@ class BacktestRunIntegrityIT {
         // strategy-definition-integrity failure - not a backtest-specific one.
         assertThrows(StrategyDefinitionIntegrityException.class, () -> backtestRunService.createRun(owner,
                 new StrategyVersionRef(strategy.id(), 2), new DatasetVersionRef(dataset.id(), 1), config));
+    }
+
+    // --- §14 (Phase 10 Batch 1): causal-verification tamper matrix ---------------
+    //
+    // Every test below tampers a REAL, engine-produced run so that exactly one
+    // of the new BacktestResultReconstructor checks fires - each fabricated
+    // value is deliberately chosen so every OTHER check (spec-match, close-
+    // match, condition-truth, causal timing, ledger replay) still passes,
+    // isolating the invariant under test. No test here calls Backtester.run()
+    // or loads a DatasetBar directly; every fixture is a real, persisted run
+    // read back through the ordinary owner-scoped BacktestRunService.getRun.
+
+    private static StrategyDefinition indicatorStrategy() {
+        IndicatorSpec sma2 = new IndicatorSpec(IndicatorType.SMA, 2);
+        return new StrategyDefinition(
+                new Condition.Compare(new Operand.Close(), Operator.GT, new Operand.IndicatorRef(sma2)),
+                new Condition.Compare(new Operand.Close(), Operator.LT, new Operand.IndicatorRef(sma2)),
+                new PositionSizing.CashFraction(BigDecimal.ONE));
+    }
+
+    /**
+     * The same six-bar dataset/config as {@link #tradingStrategy()}, but with
+     * a strategy that actually references an indicator (SMA(2)) — needed only
+     * to exercise the indicator-snapshot-structure checks (§14 items 4a/4b),
+     * which have nothing to verify against a Close-only condition. Produces
+     * the identical two fills (order 1 BUY 2024-01-04, order 2 SELL
+     * 2024-01-08) as {@link #createRealRun}, just with a non-empty indicator
+     * value in each stored snapshot.
+     */
+    private long createIndicatorStrategyRun(UserId owner, String label) {
+        StrategySummary strategy = strategyService.createStrategy(owner, BacktestFixtures.uniqueName(label + "-s"),
+                "", indicatorStrategy());
+        DatasetSummary dataset = datasetService.createDataset(owner, BacktestFixtures.uniqueName(label + "-d"),
+                "AAPL");
+        datasetService.createVersionFromCsv(owner, dataset.id(), sixBarCsv(), AdjustmentBasis.RAW, "a.csv");
+        return backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
+                new DatasetVersionRef(dataset.id(), 1), tradingConfig()).id();
+    }
+
+    /**
+     * A dedicated, minimal fixture that genuinely produces an {@code
+     * InsufficientCash} rejection — no existing fixture in this suite did
+     * before this batch. One bar's entry signal (always true, close &gt; 50)
+     * is sized affordably at that bar's close, but the next bar's open gaps
+     * up sharply enough (D-7's open question 6) that the sized BUY is
+     * unaffordable at execution. Zero fills, exactly one rejection, nothing
+     * else in the run to interact with.
+     */
+    private static StrategyDefinition alwaysEnterStrategy() {
+        return new StrategyDefinition(
+                new Condition.Compare(new Operand.Close(), Operator.GT, new Operand.Constant(50)),
+                new Condition.Compare(new Operand.Close(), Operator.LT, new Operand.Constant(0)),
+                new PositionSizing.CashFraction(BigDecimal.ONE));
+    }
+
+    private static byte[] gapUpCsv() {
+        return ("date,open,high,low,close,volume\n"
+                + "2024-01-02,100,101,99,100,1000\n"
+                + "2024-01-03,200,205,199,200,1000\n").getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static BacktestConfig gapUpConfig() {
+        return new BacktestConfig(new BigDecimal("1000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 3));
+    }
+
+    private long createInsufficientCashRun(UserId owner, String label) {
+        StrategySummary strategy = strategyService.createStrategy(owner, BacktestFixtures.uniqueName(label + "-s"),
+                "", alwaysEnterStrategy());
+        DatasetSummary dataset = datasetService.createDataset(owner, BacktestFixtures.uniqueName(label + "-d"),
+                "AAPL");
+        datasetService.createVersionFromCsv(owner, dataset.id(), gapUpCsv(), AdjustmentBasis.RAW, "a.csv");
+        return backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
+                new DatasetVersionRef(dataset.id(), 1), gapUpConfig()).id();
+    }
+
+    // --- valid, untampered runs still pass (the two new fixtures) ---------------
+
+    @Test
+    void aValidInsufficientCashRunPassesFullIntegrityVerification() {
+        UserId owner = TestUsers.create(jdbcTemplate, "valid-insufficient-cash");
+        long runId = createInsufficientCashRun(owner, "valid-insufficient-cash");
+
+        BacktestRunDetail detail = backtestRunService.getRun(owner, runId);
+
+        assertEquals(0, detail.fills().size());
+        assertEquals(1, detail.rejections().size());
+    }
+
+    @Test
+    void aValidIndicatorStrategyRunPassesFullIntegrityVerification() {
+        UserId owner = TestUsers.create(jdbcTemplate, "valid-indicator");
+        long runId = createIndicatorStrategyRun(owner, "valid-indicator");
+
+        BacktestRunDetail detail = backtestRunService.getRun(owner, runId);
+
+        assertEquals(2, detail.fills().size());
+        assertEquals(1, detail.metrics().closedTradeCount());
+    }
+
+    // --- item 1: fill causal timing (D-7 next-bar-open) --------------------------
+
+    @Test
+    void fillSignalDateNotBeforeItsOwnExecutionIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-fill-causal");
+        long sourceRunId = createRealRun(owner, "tamper-fill-causal");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // order 1's real signal date is 2024-01-03 (it executes 2024-01-04).
+        // Moving the SIGNAL date to equal the fill's own execution date - and its
+        // signal close to 108, matching the equity curve there, so the close-match
+        // and condition-truth checks still pass - leaves a fill that executes on,
+        // not after, its own stored signal date.
+        BacktestFixtures.cloneFillsWithColumnOverrides(jdbcTemplate, clonedRunId, sourceRunId, 1,
+                Map.of("signal_date", LocalDate.of(2024, 1, 4), "signal_close", new BigDecimal("108")));
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 2: InsufficientCash execution timing (D-7 next-bar-open) -----------
+
+    @Test
+    void insufficientCashExecutionDateNotAfterSignalIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-ic-timing");
+        long sourceRunId = createInsufficientCashRun(owner, "tamper-ic-timing");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        BacktestFixtures.cloneFills(jdbcTemplate, clonedRunId, sourceRunId);
+        // The real executionDate (2024-01-03) is moved back to equal its own
+        // signal date (2024-01-02) - no longer after it at all.
+        BacktestFixtures.cloneRejectionsWithColumnOverride(jdbcTemplate, clonedRunId, sourceRunId, 1,
+                Map.of("execution_date", LocalDate.of(2024, 1, 2)));
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 3: signal snapshot close vs. equity-curve close --------------------
+
+    @Test
+    void signalSnapshotCloseMismatchIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-signal-close");
+        long sourceRunId = createRealRun(owner, "tamper-signal-close");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        BacktestFixtures.cloneFills(jdbcTemplate, clonedRunId, sourceRunId);
+        // A fabricated rejection dated at the run's own first bar (2024-01-02,
+        // real close 100, real portfolio flat there) whose signal close disagrees
+        // with that equity point.
+        BacktestFixtures.insertZeroQuantityRejection(jdbcTemplate, clonedRunId, 1, LocalDate.of(2024, 1, 2),
+                new BigDecimal("999"), "[]");
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 4a: indicator snapshot spec mismatch --------------------------------
+
+    @Test
+    void signalSnapshotIndicatorSpecMismatchIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-spec-mismatch");
+        long sourceRunId = createIndicatorStrategyRun(owner, "tamper-spec-mismatch");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // order 1's real snapshot carries one SMA(2) value; stripping it to an
+        // empty indicator array no longer matches indicatorStrategy()'s own
+        // requiredIndicatorSpecs() ([SMA(2)]).
+        BacktestFixtures.cloneFillsWithColumnOverrides(jdbcTemplate, clonedRunId, sourceRunId, 1,
+                Map.of("signal_indicators", "[]"));
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 4b: a duplicate indicator spec must not be silently collapsed ------
+
+    @Test
+    void duplicateIndicatorSpecInSnapshotIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-spec-duplicate");
+        long sourceRunId = createIndicatorStrategyRun(owner, "tamper-spec-duplicate");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // The same SMA(2) entry, twice. A plain Map.put during JSON parsing would
+        // silently collapse this into one entry, which would then coincidentally
+        // match requiredIndicatorSpecs() - it must instead fail loudly, during row
+        // reconstruction, before that comparison is ever reached.
+        BacktestFixtures.cloneFillsWithColumnOverrides(jdbcTemplate, clonedRunId, sourceRunId, 1,
+                Map.of("signal_indicators",
+                        "[{\"type\":\"SMA\",\"period\":2,\"value\":\"102.5\"},"
+                                + "{\"type\":\"SMA\",\"period\":2,\"value\":\"102.5\"}]"));
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 5: strategy-condition truth ------------------------------------------
+
+    @Test
+    void signalDoesNotSatisfyStrategyConditionIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-condition-truth");
+        long sourceRunId = createRealRun(owner, "tamper-condition-truth");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        BacktestFixtures.cloneFills(jdbcTemplate, clonedRunId, sourceRunId);
+        // A fabricated ENTER rejection dated 2024-01-02 (real close 100, real
+        // portfolio flat there - both pass their own checks) whose entry condition
+        // (close > 102) is false at that close.
+        BacktestFixtures.insertZeroQuantityRejection(jdbcTemplate, clonedRunId, 1, LocalDate.of(2024, 1, 2),
+                new BigDecimal("100"), "[]");
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 6: InsufficientCash availableCash vs. replayed cash -----------------
+
+    @Test
+    void insufficientCashAvailableCashMismatchIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-ic-cash");
+        long sourceRunId = createInsufficientCashRun(owner, "tamper-ic-cash");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        BacktestFixtures.cloneFills(jdbcTemplate, clonedRunId, sourceRunId);
+        // The real availableCash (1000, the full initial capital - no fill ever
+        // happened) is tampered to 999, which no longer equals the cash replayed
+        // from the (zero) fills before this rejection's own execution date.
+        BacktestFixtures.cloneRejectionsWithColumnOverride(jdbcTemplate, clonedRunId, sourceRunId, 1,
+                Map.of("available_cash", new BigDecimal("999")));
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- item 7: position-state rules (ENTER only while flat) ---------------------
+
+    @Test
+    void enterSignalWhilePortfolioLongIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-position-state");
+        long sourceRunId = createRealRun(owner, "tamper-position-state");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        BacktestFixtures.cloneFills(jdbcTemplate, clonedRunId, sourceRunId);
+        // A fabricated ENTER rejection dated 2024-01-04 - the same date order 1's
+        // real BUY fill executes, so by the time this signal is (supposedly)
+        // evaluated the replayed portfolio already holds a long position. Its own
+        // close (108) and condition (108 > 102) both check out; only the
+        // position-state rule (ENTER requires flat) is violated.
+        BacktestFixtures.insertZeroQuantityRejection(jdbcTemplate, clonedRunId, 1, LocalDate.of(2024, 1, 4),
+                new BigDecimal("108"), "[]");
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
     }
 }

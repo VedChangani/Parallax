@@ -59,4 +59,23 @@ public record AlphaVantageProperties(
             throw new IllegalArgumentException("baseUrl must be an absolute http(s) URL");
         }
     }
+
+    /**
+     * Redacts {@link #apiKey} — the record's default, generated {@code
+     * toString()} would otherwise include it verbatim, which risks leaking
+     * it into a log line or an unrelated error/diagnostic message that
+     * happens to print this configuration object (D-33's own contract is
+     * that the key is "never logged, never included in an exception
+     * message" — this closes the one place a record's own defaults would
+     * have quietly broken that). A blank key (the default; D-33 Batch 2)
+     * is shown as blank, not falsely reported as redacted, since there is
+     * nothing there to hide.
+     */
+    @Override
+    public String toString() {
+        String redactedApiKey = apiKey.isEmpty() ? "" : "***REDACTED***";
+        return "AlphaVantageProperties[apiKey=" + redactedApiKey + ", baseUrl=" + baseUrl + ", connectTimeout="
+                + connectTimeout + ", requestTimeout=" + requestTimeout + ", maxResponseSize=" + maxResponseSize
+                + "]";
+    }
 }

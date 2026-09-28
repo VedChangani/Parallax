@@ -6,7 +6,9 @@ research application built around it (`backend/`), and a React frontend
 (`frontend/`). See [`docs/architecture.md`](docs/architecture.md) for the
 full design and [`docs/decisions.md`](docs/decisions.md) for the
 architectural decision register. Project rules and V1 scope are in
-[`CLAUDE.md`](CLAUDE.md).
+`CLAUDE.md` at the repository root — a local development file that is
+intentionally excluded from git (see `.gitignore`), so it exists on a
+development machine but not in a fresh clone.
 
 ## Prerequisites
 
@@ -27,10 +29,16 @@ architectural decision register. Project rules and V1 scope are in
    CREATE DATABASE parallax OWNER parallax;
    ```
 
-2. Start the backend from the repository root:
+2. Build once, then start the backend, both from the repository root.
+   `engine` must already be installed to your local Maven repository
+   before `spring-boot:run` is invoked on `backend` alone — Maven's
+   plugin-prefix resolution for `spring-boot:run` does not work together
+   with `-am` in this multi-module layout, so `-pl backend -am
+   spring-boot:run` fails with "No plugin found for prefix 'spring-boot'":
 
    ```
-   ./mvnw -pl backend -am spring-boot:run
+   ./mvnw install -DskipTests
+   ./mvnw -pl backend spring-boot:run
    ```
 
    Flyway migrates the schema automatically on startup.
@@ -66,8 +74,20 @@ architectural decision register. Project rules and V1 scope are in
 | `PARALLAX_COOKIE_SECURE` | `true` | Set to `false` only for local `http://localhost` development without HTTPS |
 | `ALPHA_VANTAGE_API_KEY` | unset (blank) | Enables Alpha Vantage dataset imports; a blank key never fails startup, only an import request |
 
-None of these need to be set to start the backend against the database
-in step 1 — only the claim variables are needed once, to log in as `dev`.
+These are ordinary process environment variables. Spring Boot does not
+read a `.env` file, so a repository-root `.env` (the frontend tooling's
+own convention, if you use one) has no effect on the backend — export a
+variable in your shell before starting it instead (`export
+ALPHA_VANTAGE_API_KEY=...` on macOS/Linux/Git Bash, `$env:ALPHA_VANTAGE_API_KEY
+= "..."` in PowerShell), or set it in your IDE's run configuration.
+
+None of these need to be set to start the backend against the database in
+step 1 — only the claim variables are needed once, to log in as `dev`.
+One exception: `PARALLAX_COOKIE_SECURE` defaults to `true`, and Safari
+(unlike Chrome/Firefox, which treat `http://localhost` as a secure
+context) will silently drop a `Secure` cookie over plain `http://`, so a
+Safari-based local session needs `PARALLAX_COOKIE_SECURE=false` to
+actually stay logged in.
 
 ## Running the frontend locally
 

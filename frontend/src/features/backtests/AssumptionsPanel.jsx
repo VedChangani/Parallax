@@ -40,6 +40,9 @@ export function AssumptionsPanel({ snapshot }) {
         <li>Position sizing reserves one commission in cash at entry for the eventual exit, so an affordable buy is never left unable to sell.</li>
         <li>A position still open at the end of the run is marked at the final bar&rsquo;s close - it is never force-liquidated, and no hypothetical exit commission or slippage is charged.</li>
         <li>Buy &amp; hold represents the same starting capital invested once, at the first in-range bar&rsquo;s open, and held for the entire period - never traded, rebalanced, or sold.</li>
+        {isRaw ? (
+          <li>Prices are RAW (unadjusted) - dividends are never added back into either the strategy&rsquo;s or the benchmark&rsquo;s return.</li>
+        ) : null}
       </ul>
 
       <p className="mt-4 border-t border-border pt-3 font-medium text-ink-secondary">

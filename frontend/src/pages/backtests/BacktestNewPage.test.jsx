@@ -133,6 +133,19 @@ describe('BacktestNewPage', () => {
     expect(await screen.findByText(/Indicators may need bars before the start date to warm up/)).toBeTruthy();
   });
 
+  it('warns when the selected strategy needs lookback bars but the default start date leaves none (I-3)', async () => {
+    globalThis.fetch = mockFetch();
+    renderPage();
+
+    // DEFINITION_V4 needs SMA(50) - the largest of SMA(20)/SMA(50)/RSI(14)+1 -
+    // and the default start date is the snapshot's own first date (2018-01-01),
+    // so there is no lookback at all until the user moves it.
+    expect(await screen.findByText(/needs at least 50 prior bars/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2019-01-01' } });
+    expect(screen.queryByText(/needs at least 50 prior bars/)).toBeNull();
+  });
+
   it('loads markets and strategies and defaults to the latest snapshot/version', async () => {
     globalThis.fetch = mockFetch();
     renderPage();

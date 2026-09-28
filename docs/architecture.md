@@ -1495,8 +1495,9 @@ bounds (D-36, below), the backend authentication core (D-37, below),
 public self-registration (D-38, below), and password change (D-40, below)
 are all implemented. The frontend identity lifecycle (D-39) is the
 corresponding frontend piece — see the "Frontend identity lifecycle"
-section further below. Phase 9 Batch 3 (D-37 through D-40) is complete;
-there is no further planned batch in this checkpoint.
+section further below. Phase 9 Batch 3 (D-37 through D-40) is complete.
+Phase 10 (post-audit hardening and documentation fixes) has since begun;
+see Git history for its batch sequence.
 
 ## Dependency direction
 
@@ -1624,9 +1625,10 @@ always resolved through a join to `strategy`. A CHECK ties
 `definition_schema_version` to the document's own embedded
 `schemaVersion` property; another CHECK enforces the lowercase-hex
 64-character hash format. `V2__seed_development_user.sql` inserts the
-deterministic `dev` user `SeededCurrentUser` resolves until real
-authentication exists (D-31 decision: its future lifecycle is disabling
-it, never deleting it, once it owns historical resources).
+deterministic `dev` user `SeededCurrentUser` resolved before D-37
+replaced it with real authentication (see "Authentication and security
+(D-37)" below) — never deleted, per D-31's original decision, now that it
+owns historical resources.
 
 **Immutability** (`strategy_version`: no update, no delete) is enforced
 at four layers: database `BEFORE UPDATE OR DELETE`/`BEFORE TRUNCATE`
@@ -1666,8 +1668,9 @@ is owner-scoped (`findByIdAndOwnerId`, `lockByIdAndOwnerId`,
 `findAll`/unrestricted `findById`. A nonexistent resource and another
 owner's resource are indistinguishable: both raise
 `StrategyNotFoundException`/`StrategyVersionNotFoundException` and map to
-404. `CurrentUser` (`SeededCurrentUser` today) is the sole source of the
-owner id; no request ever supplies one.
+404. `CurrentUser` (`SeededCurrentUser` originally, replaced by
+`AuthenticatedCurrentUser` per D-37 below) is the sole source of the owner
+id; no request ever supplies one.
 
 **REST** (`/api/strategies`, `StrategyController`): `POST`/`GET`/`GET
 {id}`/`PATCH {id}` for strategies, `POST`/`GET`/`GET {version}` under

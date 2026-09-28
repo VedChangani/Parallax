@@ -20,6 +20,7 @@ import {
   percentTextToFraction,
   positionSizingError,
   positionSizingToDto,
+  requiredLookbackBars,
 } from './definitionMapping.js';
 
 describe('operand serialization', () => {
@@ -225,5 +226,61 @@ describe('fraction <-> percent display', () => {
   it('returns an empty string for blank input rather than throwing', () => {
     expect(fractionToPercentText('')).toBe('');
     expect(percentTextToFraction('')).toBe('');
+  });
+});
+
+describe('requiredLookbackBars (I-3)', () => {
+  const indicatorRef = (indicator, period) => ({ type: 'indicator', indicator, period });
+  const definitionWith = (entryCondition, exitCondition) => ({
+    entryCondition,
+    exitCondition,
+    positionSizing: { type: 'cashFraction', fraction: '1' },
+  });
+
+  it('is 0 for a Close-only definition with no indicator at all', () => {
+    const definition = definitionWith(
+      { type: 'compare', left: { type: 'close' }, operator: 'GT', right: { type: 'constant', value: '0' } },
+      { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
+    );
+    expect(requiredLookbackBars(definition)).toBe(0);
+  });
+
+  it('is the SMA/EMA period exactly - ready after exactly that many closes', () => {
+    const definition = definitionWith(
+      { type: 'compare', left: indicatorRef('SMA', 50), operator: 'GT', right: indicatorRef('SMA', 20) },
+      { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
+    );
+    expect(requiredLookbackBars(definition)).toBe(50);
+  });
+
+  it('is the RSI period plus one - RSI needs one extra close to seed the first price change', () => {
+    const definition = definitionWith(
+      { type: 'compare', left: indicatorRef('RSI', 14), operator: 'LT', right: { type: 'constant', value: '30' } },
+      { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
+    );
+    expect(requiredLookbackBars(definition)).toBe(15);
+  });
+
+  it('takes the maximum across every indicator in both conditions, including nested groups', () => {
+    const definition = definitionWith(
+      {
+        type: 'all',
+        conditions: [
+          { type: 'compare', left: indicatorRef('SMA', 20), operator: 'GT', right: indicatorRef('SMA', 50) },
+          { type: 'compare', left: indicatorRef('RSI', 14), operator: 'LT', right: { type: 'constant', value: '70' } },
+        ],
+      },
+      { type: 'compare', left: indicatorRef('EMA', 200), operator: 'LT', right: { type: 'close' } },
+    );
+    // max(20, 50, 15) from entry, 200 from exit -> 200 overall.
+    expect(requiredLookbackBars(definition)).toBe(200);
+  });
+
+  it('accepts a builder node (string period) exactly like a DTO (numeric period)', () => {
+    const definition = definitionWith(
+      { type: 'compare', left: indicatorRef('SMA', '30'), operator: 'GT', right: { type: 'close' } },
+      { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
+    );
+    expect(requiredLookbackBars(definition)).toBe(30);
   });
 });

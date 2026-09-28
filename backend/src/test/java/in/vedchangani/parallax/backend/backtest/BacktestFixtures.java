@@ -212,4 +212,93 @@ final class BacktestFixtures {
         cloneFills(jdbcTemplate, targetRunId, sourceRunId);
         cloneRejections(jdbcTemplate, targetRunId, sourceRunId);
     }
+
+    // --- Phase 10 Batch 1: causal-verification tamper infrastructure -----------
+    //
+    // These generalize the Phase 9 Batch 2c clone-and-tamper helpers above to
+    // the fill/rejection SIGNAL-side columns (signal_date, signal_close,
+    // signal_indicators) and to fabricating a rejection that never existed in
+    // any real run at all - needed to exercise position-state and
+    // condition-truth checks that have no equivalent in the pre-existing
+    // suite.
+
+    /**
+     * Clones every fill from {@code sourceRunId} to {@code targetRunId}
+     * <strong>except</strong> the one with {@code tamperedOrderId}, whose
+     * clone has every column named in {@code columnOverrides} (keyed by the
+     * exact {@code backtest_fill} column name, e.g. {@code "signal_date"})
+     * replaced — every other column keeps its original value. More general
+     * than {@link #cloneFillsWithOverride}, which only covers
+     * orderId/fillDate/fillPrice/commission.
+     */
+    static void cloneFillsWithColumnOverrides(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId,
+                                               int tamperedOrderId, Map<String, Object> columnOverrides) {
+        jdbcTemplate.update("""
+                insert into backtest_fill (run_id, order_id, fill_date, quantity, reference_open, fill_price,
+                    commission, signal_type, signal_date, signal_close, signal_indicators)
+                select ?, order_id, fill_date, quantity, reference_open, fill_price, commission, signal_type,
+                    signal_date, signal_close, signal_indicators
+                from backtest_fill where run_id = ? and order_id <> ?
+                """, targetRunId, sourceRunId, tamperedOrderId);
+
+        Map<String, Object> row = new LinkedHashMap<>(jdbcTemplate.queryForMap(
+                "select * from backtest_fill where run_id = ? and order_id = ?", sourceRunId, tamperedOrderId));
+        row.putAll(columnOverrides);
+
+        jdbcTemplate.update("""
+                insert into backtest_fill (run_id, order_id, fill_date, quantity, reference_open, fill_price,
+                    commission, signal_type, signal_date, signal_close, signal_indicators)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                """, targetRunId, row.get("order_id"), row.get("fill_date"), row.get("quantity"),
+                row.get("reference_open"), row.get("fill_price"), row.get("commission"), row.get("signal_type"),
+                row.get("signal_date"), row.get("signal_close"), row.get("signal_indicators").toString());
+    }
+
+    /**
+     * Inserts a brand-new, fabricated {@code ZERO_QUANTITY} rejection row —
+     * not cloned from any source run — for tests that need a stored signal
+     * the real engine never actually produced (a position-state or
+     * condition-truth violation with no equivalent among real fills).
+     * {@code signalIndicatorsJson} is the raw JSON array text {@link
+     * IndicatorSnapshotJson#write} would produce, e.g. {@code "[]"} for a
+     * strategy with no required indicators.
+     */
+    static void insertZeroQuantityRejection(JdbcTemplate jdbcTemplate, long runId, int seq, LocalDate signalDate,
+                                             BigDecimal signalClose, String signalIndicatorsJson) {
+        jdbcTemplate.update("""
+                insert into backtest_rejection (run_id, seq, reason, order_id, execution_date, quantity,
+                    required_cash, available_cash, signal_date, signal_close, signal_indicators)
+                values (?, ?, 'ZERO_QUANTITY', null, null, null, null, null, ?, ?, ?::jsonb)
+                """, runId, seq, signalDate, signalClose, signalIndicatorsJson);
+    }
+
+    /**
+     * Clones every rejection from {@code sourceRunId} to {@code targetRunId}
+     * <strong>except</strong> the one with {@code tamperedSeq}, whose clone
+     * has every column named in {@code columnOverrides} (keyed by the exact
+     * {@code backtest_rejection} column name, e.g. {@code "available_cash"})
+     * replaced — every other column keeps its original value.
+     */
+    static void cloneRejectionsWithColumnOverride(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId,
+                                                   int tamperedSeq, Map<String, Object> columnOverrides) {
+        jdbcTemplate.update("""
+                insert into backtest_rejection (run_id, seq, reason, order_id, execution_date, quantity,
+                    required_cash, available_cash, signal_date, signal_close, signal_indicators)
+                select ?, seq, reason, order_id, execution_date, quantity, required_cash, available_cash,
+                    signal_date, signal_close, signal_indicators
+                from backtest_rejection where run_id = ? and seq <> ?
+                """, targetRunId, sourceRunId, tamperedSeq);
+
+        Map<String, Object> row = new LinkedHashMap<>(jdbcTemplate.queryForMap(
+                "select * from backtest_rejection where run_id = ? and seq = ?", sourceRunId, tamperedSeq));
+        row.putAll(columnOverrides);
+
+        jdbcTemplate.update("""
+                insert into backtest_rejection (run_id, seq, reason, order_id, execution_date, quantity,
+                    required_cash, available_cash, signal_date, signal_close, signal_indicators)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                """, targetRunId, row.get("seq"), row.get("reason"), row.get("order_id"), row.get("execution_date"),
+                row.get("quantity"), row.get("required_cash"), row.get("available_cash"), row.get("signal_date"),
+                row.get("signal_close"), row.get("signal_indicators").toString());
+    }
 }

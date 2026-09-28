@@ -74,4 +74,49 @@ describe('LoginPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Protected page' })).toBeTruthy();
   });
+
+  // M-5: an unvalidated `next` is an open-redirect vector - only a same-origin
+  // in-app path is ever honored.
+
+  it('falls back to / when next is an absolute URL', async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (String(url).endsWith('/api/auth/login')) return Promise.resolve(jsonResponse({ username: 'alice' }));
+      return Promise.resolve(jsonResponse({ title: 'Unauthorized', status: 401 }, 401));
+    });
+
+    renderAt(`/login?next=${encodeURIComponent('https://evil.example')}`);
+    await waitFor(() => expect(screen.getByLabelText('Username')).toBeTruthy());
+
+    submitLogin('alice', 'hunter2');
+
+    expect(await screen.findByRole('heading', { name: 'Backtests' })).toBeTruthy();
+  });
+
+  it('falls back to / when next is protocol-relative', async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (String(url).endsWith('/api/auth/login')) return Promise.resolve(jsonResponse({ username: 'alice' }));
+      return Promise.resolve(jsonResponse({ title: 'Unauthorized', status: 401 }, 401));
+    });
+
+    renderAt(`/login?next=${encodeURIComponent('//evil.example')}`);
+    await waitFor(() => expect(screen.getByLabelText('Username')).toBeTruthy());
+
+    submitLogin('alice', 'hunter2');
+
+    expect(await screen.findByRole('heading', { name: 'Backtests' })).toBeTruthy();
+  });
+
+  it('falls back to / when next has no leading slash', async () => {
+    globalThis.fetch = vi.fn((url) => {
+      if (String(url).endsWith('/api/auth/login')) return Promise.resolve(jsonResponse({ username: 'alice' }));
+      return Promise.resolve(jsonResponse({ title: 'Unauthorized', status: 401 }, 401));
+    });
+
+    renderAt(`/login?next=${encodeURIComponent('evil.example')}`);
+    await waitFor(() => expect(screen.getByLabelText('Username')).toBeTruthy());
+
+    submitLogin('alice', 'hunter2');
+
+    expect(await screen.findByRole('heading', { name: 'Backtests' })).toBeTruthy();
+  });
 });

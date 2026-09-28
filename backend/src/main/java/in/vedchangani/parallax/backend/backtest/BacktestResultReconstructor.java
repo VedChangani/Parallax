@@ -5,12 +5,14 @@ import in.vedchangani.parallax.engine.execution.Fill;
 import in.vedchangani.parallax.engine.execution.OrderRejection;
 import in.vedchangani.parallax.engine.execution.OrderSide;
 import in.vedchangani.parallax.engine.indicator.IndicatorSnapshot;
+import in.vedchangani.parallax.engine.indicator.IndicatorSpec;
 import in.vedchangani.parallax.engine.metrics.BuyAndHoldBenchmark;
 import in.vedchangani.parallax.engine.metrics.PerformanceMetrics;
 import in.vedchangani.parallax.engine.portfolio.EquityPoint;
 import in.vedchangani.parallax.engine.portfolio.Portfolio;
 import in.vedchangani.parallax.engine.result.BacktestConfig;
 import in.vedchangani.parallax.engine.result.BacktestResult;
+import in.vedchangani.parallax.engine.strategy.Condition;
 import in.vedchangani.parallax.engine.strategy.SignalEvent;
 import in.vedchangani.parallax.engine.strategy.SignalType;
 import in.vedchangani.parallax.engine.strategy.StrategyDefinition;
@@ -18,7 +20,10 @@ import in.vedchangani.parallax.engine.strategy.StrategyDefinition;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -45,6 +50,17 @@ import java.util.Optional;
  * benchmark reference state is independently recomputed into a real {@link
  * BuyAndHoldBenchmark} (D-28) and its {@code totalReturn()} compared
  * bit-exact against the stored value.
+ *
+ * <p><strong>Phase 10 Batch 1</strong> closes the causal-verification gap
+ * identified by the Phase 9 final audit: every fill and rejection's own
+ * signal is now checked against the rest of the persisted result, not only
+ * against the ledger and the config. Every one of these is provable from
+ * data already loaded, uses no {@code DatasetBar}, and never calls {@code
+ * Backtester.run(...)} — see each method's own Javadoc:
+ * {@link #verifySnapshotIndicatorSpecs}, {@link #verifySignalCloseMatchesEquity},
+ * {@link #verifyConditionTruth}, {@link #verifyFillCausalTiming}, {@link
+ * #verifyInsufficientCashExecutionTiming}, {@link #verifyInsufficientCashAvailableCash},
+ * and {@link #verifyPositionStateAtSignal}.
  *
  * <p><strong>Never reloads the original {@code DatasetVersion}'s bars, and
  * never calls {@code Backtester.run(...)}, {@code MarketDataProvider}, or
@@ -112,8 +128,20 @@ final class BacktestResultReconstructor {
 
             verifyOrderIdContinuity(fills, rejections);
             verifyFirstEvaluableDateSemantics(result);
+
+            // Phase 10 Batch 1: every signal's own recorded shape must agree with
+            // the rest of the persisted result before the ledger/config/metric
+            // checks below even run.
+            verifySnapshotIndicatorSpecs(strategyDefinition, fills, rejections);
+            verifySignalCloseMatchesEquity(equityCurve, fills, rejections);
+            verifyConditionTruth(strategyDefinition, fills, rejections);
+
             verifyFillsMatchConfig(fills, config);
+            verifyFillCausalTiming(equityCurve, fills);
+            verifyInsufficientCashExecutionTiming(equityCurve, rejections);
             replayLedger(config, equityCurve, fills);
+            verifyInsufficientCashAvailableCash(config, fills, rejections);
+            verifyPositionStateAtSignal(config, fills, rejections);
 
             PerformanceMetrics storedMetrics = reconstructMetrics(run);
             PerformanceMetrics recomputedMetrics = PerformanceMetrics.of(result);
@@ -309,6 +337,108 @@ final class BacktestResultReconstructor {
         }
     }
 
+    // --- signal shape verification (Phase 10 Batch 1) ---------------------------
+
+    /**
+     * Every fill/rejection's stored signal snapshot must reference exactly
+     * the indicator specs {@code strategy.requiredIndicatorSpecs()}
+     * declares, in the same canonical order — never more, fewer, or a
+     * different spec. A stored spec set that merely happens to be the same
+     * <em>size</em> as expected is not enough (a corrupted snapshot could
+     * substitute one spec for another of the same period/type count); exact
+     * list equality is checked instead. This closes a silent-collapse gap
+     * in {@link IndicatorSnapshotJson#read}: a duplicate stored spec is now
+     * rejected there directly, during row reconstruction, so it can never
+     * first collapse into one entry and then coincidentally match here.
+     */
+    private static void verifySnapshotIndicatorSpecs(StrategyDefinition strategyDefinition, List<Fill> fills,
+                                                       List<OrderRejection> rejections) {
+        List<IndicatorSpec> expected = strategyDefinition.requiredIndicatorSpecs();
+        for (Fill fill : fills) {
+            verifySnapshotSpecs(expected, fill.signal().snapshot(), "fill " + fill.orderId());
+        }
+        for (OrderRejection rejection : rejections) {
+            verifySnapshotSpecs(expected, rejection.signal().snapshot(), "rejection at " + rejection.date());
+        }
+    }
+
+    private static void verifySnapshotSpecs(List<IndicatorSpec> expected, IndicatorSnapshot snapshot, String label) {
+        List<IndicatorSpec> actual = List.copyOf(snapshot.values().keySet());
+        if (!actual.equals(expected)) {
+            throw new IllegalArgumentException(
+                    (label + " signal snapshot indicator specs (%s) do not match the strategy's own "
+                            + "requiredIndicatorSpecs() (%s)").formatted(actual, expected));
+        }
+    }
+
+    /**
+     * Every fill/rejection's signal snapshot {@code close} must equal the
+     * result's own equity-curve close on that same signal date exactly — a
+     * signal and the equity point recorded for the same bar are two
+     * persisted views of one close price, and a genuine run can never
+     * disagree with itself about it.
+     */
+    private static void verifySignalCloseMatchesEquity(List<EquityPoint> equityCurve, List<Fill> fills,
+                                                         List<OrderRejection> rejections) {
+        Map<LocalDate, BigDecimal> closeByDate = new HashMap<>();
+        for (EquityPoint point : equityCurve) {
+            closeByDate.put(point.date(), point.close());
+        }
+        for (Fill fill : fills) {
+            verifySignalClose(closeByDate, fill.signal(), "fill " + fill.orderId());
+        }
+        for (OrderRejection rejection : rejections) {
+            verifySignalClose(closeByDate, rejection.signal(), "rejection at " + rejection.date());
+        }
+    }
+
+    private static void verifySignalClose(Map<LocalDate, BigDecimal> closeByDate, SignalEvent signal, String label) {
+        BigDecimal expected = closeByDate.get(signal.date());
+        if (expected == null) {
+            throw new IllegalArgumentException(
+                    label + " signal date (" + signal.date() + ") is not one of the result's own equity-curve dates");
+        }
+        if (!expected.equals(signal.snapshot().close())) {
+            throw new IllegalArgumentException(
+                    (label + " signal snapshot close (%s) does not equal the equity-curve close on %s (%s)")
+                            .formatted(signal.snapshot().close(), signal.date(), expected));
+        }
+    }
+
+    /**
+     * Every fill/rejection's stored signal must actually satisfy the
+     * strategy's own condition, evaluated fresh against its own stored
+     * snapshot — an ENTER signal against {@code entryCondition}, an EXIT
+     * signal against {@code exitCondition}. Every rejection is already
+     * structurally guaranteed to carry an ENTER signal (D-21's own engine
+     * constructors reject any other signal type when the row is
+     * reconstructed), so only {@code entryCondition} ever applies to one.
+     * This is a direct re-evaluation of the frozen {@link Condition} tree —
+     * no engine run, no market data, nothing beyond what is already loaded.
+     */
+    private static void verifyConditionTruth(StrategyDefinition strategyDefinition, List<Fill> fills,
+                                               List<OrderRejection> rejections) {
+        for (Fill fill : fills) {
+            SignalEvent signal = fill.signal();
+            Condition condition = signal.type() == SignalType.ENTER
+                    ? strategyDefinition.entryCondition()
+                    : strategyDefinition.exitCondition();
+            if (!condition.evaluate(signal.snapshot())) {
+                throw new IllegalArgumentException(
+                        "fill %d's %s signal does not satisfy the strategy's own %s condition"
+                                .formatted(fill.orderId(), signal.type(), signal.type()));
+            }
+        }
+        for (OrderRejection rejection : rejections) {
+            SignalEvent signal = rejection.signal();
+            if (!strategyDefinition.entryCondition().evaluate(signal.snapshot())) {
+                throw new IllegalArgumentException(
+                        "rejection at %s's ENTER signal does not satisfy the strategy's own entry condition"
+                                .formatted(rejection.date()));
+            }
+        }
+    }
+
     // --- fill <-> config verification (D-7/D-23 execution formulas) ------------
 
     /**
@@ -338,6 +468,95 @@ final class BacktestResultReconstructor {
                         ("fill %d fillPrice (%s) does not equal referenceOpen (%s) adjusted by the configured "
                                 + "slippageRate (expected %s)")
                                 .formatted(fill.orderId(), fill.fillPrice(), fill.referenceOpen(), expectedFillPrice));
+            }
+        }
+    }
+
+    // --- next-bar-open causal timing (D-7, Phase 10 Batch 1) --------------------
+
+    /**
+     * Maps each equity-curve date to its position in {@code equityCurve} —
+     * shared by {@link #verifyFillCausalTiming} and {@link
+     * #verifyInsufficientCashExecutionTiming} to check that an execution
+     * (a fill, or an {@code InsufficientCash} rejection) lands on the
+     * equity-curve bar <em>immediately following</em> its own signal date,
+     * not merely some later one (D-7: next-bar-open, no same-bar execution,
+     * no skipped bar).
+     */
+    private static Map<LocalDate, Integer> indexEquityCurveDates(List<EquityPoint> equityCurve) {
+        Map<LocalDate, Integer> index = new HashMap<>();
+        for (int i = 0; i < equityCurve.size(); i++) {
+            index.put(equityCurve.get(i).date(), i);
+        }
+        return index;
+    }
+
+    /**
+     * <strong>Boundary:</strong> proves every fill executes strictly after
+     * its own signal date, and on the equity-curve bar immediately
+     * following it — the next-bar-open rule (D-7) — using only the
+     * persisted result's own dates. It cannot prove that date was the
+     * <em>only</em> possible next bar (that would need the original
+     * dataset bars); it proves the stored fill date is not an arbitrary
+     * later (or non-later) date, which is exactly what a tampered
+     * {@code fill_date}/{@code signal_date} pair would produce.
+     */
+    private static void verifyFillCausalTiming(List<EquityPoint> equityCurve, List<Fill> fills) {
+        Map<LocalDate, Integer> equityIndex = indexEquityCurveDates(equityCurve);
+        for (Fill fill : fills) {
+            LocalDate signalDate = fill.signal().date();
+            if (!fill.date().isAfter(signalDate)) {
+                throw new IllegalArgumentException(
+                        "fill %d executes on %s, not after its own signal date %s"
+                                .formatted(fill.orderId(), fill.date(), signalDate));
+            }
+            Integer signalIndex = equityIndex.get(signalDate);
+            if (signalIndex == null) {
+                throw new IllegalArgumentException(
+                        "fill %d signal date (%s) is not one of the result's own equity-curve dates"
+                                .formatted(fill.orderId(), signalDate));
+            }
+            if (signalIndex + 1 >= equityCurve.size() || !equityCurve.get(signalIndex + 1).date().equals(fill.date())) {
+                throw new IllegalArgumentException(
+                        ("fill %d (date %s) does not execute on the equity-curve bar immediately following its "
+                                + "signal date (%s)").formatted(fill.orderId(), fill.date(), signalDate));
+            }
+        }
+    }
+
+    /**
+     * The {@code InsufficientCash} counterpart to {@link
+     * #verifyFillCausalTiming}: its {@code executionDate} must be strictly
+     * after its own signal date, and on the equity-curve bar immediately
+     * following it. {@code ZeroQuantity} has no execution date at all — no
+     * order was ever created (D-21) — so it is not checked here.
+     */
+    private static void verifyInsufficientCashExecutionTiming(List<EquityPoint> equityCurve,
+                                                                List<OrderRejection> rejections) {
+        Map<LocalDate, Integer> equityIndex = indexEquityCurveDates(equityCurve);
+        for (OrderRejection rejection : rejections) {
+            if (!(rejection instanceof OrderRejection.InsufficientCash insufficientCash)) {
+                continue;
+            }
+            LocalDate signalDate = insufficientCash.signal().date();
+            LocalDate executionDate = insufficientCash.date();
+            if (!executionDate.isAfter(signalDate)) {
+                throw new IllegalArgumentException(
+                        "InsufficientCash order %d executes on %s, not after its own signal date %s"
+                                .formatted(insufficientCash.orderId(), executionDate, signalDate));
+            }
+            Integer signalIndex = equityIndex.get(signalDate);
+            if (signalIndex == null) {
+                throw new IllegalArgumentException(
+                        "InsufficientCash order %d signal date (%s) is not one of the result's own equity-curve dates"
+                                .formatted(insufficientCash.orderId(), signalDate));
+            }
+            if (signalIndex + 1 >= equityCurve.size()
+                    || !equityCurve.get(signalIndex + 1).date().equals(executionDate)) {
+                throw new IllegalArgumentException(
+                        ("InsufficientCash order %d (execution date %s) does not execute on the equity-curve bar "
+                                + "immediately following its signal date (%s)")
+                                .formatted(insufficientCash.orderId(), executionDate, signalDate));
             }
         }
     }
@@ -378,6 +597,94 @@ final class BacktestResultReconstructor {
             throw new IllegalArgumentException(
                     "%d fill(s) were never consumed by any equity point during ledger replay"
                             .formatted(fills.size() - fillIndex));
+        }
+    }
+
+    // --- InsufficientCash cash/state verification (Phase 10 Batch 1) -----------
+
+    /**
+     * The {@code InsufficientCash} counterpart to {@link #replayLedger}:
+     * {@code availableCash} must equal the portfolio's actual cash,
+     * replayed from {@code initialCapital} through every fill executed
+     * strictly before this rejection's own execution date — the cash the
+     * engine would genuinely have had on hand at the moment this order was
+     * rejected. Independent of {@link #replayLedger}, which only walks
+     * equity points and never reads a rejection's own stored fields.
+     */
+    private static void verifyInsufficientCashAvailableCash(BacktestConfig config, List<Fill> fills,
+                                                              List<OrderRejection> rejections) {
+        List<OrderRejection.InsufficientCash> insufficientCashRejections = new ArrayList<>();
+        for (OrderRejection rejection : rejections) {
+            if (rejection instanceof OrderRejection.InsufficientCash insufficientCash) {
+                insufficientCashRejections.add(insufficientCash);
+            }
+        }
+        if (insufficientCashRejections.isEmpty()) {
+            return;
+        }
+        insufficientCashRejections.sort(Comparator.comparing(OrderRejection.InsufficientCash::date));
+
+        Portfolio portfolio = new Portfolio(config.initialCapital());
+        int fillIndex = 0;
+        for (OrderRejection.InsufficientCash rejection : insufficientCashRejections) {
+            while (fillIndex < fills.size() && fills.get(fillIndex).date().isBefore(rejection.date())) {
+                portfolio.apply(fills.get(fillIndex));
+                fillIndex++;
+            }
+            if (!portfolio.cash().equals(rejection.availableCash())) {
+                throw new IllegalArgumentException(
+                        ("InsufficientCash order %d's stored availableCash (%s) does not equal the cash replayed "
+                                + "from fills before its execution date %s (%s)")
+                                .formatted(rejection.orderId(), rejection.availableCash(), rejection.date(),
+                                        portfolio.cash()));
+            }
+        }
+    }
+
+    /**
+     * Verifies the flat/long position-state rule at every signal, in
+     * chronological signal-date order: an ENTER signal (from a BUY fill, or
+     * any rejection — both structurally guaranteed ENTER by D-21) must
+     * occur only while the replayed portfolio is flat, and an EXIT signal
+     * (from a SELL fill) only while long — mirroring exactly which
+     * condition {@code Backtester.Run} itself would have evaluated at that
+     * point (architecture.md §3, steps 6-9). A fill executed at or before
+     * this signal's own bar (including a same-bar SELL immediately followed
+     * by a new ENTER evaluation once flat again) is applied before the
+     * check; a fill still pending — this signal's own eventual outcome —
+     * is not, since {@code fill.date()} is always strictly after its own
+     * signal date.
+     */
+    private static void verifyPositionStateAtSignal(BacktestConfig config, List<Fill> fills,
+                                                      List<OrderRejection> rejections) {
+        record SignalOccurrence(LocalDate date, SignalType type) {
+        }
+        List<SignalOccurrence> occurrences = new ArrayList<>();
+        for (Fill fill : fills) {
+            occurrences.add(new SignalOccurrence(fill.signal().date(), fill.signal().type()));
+        }
+        for (OrderRejection rejection : rejections) {
+            occurrences.add(new SignalOccurrence(rejection.signal().date(), rejection.signal().type()));
+        }
+        occurrences.sort(Comparator.comparing(SignalOccurrence::date));
+
+        Portfolio portfolio = new Portfolio(config.initialCapital());
+        int fillIndex = 0;
+        for (SignalOccurrence occurrence : occurrences) {
+            while (fillIndex < fills.size() && !fills.get(fillIndex).date().isAfter(occurrence.date())) {
+                portfolio.apply(fills.get(fillIndex));
+                fillIndex++;
+            }
+            if (occurrence.type() == SignalType.ENTER && !portfolio.isFlat()) {
+                throw new IllegalArgumentException(
+                        "an ENTER signal on %s occurred while the replayed portfolio was long"
+                                .formatted(occurrence.date()));
+            }
+            if (occurrence.type() == SignalType.EXIT && portfolio.isFlat()) {
+                throw new IllegalArgumentException(
+                        "an EXIT signal on %s occurred while the replayed portfolio was flat"
+                                .formatted(occurrence.date()));
+            }
         }
     }
 

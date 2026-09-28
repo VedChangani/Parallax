@@ -9,13 +9,24 @@ import { Badge } from '../../components/Badge.jsx';
  * benchmark (which is unaffected by warm-up: it enters at the first in-range
  * bar regardless, D-28), or any stored value.
  *
- * Renders nothing for the ordinary case (`firstEvaluableDate === startDate`
- * - CASE 1, no special warning needed). For the other two cases it renders a
- * single, neutral-toned notice - visually noticeable, never alarming, and
- * never phrased as the strategy "losing" or "underperforming":
+ * Renders nothing for the ordinary case — `firstEvaluableDate` equals the
+ * date of the run's own <em>first actual bar</em> (`firstBarDate`, CASE 1,
+ * no special warning needed). This is deliberately compared against the
+ * first real bar the run actually has, never the raw requested `startDate`
+ * string (M-1, Phase 10 Batch 4): a `startDate` that falls on a weekend or
+ * holiday has no bar of its own, so the run's genuine first bar is later
+ * than it, and comparing against `startDate` directly produced a false
+ * "warm-up" notice — including a nonsensical "0 of N bars" count — for a
+ * strategy that was in fact ready immediately, on its very first available
+ * bar. For the other two cases it renders a single, neutral-toned notice -
+ * visually noticeable, never alarming, and never phrased as the strategy
+ * "losing" or "underperforming":
  *
- * - CASE 2 (`firstEvaluableDate` is later than `startDate`): the indicators
- *   were still warming up: no signal was possible before that date.
+ * - CASE 2 (`firstEvaluableDate` is later than `firstBarDate`): the
+ *   indicators were still warming up: no signal was possible before that
+ *   date. The message still cites the originally requested `startDate` for
+ *   context ("later than the requested start date of ...") - that remains
+ *   an accurate, useful fact regardless of which bar was the first real one.
  * - CASE 3 (`firstEvaluableDate` is `null`): the indicators never became
  *   ready during the requested range, so no signal was ever possible.
  *
@@ -25,13 +36,18 @@ import { Badge } from '../../components/Badge.jsx';
  * component performs no fetch and introduces no new backend arithmetic.
  *
  * @param {object} props
- * @param {string} props.startDate - ISO-8601 date
+ * @param {string} props.startDate - the originally requested ISO-8601 start
+ *   date, shown in CASE 2's message text only
+ * @param {string | undefined} props.firstBarDate - the ISO-8601 date of the
+ *   run's own first equity-curve point (its genuine first bar), used for the
+ *   CASE 1 comparison; `undefined` while the equity curve is still loading
+ *   suppresses the notice entirely rather than risk a false positive
  * @param {string | null} props.firstEvaluableDate
  * @param {number} [props.inactiveBarCount]
  * @param {number} [props.totalBarCount]
  */
-export function WarmupNotice({ startDate, firstEvaluableDate, inactiveBarCount, totalBarCount }) {
-  if (firstEvaluableDate === startDate) {
+export function WarmupNotice({ startDate, firstBarDate, firstEvaluableDate, inactiveBarCount, totalBarCount }) {
+  if (firstBarDate === undefined || firstEvaluableDate === firstBarDate) {
     return null;
   }
 

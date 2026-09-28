@@ -134,7 +134,16 @@ final class IndicatorSnapshotJson {
             } catch (NumberFormatException e) {
                 throw new IllegalArgumentException("malformed indicator value: " + entry.value(), e);
             }
-            values.put(new IndicatorSpec(type, entry.period()), value);
+            IndicatorSpec spec = new IndicatorSpec(type, entry.period());
+            // Phase 10 Batch 1: a duplicate stored spec must fail loudly, never be
+            // silently collapsed into one entry by this map's own put() semantics -
+            // that would hide a corrupted/tampered snapshot from every downstream
+            // check that compares this snapshot's specs against
+            // strategy.requiredIndicatorSpecs() (which is itself always distinct).
+            if (values.containsKey(spec)) {
+                throw new IllegalArgumentException("duplicate indicator spec in stored snapshot: " + spec);
+            }
+            values.put(spec, value);
         }
 
         return new IndicatorSnapshot(date, close, values);

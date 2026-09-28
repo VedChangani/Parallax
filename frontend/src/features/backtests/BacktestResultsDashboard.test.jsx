@@ -302,6 +302,61 @@ describe('Backtest results dashboard', () => {
     });
   });
 
+  describe('missing-metric explanations (I-3)', () => {
+    it('explains a missing CAGR as a sub-year span', async () => {
+      globalThis.fetch = mockFetch(); // RUN.metrics.cagr is already null
+      renderRun('/backtests/1');
+      await screen.findByText('Performance');
+
+      expect(screen.getByText(/This run spans less than 365 days/)).toBeTruthy();
+    });
+
+    it('explains missing volatility/Sharpe by the exact return count when there are fewer than two', async () => {
+      globalThis.fetch = mockFetch({
+        run: { ...RUN, metrics: { ...RUN.metrics, volatility: null, sharpeRatio: null } },
+        // EQUITY has exactly 2 points -> 1 return observation.
+      });
+      renderRun('/backtests/1');
+      await screen.findByText('Performance');
+
+      // Both Volatility and Sharpe render the identical explanation here, since
+      // both are empty for the same reason (fewer than two returns).
+      const matches = await screen.findAllByText(/Fewer than two return observations \(1\) were recorded/);
+      expect(matches.length).toBe(2);
+    });
+
+    it('explains a missing Sharpe by zero dispersion when volatility is present and exactly zero', async () => {
+      globalThis.fetch = mockFetch({
+        run: { ...RUN, metrics: { ...RUN.metrics, volatility: 0, sharpeRatio: null } },
+        equity: [...EQUITY, { ...EQUITY[1], date: '2024-03-23' }], // 3 points -> 2 returns, so "too few" doesn't apply
+      });
+      renderRun('/backtests/1');
+      await screen.findByText('Performance');
+
+      expect(await screen.findByText(/Every return in this run was identical/)).toBeTruthy();
+    });
+
+    it('explains missing win-rate/average-win/average-loss as no closed trades', async () => {
+      globalThis.fetch = mockFetch({
+        run: { ...RUN, metrics: { ...RUN.metrics, closedTradeCount: 0, winRate: null, averageWin: null, averageLoss: null } },
+      });
+      renderRun('/backtests/1');
+      await screen.findByText('Performance');
+
+      expect(screen.getAllByText('No trades were closed in this run.').length).toBe(3);
+    });
+
+    it('distinguishes "no winning trades" from "no closed trades" when trades did close', async () => {
+      globalThis.fetch = mockFetch({
+        run: { ...RUN, metrics: { ...RUN.metrics, closedTradeCount: 3, winRate: 0, averageWin: null, averageLoss: -12.5 } },
+      });
+      renderRun('/backtests/1');
+      await screen.findByText('Performance');
+
+      expect(await screen.findByText('No winning trades in this run.')).toBeTruthy();
+    });
+  });
+
   describe('benchmark comparison', () => {
     it('shows strategy return, benchmark return, and their presentation-only excess return', async () => {
       globalThis.fetch = mockFetch();
@@ -425,6 +480,22 @@ describe('Backtest results dashboard', () => {
 
       expect(await screen.findByText('Split-adjusted')).toBeTruthy();
       expect(screen.queryByText('Raw prices are not split-adjusted.')).toBeNull();
+    });
+
+    it('discloses that RAW prices never add dividends back into either return', async () => {
+      globalThis.fetch = mockFetch(); // DATASET_VERSION.adjustmentBasis is RAW
+      renderRun('/backtests/1');
+      await screen.findByText('Assumptions');
+
+      expect(await screen.findByText(/dividends are never added back into either/)).toBeTruthy();
+    });
+
+    it('omits the dividend disclosure for split-adjusted data', async () => {
+      globalThis.fetch = mockFetch({ datasetVersion: { ...DATASET_VERSION, adjustmentBasis: 'SPLIT_ADJUSTED' } });
+      renderRun('/backtests/1');
+      await screen.findByText('Assumptions');
+
+      expect(screen.queryByText(/dividends are never added back/)).toBeNull();
     });
 
     it('explains the execution model, open-position treatment, benchmark definition, and disclaimer', async () => {

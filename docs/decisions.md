@@ -1586,6 +1586,23 @@ bounded, small number of additional queries (the referenced strategy
 version's decode, the referenced dataset version's metadata) on top of the
 existing child-row reads, never proportional to dataset size.
 
+**Revised by Phase 10 Batch 1** (closing a causal-verification gap the
+Phase 9 final audit identified): `getRun` additionally verifies, per fill
+and rejection, that its signal snapshot's indicator specs exactly match
+`strategy.requiredIndicatorSpecs()` (a duplicate stored spec is now
+rejected by `IndicatorSnapshotJson.read` directly, never silently
+collapsed), that its snapshot `close` equals the result's own equity-curve
+close on that date, and that the strategy's own condition actually
+evaluates true against that snapshot; that every fill, and every
+`InsufficientCash` rejection's `executionDate`, lands strictly after its
+signal date and on the equity-curve bar immediately following it (D-7);
+that `InsufficientCash.availableCash` equals the cash replayed from fills
+before that execution date; and that every ENTER signal (a BUY fill or any
+rejection) occurs only while the replayed portfolio is flat, and every
+EXIT signal (a SELL fill) only while long. All of this is provable from
+already-persisted data alone — no `DatasetBar`, no `Backtester.run(...)` —
+and changes no engine behavior and no `SEMANTICS_VERSION`.
+
 ## D-36 Defensive numeric input bounds at the JSON/mapper boundary (Phase 9 Batch 2b)
 
 **Decision:** two new, purely defensive bounds on externally supplied decimal
@@ -1900,7 +1917,7 @@ off (produces the wrong status code, 401 instead of 403); auto-login
 after registration (would duplicate `formLogin`'s session-creation path);
 email verification, password confirmation, CAPTCHA, or rate limiting at
 this layer (out of scope for V1; rate limiting belongs at a reverse
-proxy, per D-37's deployment notes).
+proxy, per D-37's own "No CORS" deployment-topology note).
 
 **Consequence:** an anonymous visitor can create an account and
 immediately log in with it. The frontend identity lifecycle (resolved by
@@ -1999,9 +2016,8 @@ unmount via `RequireAuth` anyway); a two-shell design (a bare login layout
 distinct from the authenticated app shell).
 
 **Consequence:** the D-37/D-38 backend authentication core now has a
-complete, working frontend. Password change (D-40) is the one remaining
-piece of Phase 9 Batch 3, and it is backend-only — no frontend UI calls it
-yet.
+complete, working frontend. Password change (D-40, decided separately) has
+no frontend UI yet — see D-40's own consequence, below.
 
 ## D-40 Password change (Phase 9 Batch 3.4)
 

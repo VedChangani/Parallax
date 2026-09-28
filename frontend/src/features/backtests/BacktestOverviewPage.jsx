@@ -55,6 +55,7 @@ export function BacktestOverviewPage() {
     <div className="space-y-8">
       <WarmupNotice
         startDate={run.startDate}
+        firstBarDate={equity.data?.[0]?.date}
         firstEvaluableDate={run.firstEvaluableDate}
         inactiveBarCount={inactiveBarCount}
         totalBarCount={totalBarCount}
@@ -62,7 +63,12 @@ export function BacktestOverviewPage() {
 
       <section>
         <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">Performance</h2>
-        <PerformanceSummary metrics={run.metrics} totalCommission={run.totalCommission} totalSlippageCost={run.totalSlippageCost} />
+        <PerformanceSummary
+          metrics={run.metrics}
+          totalCommission={run.totalCommission}
+          totalSlippageCost={run.totalSlippageCost}
+          returnCount={equity.data ? equity.data.length - 1 : undefined}
+        />
       </section>
 
       <section>
