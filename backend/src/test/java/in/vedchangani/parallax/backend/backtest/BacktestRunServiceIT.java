@@ -8,6 +8,7 @@ import in.vedchangani.parallax.backend.strategy.StrategyService;
 import in.vedchangani.parallax.backend.strategy.StrategySummary;
 import in.vedchangani.parallax.backend.strategy.StrategyVersionNotFoundException;
 import in.vedchangani.parallax.backend.strategy.TestUsers;
+import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionIntegrityException;
 import in.vedchangani.parallax.backend.dataset.DatasetVersionNotFoundException;
 import in.vedchangani.parallax.backend.user.UserId;
 import in.vedchangani.parallax.engine.Backtester;
@@ -40,6 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -60,10 +62,16 @@ class BacktestRunServiceIT {
     @Autowired
     private BacktestRunService backtestRunService;
 
-    @Autowired
+    // Phase 9 Batch 2c: spies, not plain @Autowired - most tests use these exactly
+    // like a real bean (delegating to the genuine implementation via callRealMethod
+    // semantics is the spy default), but a few reference-corruption tests below stub
+    // one specific getVersion(...) call after a real run already exists, since a
+    // REFERENCED strategy/dataset version's own row is otherwise immutable/FK-protected
+    // and cannot be genuinely corrupted through SQL without defeating that protection.
+    @MockitoSpyBean
     private StrategyService strategyService;
 
-    @Autowired
+    @MockitoSpyBean
     private DatasetService datasetService;
 
     @Autowired
@@ -280,5 +288,72 @@ class BacktestRunServiceIT {
                 () -> backtestRunService.createRun(refs.owner(), refs.strategy(), refs.dataset(), extreme));
 
         assertTrue(backtestRunService.listRuns(refs.owner()).isEmpty());
+    }
+
+    // --- Phase 9 Batch 2c §14: referenced identity corruption on read -----------
+    //
+    // A REFERENCED strategy_version/dataset_version row cannot be genuinely
+    // corrupted through SQL: strategy_version/dataset_version are immutable
+    // (UPDATE/DELETE rejected by trigger), and backtest_run's own composite
+    // foreign keys additionally guarantee a referenced row can never be deleted
+    // out from under an existing run (DatasetSchemaIT/BacktestSchemaIT's own
+    // deletingAReferencedStrategyVersionIsRejected/deletingAReferencedDatasetVersionIsRejected
+    // already prove this for "missing"). These tests instead prove the actual
+    // CODE this batch adds - BacktestRunService's own catch-and-rewrap of
+    // StrategyService/DatasetService's read-path exceptions - by stubbing
+    // exactly the getVersion(...) call getRun makes, on a spy wrapping the real
+    // bean, after a genuine run already exists. Every OTHER call on the spy
+    // (createRun's own step 1, and the fixture's own createStrategy/getVersion
+    // calls) is untouched and still delegates to the real implementation.
+
+    @Test
+    void aMissingReferencedStrategyVersionOnReadIsAnIntegrityFailureNot404() {
+        OwnedRefs refs = createOwnedStrategyAndDataset("ref-strategy-missing", tradingStrategy(), sixBarCsv());
+        long runId = backtestRunService.createRun(refs.owner(), refs.strategy(), refs.dataset(), tradingConfig())
+                .id();
+
+        doThrow(new StrategyVersionNotFoundException(refs.strategy().strategyId(), refs.strategy().versionNumber()))
+                .when(strategyService)
+                .getVersion(eq(refs.owner()), eq(refs.strategy().strategyId()), eq(refs.strategy().versionNumber()));
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(refs.owner(), runId));
+    }
+
+    @Test
+    void aCorruptedReferencedStrategyVersionOnReadIsAnIntegrityFailure() {
+        OwnedRefs refs = createOwnedStrategyAndDataset("ref-strategy-corrupt", tradingStrategy(), sixBarCsv());
+        long runId = backtestRunService.createRun(refs.owner(), refs.strategy(), refs.dataset(), tradingConfig())
+                .id();
+
+        doThrow(new StrategyDefinitionIntegrityException("simulated stored-hash disagreement"))
+                .when(strategyService)
+                .getVersion(eq(refs.owner()), eq(refs.strategy().strategyId()), eq(refs.strategy().versionNumber()));
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(refs.owner(), runId));
+    }
+
+    @Test
+    void aMissingReferencedDatasetVersionOnReadIsAnIntegrityFailureNot404() {
+        OwnedRefs refs = createOwnedStrategyAndDataset("ref-dataset-missing", tradingStrategy(), sixBarCsv());
+        long runId = backtestRunService.createRun(refs.owner(), refs.strategy(), refs.dataset(), tradingConfig())
+                .id();
+
+        doThrow(new DatasetVersionNotFoundException(refs.dataset().datasetId(), refs.dataset().versionNumber()))
+                .when(datasetService)
+                .getVersion(eq(refs.owner()), eq(refs.dataset().datasetId()), eq(refs.dataset().versionNumber()));
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(refs.owner(), runId));
+    }
+
+    // --- Phase 9 Batch 2c §14: cross-owner access is unchanged -------------------
+
+    @Test
+    void anotherOwnerStillGetsTheOrdinaryOwnerScoped404NotAnIntegrityFailure() {
+        OwnedRefs refs = createOwnedStrategyAndDataset("ref-cross-owner", tradingStrategy(), sixBarCsv());
+        long runId = backtestRunService.createRun(refs.owner(), refs.strategy(), refs.dataset(), tradingConfig())
+                .id();
+        UserId otherOwner = TestUsers.create(jdbcTemplate, "ref-cross-owner-other");
+
+        assertThrows(BacktestRunNotFoundException.class, () -> backtestRunService.getRun(otherOwner, runId));
     }
 }

@@ -237,7 +237,9 @@ class AlphaVantageMarketDataProviderTest {
         });
         AlphaVantageMarketDataProvider provider = new AlphaVantageMarketDataProvider(defaultProperties(baseUrl(testServer)));
 
-        assertThrows(MarketDataResponseException.class, () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        MarketDataResponseException ex = assertThrows(MarketDataResponseException.class,
+                () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        assertFalse(ex.getMessage().contains(API_KEY));
     }
 
     // --- transport failures -----------------------------------------------------
@@ -251,7 +253,9 @@ class AlphaVantageMarketDataProviderTest {
         String deadUrl = "http://127.0.0.1:" + deadPort + "/query";
         AlphaVantageMarketDataProvider provider = new AlphaVantageMarketDataProvider(defaultProperties(deadUrl));
 
-        assertThrows(MarketDataResponseException.class, () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        MarketDataResponseException ex = assertThrows(MarketDataResponseException.class,
+                () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        assertFalse(ex.getMessage().contains(API_KEY));
     }
 
     @Test
@@ -268,7 +272,9 @@ class AlphaVantageMarketDataProviderTest {
                 API_KEY, baseUrl(testServer), CONNECT_TIMEOUT, Duration.ofMillis(200), MAX_RESPONSE_SIZE);
         AlphaVantageMarketDataProvider provider = new AlphaVantageMarketDataProvider(properties);
 
-        assertThrows(MarketDataResponseException.class, () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        MarketDataResponseException ex = assertThrows(MarketDataResponseException.class,
+                () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        assertFalse(ex.getMessage().contains(API_KEY));
     }
 
     @Test
@@ -316,7 +322,9 @@ class AlphaVantageMarketDataProviderTest {
                 new AlphaVantageProperties(API_KEY, baseUrl(testServer), CONNECT_TIMEOUT, REQUEST_TIMEOUT, DataSize.ofBytes(10));
         AlphaVantageMarketDataProvider provider = new AlphaVantageMarketDataProvider(properties);
 
-        assertThrows(MarketDataResponseException.class, () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        MarketDataResponseException ex = assertThrows(MarketDataResponseException.class,
+                () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
+        assertFalse(ex.getMessage().contains(API_KEY));
     }
 
     // --- parser classification pass-through -----------------------------------

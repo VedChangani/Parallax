@@ -54,7 +54,7 @@ public final class StrategyDefinitionMapper {
     public static final Pattern DECIMAL = Pattern.compile("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?");
 
     /**
-     * Phase 9 Batch 2b (D-35) defensive bound: the maximum raw decimal
+     * Phase 9 Batch 2b (D-36) defensive bound: the maximum raw decimal
      * literal length accepted, checked before any {@link BigDecimal} or
      * {@code double} parsing is attempted — a resource-bound input check,
      * not a semantic rule. A literal this size (100 characters) is already
@@ -68,7 +68,7 @@ public final class StrategyDefinitionMapper {
     public static final int MAX_DECIMAL_LITERAL_LENGTH = 100;
 
     /**
-     * Phase 9 Batch 2b (D-35) defensive bound: the maximum number of
+     * Phase 9 Batch 2b (D-36) defensive bound: the maximum number of
      * integer digits a decimal literal's <em>canonical</em> value (after
      * {@link BigDecimal#stripTrailingZeros()} — the same canonicalization
      * {@code BacktestConfig}/{@code CashFraction} already apply) may have.
@@ -81,14 +81,14 @@ public final class StrategyDefinitionMapper {
     public static final int MAX_INTEGER_DIGITS = 18;
 
     /**
-     * Phase 9 Batch 2b (D-35) defensive bound: the maximum number of
+     * Phase 9 Batch 2b (D-36) defensive bound: the maximum number of
      * fractional digits a decimal literal's canonical value may have. See
      * {@link #MAX_INTEGER_DIGITS}.
      */
     public static final int MAX_FRACTION_DIGITS = 18;
 
     /**
-     * Phase 9 Batch 2b (D-35): rejects {@code text} before it is ever
+     * Phase 9 Batch 2b (D-36): rejects {@code text} before it is ever
      * passed to {@link BigDecimal} or {@link Double#parseDouble}
      * construction if it exceeds {@link #MAX_DECIMAL_LITERAL_LENGTH} — a
      * defensive parser-input bound, always a <em>malformed</em>-class
@@ -106,7 +106,7 @@ public final class StrategyDefinitionMapper {
     }
 
     /**
-     * Phase 9 Batch 2b (D-35): rejects {@code value} — already
+     * Phase 9 Batch 2b (D-36): rejects {@code value} — already
      * successfully parsed from a grammar-valid, length-bounded literal —
      * if its <em>canonical</em> form (after {@link
      * BigDecimal#stripTrailingZeros()}; deliberately <strong>not</strong>
@@ -260,7 +260,7 @@ public final class StrategyDefinitionMapper {
      * exponent. This keeps a raw {@link NumberFormatException} from ever
      * escaping constant parsing.
      *
-     * <p><strong>Phase 9 Batch 2b (D-35) note:</strong> only the raw-length
+     * <p><strong>Phase 9 Batch 2b (D-36) note:</strong> only the raw-length
      * bound ({@link #requireBoundedLength}, applied inside {@link
      * #matchDecimal} above, uniformly for every decimal literal this
      * mapper parses) applies here — deliberately <strong>not</strong>
@@ -317,7 +317,7 @@ public final class StrategyDefinitionMapper {
      * constructor itself; both are treated as malformed client input, with
      * the field path, rather than allowed to escape raw.
      *
-     * <p>Phase 9 Batch 2b (D-35): once the {@link BigDecimal} is
+     * <p>Phase 9 Batch 2b (D-36): once the {@link BigDecimal} is
      * successfully constructed, its canonical precision is bounded by
      * {@link #requireWithinCanonicalPrecisionBounds} — a separate,
      * semantic-class (422) check, layered after this method's own
@@ -343,7 +343,7 @@ public final class StrategyDefinitionMapper {
             throw new MalformedStrategyDefinitionException(path,
                     "must match the decimal grammar " + DECIMAL.pattern() + ", was null");
         }
-        // Phase 9 Batch 2b (D-35): the raw-length bound runs before the grammar
+        // Phase 9 Batch 2b (D-36): the raw-length bound runs before the grammar
         // regex itself - the cheapest possible guard, ahead of everything else.
         requireBoundedLength(text, path, MalformedStrategyDefinitionException::new);
         Matcher m = DECIMAL.matcher(text);

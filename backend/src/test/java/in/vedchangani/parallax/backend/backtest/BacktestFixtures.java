@@ -24,6 +24,7 @@ import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
  * Test-only fixtures shared by the D-34 Batch 1 backtest-persistence test
@@ -90,5 +91,125 @@ final class BacktestFixtures {
         values.put(new IndicatorSpec(IndicatorType.EMA, 12), 1e-300);
         values.put(new IndicatorSpec(IndicatorType.RSI, 14), 0.1 + 0.2);
         return new IndicatorSnapshot(date, close, values);
+    }
+
+    // --- Phase 9 Batch 2c: clone-and-tamper tamper-detection infrastructure ----
+    //
+    // Fabricating every backtest_run/child-row field by hand (as the pre-Batch-2c
+    // "golden baseline" fixture did) is no longer self-consistent once getRun
+    // fully recomputes/replays a stored result: a hand-picked benchmark return,
+    // metric, or ledger state has no reason to agree with what the engine would
+    // actually derive from the same fills/config. These helpers instead clone a
+    // REAL, engine-produced backtest_run row (and its equity/fill/rejection
+    // children) - obtained by actually calling BacktestRunService.createRun -
+    // into a NEW row, with exactly one field overridden on the clone. Every
+    // source table rejects UPDATE (D-34 immutability triggers), so tampering
+    // is always done by inserting a new, independent row - the original run
+    // (and any other test's rows) is never touched.
+
+    /**
+     * Clones {@code sourceRunId}'s {@code backtest_run} parent row into a new
+     * row, applying {@code runColumnOverrides} to the clone only, and returns
+     * the new row's id. Does not clone child rows - see {@link
+     * #cloneChildRows}.
+     */
+    static long cloneRunRow(JdbcTemplate jdbcTemplate, long sourceRunId, Map<String, Object> runColumnOverrides) {
+        Map<String, Object> row = new LinkedHashMap<>(
+                jdbcTemplate.queryForMap("select * from backtest_run where id = ?", sourceRunId));
+        row.remove("id");
+        row.remove("created_at");
+        row.putAll(runColumnOverrides);
+
+        String columns = String.join(", ", row.keySet());
+        String placeholders = row.keySet().stream().map(c -> "?").collect(Collectors.joining(", "));
+        String sql = "insert into backtest_run (" + columns + ") values (" + placeholders + ") returning id";
+        return jdbcTemplate.queryForObject(sql, Long.class, row.values().toArray());
+    }
+
+    /** Clones every equity point from {@code sourceRunId} to {@code targetRunId}, unchanged. */
+    static void cloneEquityPoints(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId) {
+        jdbcTemplate.update("""
+                insert into backtest_equity_point (run_id, bar_date, cash, quantity, cost_basis, realized_pnl, close)
+                select ?, bar_date, cash, quantity, cost_basis, realized_pnl, close
+                from backtest_equity_point where run_id = ? order by bar_date
+                """, targetRunId, sourceRunId);
+    }
+
+    /**
+     * Clones every equity point from {@code sourceRunId} to {@code targetRunId}
+     * <strong>except</strong> the one dated {@code tamperedDate}, which is
+     * inserted with {@code cash} overridden to {@code tamperedCash} instead.
+     */
+    static void cloneEquityPointsWithCashOverride(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId,
+                                                    LocalDate tamperedDate, BigDecimal tamperedCash) {
+        jdbcTemplate.update("""
+                insert into backtest_equity_point (run_id, bar_date, cash, quantity, cost_basis, realized_pnl, close)
+                select ?, bar_date, cash, quantity, cost_basis, realized_pnl, close
+                from backtest_equity_point where run_id = ? and bar_date <> ?
+                """, targetRunId, sourceRunId, tamperedDate);
+        jdbcTemplate.update("""
+                insert into backtest_equity_point (run_id, bar_date, cash, quantity, cost_basis, realized_pnl, close)
+                select ?, bar_date, ?, quantity, cost_basis, realized_pnl, close
+                from backtest_equity_point where run_id = ? and bar_date = ?
+                """, targetRunId, tamperedCash, sourceRunId, tamperedDate);
+    }
+
+    /** Clones every fill from {@code sourceRunId} to {@code targetRunId}, unchanged. */
+    static void cloneFills(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId) {
+        jdbcTemplate.update("""
+                insert into backtest_fill (run_id, order_id, fill_date, quantity, reference_open, fill_price,
+                    commission, signal_type, signal_date, signal_close, signal_indicators)
+                select ?, order_id, fill_date, quantity, reference_open, fill_price, commission, signal_type,
+                    signal_date, signal_close, signal_indicators
+                from backtest_fill where run_id = ? order by order_id
+                """, targetRunId, sourceRunId);
+    }
+
+    /**
+     * Clones every fill from {@code sourceRunId} to {@code targetRunId}
+     * <strong>except</strong> the one with {@code tamperedOrderId}, which is
+     * inserted with {@code orderId}/{@code fillDate}/{@code fillPrice}/{@code
+     * commission} overridden where a non-null override is supplied (a
+     * {@code null} override keeps that column's original value).
+     */
+    static void cloneFillsWithOverride(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId,
+                                        int tamperedOrderId, Integer orderIdOverride, LocalDate fillDateOverride,
+                                        BigDecimal fillPriceOverride, BigDecimal commissionOverride) {
+        jdbcTemplate.update("""
+                insert into backtest_fill (run_id, order_id, fill_date, quantity, reference_open, fill_price,
+                    commission, signal_type, signal_date, signal_close, signal_indicators)
+                select ?, order_id, fill_date, quantity, reference_open, fill_price, commission, signal_type,
+                    signal_date, signal_close, signal_indicators
+                from backtest_fill where run_id = ? and order_id <> ?
+                """, targetRunId, sourceRunId, tamperedOrderId);
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "select * from backtest_fill where run_id = ? and order_id = ?", sourceRunId, tamperedOrderId);
+        jdbcTemplate.update("""
+                insert into backtest_fill (run_id, order_id, fill_date, quantity, reference_open, fill_price,
+                    commission, signal_type, signal_date, signal_close, signal_indicators)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                """, targetRunId, orderIdOverride != null ? orderIdOverride : row.get("order_id"),
+                fillDateOverride != null ? fillDateOverride : row.get("fill_date"), row.get("quantity"),
+                row.get("reference_open"), fillPriceOverride != null ? fillPriceOverride : row.get("fill_price"),
+                commissionOverride != null ? commissionOverride : row.get("commission"), row.get("signal_type"),
+                row.get("signal_date"), row.get("signal_close"), row.get("signal_indicators").toString());
+    }
+
+    /** Clones every rejection from {@code sourceRunId} to {@code targetRunId}, unchanged. */
+    static void cloneRejections(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId) {
+        jdbcTemplate.update("""
+                insert into backtest_rejection (run_id, seq, reason, order_id, execution_date, quantity,
+                    required_cash, available_cash, signal_date, signal_close, signal_indicators)
+                select ?, seq, reason, order_id, execution_date, quantity, required_cash, available_cash,
+                    signal_date, signal_close, signal_indicators
+                from backtest_rejection where run_id = ? order by seq
+                """, targetRunId, sourceRunId);
+    }
+
+    /** Clones every equity/fill/rejection child row from {@code sourceRunId} to {@code targetRunId}, unchanged. */
+    static void cloneChildRows(JdbcTemplate jdbcTemplate, long targetRunId, long sourceRunId) {
+        cloneEquityPoints(jdbcTemplate, targetRunId, sourceRunId);
+        cloneFills(jdbcTemplate, targetRunId, sourceRunId);
+        cloneRejections(jdbcTemplate, targetRunId, sourceRunId);
     }
 }

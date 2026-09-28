@@ -135,7 +135,7 @@ class BacktestConfigMapperTest {
         assertEquals("", e.path());
     }
 
-    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) --------------------
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-36) --------------------
 
     @Test
     void decimalAtExactlyTheLengthBoundIsAcceptedBecauseItsCanonicalValueIsTiny() {

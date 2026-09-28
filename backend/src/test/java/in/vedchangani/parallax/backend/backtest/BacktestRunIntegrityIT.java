@@ -6,12 +6,12 @@ import in.vedchangani.parallax.backend.dataset.DatasetFixtures;
 import in.vedchangani.parallax.backend.dataset.DatasetIntegrityException;
 import in.vedchangani.parallax.backend.dataset.DatasetService;
 import in.vedchangani.parallax.backend.dataset.DatasetSummary;
-import in.vedchangani.parallax.backend.dataset.VerifiedDatasetVersion;
 import in.vedchangani.parallax.backend.strategy.StrategyService;
 import in.vedchangani.parallax.backend.strategy.StrategySummary;
 import in.vedchangani.parallax.backend.strategy.TestUsers;
 import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionCodec;
 import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionIntegrityException;
+import in.vedchangani.parallax.backend.dataset.VerifiedDatasetVersion;
 import in.vedchangani.parallax.backend.user.UserId;
 import in.vedchangani.parallax.engine.Backtester;
 import in.vedchangani.parallax.engine.metrics.BuyAndHoldBenchmark;
@@ -32,23 +32,32 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * D-34 Batch 2 read-time integrity behavior against real PostgreSQL
- * (Testcontainers): the tampering matrix (§12), engine result
- * reproducibility through a full create/read round trip (§10), and the
- * metric/benchmark no-recompute-on-read policy (§9). Tampering uses the
- * project's own established technique (see {@code DatasetSchemaIT}): direct
- * {@code INSERT}s that bypass the service, since every backtest table
- * rejects {@code UPDATE}/{@code DELETE} at the database level.
+ * Phase 9 Batch 2c read-time integrity behavior against real PostgreSQL
+ * (Testcontainers): full engine result reproducibility through a create/read
+ * round trip (§10), the tampering matrix (§12) proving that read-time
+ * verification now recomputes/replays a stored result rather than trusting
+ * it (revising D-34 Batch 2's never-recompute policy), and column-by-column
+ * identical-run reproducibility (§13).
+ *
+ * <p>Every tamper test clones a <strong>real, engine-produced</strong> run
+ * (created through {@link BacktestRunService#createRun}, never
+ * hand-fabricated) into a new row via {@link BacktestFixtures}'s
+ * clone-and-tamper helpers, with exactly one field overridden on the clone
+ * — the technique this batch's design requires, since a hand-picked metric/
+ * benchmark/ledger value has no reason to agree with what the engine would
+ * actually derive from the same fills once {@code getRun} fully recomputes
+ * and replays instead of trusting stored values structurally.
  */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -69,328 +78,12 @@ class BacktestRunIntegrityIT {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    // --- golden (self-consistent) baseline row, tampered one field at a time ---
-
-    private Map<String, Object> baselineValues(BacktestFixtures.Inputs in) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        values.put("owner_id", in.owner().value());
-        values.put("strategy_id", in.strategyId());
-        values.put("strategy_version_number", in.strategyVersionNumber());
-        values.put("strategy_definition_hash", in.strategyDefinitionHash());
-        values.put("dataset_id", in.datasetId());
-        values.put("dataset_version_number", in.datasetVersionNumber());
-        values.put("dataset_content_hash", in.datasetContentHash());
-        values.put("engine_semantics_version", Backtester.SEMANTICS_VERSION);
-        values.put("initial_capital", new BigDecimal("10000"));
-        values.put("commission_per_fill", new BigDecimal("1"));
-        values.put("slippage_rate", new BigDecimal("0.001"));
-        values.put("start_date", LocalDate.of(2024, 1, 2));
-        values.put("end_date", LocalDate.of(2024, 1, 3));
-        values.put("first_evaluable_date", null);
-        values.put("total_commission", BigDecimal.ZERO);
-        values.put("total_slippage_cost", BigDecimal.ZERO);
-        values.put("total_return", 0.0);
-        values.put("cagr", null);
-        values.put("volatility", null);
-        values.put("sharpe_ratio", null);
-        values.put("max_drawdown", 0.0);
-        values.put("closed_trade_count", 0);
-        values.put("win_rate", null);
-        values.put("average_win", null);
-        values.put("average_loss", null);
-        values.put("benchmark_cash", new BigDecimal("100"));
-        values.put("benchmark_quantity", 10L);
-        values.put("benchmark_cost_basis", new BigDecimal("9900"));
-        values.put("benchmark_total_return", 0.0);
-        return values;
-    }
-
-    private long insertRun(Map<String, Object> values) {
-        String columns = String.join(", ", values.keySet());
-        String placeholders = values.keySet().stream().map(c -> "?").collect(Collectors.joining(", "));
-        String sql = "insert into backtest_run (" + columns + ") values (" + placeholders + ") returning id";
-        return jdbcTemplate.queryForObject(sql, Long.class, values.values().toArray());
-    }
-
-    private void insertEquityPoint(long runId, LocalDate date, String cash, long quantity, String costBasis,
-                                    String realizedPnl, String close) {
-        jdbcTemplate.update(
-                "insert into backtest_equity_point (run_id, bar_date, cash, quantity, cost_basis, realized_pnl, "
-                        + "close) values (?, ?, ?, ?, ?, ?, ?)",
-                runId, date, new BigDecimal(cash), quantity, new BigDecimal(costBasis), new BigDecimal(realizedPnl),
-                new BigDecimal(close));
-    }
-
-    /** The baseline: a flat, no-trade run over the two-bar dataset {@code BacktestFixtures} sets up. */
-    private long insertGoldenRun(BacktestFixtures.Inputs in) {
-        long runId = insertRun(baselineValues(in));
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-        return runId;
-    }
-
-    private BacktestFixtures.Inputs inputs(String label) {
-        return BacktestFixtures.createInputs(jdbcTemplate, strategyService, datasetService, label);
-    }
-
-    // --- sanity: the golden baseline itself passes verification ----------------
-
-    @Test
-    void theGoldenBaselineRunPassesIntegrityVerification() {
-        BacktestFixtures.Inputs in = inputs("golden");
-        long runId = insertGoldenRun(in);
-
-        BacktestRunDetail detail = backtestRunService.getRun(in.owner(), runId);
-
-        assertEquals(2, detail.equityCurve().size());
-        assertTrue(detail.fills().isEmpty());
-        assertTrue(detail.rejections().isEmpty());
-        assertEquals(0, detail.metrics().closedTradeCount());
-    }
-
-    // --- A/B: commission and slippage totals ------------------------------------
-
-    @Test
-    void tamperedTotalCommissionIsDetected() {
-        BacktestFixtures.Inputs in = inputs("tamper-commission");
-        Map<String, Object> values = baselineValues(in);
-        values.put("total_commission", new BigDecimal("5"));
-        long runId = insertRun(values);
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    @Test
-    void tamperedTotalSlippageCostIsDetected() {
-        BacktestFixtures.Inputs in = inputs("tamper-slippage");
-        Map<String, Object> values = baselineValues(in);
-        values.put("total_slippage_cost", new BigDecimal("5"));
-        long runId = insertRun(values);
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    // --- C: a fill that breaks Trade.fromFills's alternation invariant ---------
-
-    @Test
-    void tamperedFillBreakingTradeAlternationIsDetected() {
-        BacktestFixtures.Inputs in = inputs("tamper-fill");
-        long runId = insertRun(baselineValues(in));
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-        insertFill(runId, 1, LocalDate.of(2024, 1, 2), 10, "100", "100", "0", "ENTER", LocalDate.of(2024, 1, 2), "100");
-        // Two consecutive BUY (ENTER) fills - never a valid alternating sequence.
-        insertFill(runId, 2, LocalDate.of(2024, 1, 3), 10, "100", "100", "0", "ENTER", LocalDate.of(2024, 1, 3), "101");
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    private void insertFill(long runId, int orderId, LocalDate fillDate, long quantity, String referenceOpen,
-                             String fillPrice, String commission, String signalType, LocalDate signalDate,
-                             String signalClose) {
-        jdbcTemplate.update("""
-                insert into backtest_fill
-                    (run_id, order_id, fill_date, quantity, reference_open, fill_price, commission,
-                     signal_type, signal_date, signal_close, signal_indicators)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]'::jsonb)
-                """, runId, orderId, fillDate, quantity, new BigDecimal(referenceOpen), new BigDecimal(fillPrice),
-                new BigDecimal(commission), signalType, signalDate, new BigDecimal(signalClose));
-    }
-
-    // --- D: equity point content that fails the engine's own EquityPoint constructor ---
-
-    @Test
-    void tamperedEquityPointContentFailsEngineReconstruction() {
-        BacktestFixtures.Inputs in = inputs("tamper-equity");
-        long runId = insertRun(baselineValues(in));
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        // quantity = 0 with a non-zero cost basis violates EquityPoint's own invariant.
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "9000", 0, "100", "0", "101");
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    // --- E: a rejection shape that is valid at the database but not at the engine ---
-
-    @Test
-    void tamperedInsufficientCashRejectionShapeIsDetected() {
-        BacktestFixtures.Inputs in = inputs("tamper-rejection");
-        long runId = insertRun(baselineValues(in));
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-        // The database's ck_backtest_rejection_shape only requires every INSUFFICIENT_CASH
-        // field to be non-null - it does not check requiredCash > availableCash, which is
-        // OrderRejection.InsufficientCash's own application-level invariant.
-        jdbcTemplate.update("""
-                insert into backtest_rejection
-                    (run_id, seq, reason, order_id, execution_date, quantity, required_cash, available_cash,
-                     signal_date, signal_close, signal_indicators)
-                values (?, 1, 'INSUFFICIENT_CASH', 1, '2024-01-02', 10, 100, 500, '2024-01-02', 100, '[]'::jsonb)
-                """, runId);
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    /**
-     * The persisted {@code seq} column alone cannot catch every chronology
-     * violation: a tampered row can keep {@code seq} valid (1, 2, ...) while
-     * its date regresses. {@code OrderRejection} dates must still be
-     * non-decreasing in append order, mirroring {@code BacktestResult}'s own
-     * engine-level invariant (D-24).
-     */
-    @Test
-    void tamperedRejectionDateOrderingIsDetectedDespiteAValidSeq() {
-        BacktestFixtures.Inputs in = inputs("tamper-rejection-date");
-        long runId = insertRun(baselineValues(in));
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-        // seq is a valid, gap-free 1, 2 - but the second rejection's date is earlier
-        // than the first's, which can never happen in genuine engine append order.
-        jdbcTemplate.update("""
-                insert into backtest_rejection (run_id, seq, reason, signal_date, signal_close, signal_indicators)
-                values (?, 1, 'ZERO_QUANTITY', '2024-01-03', 101, '[]'::jsonb)
-                """, runId);
-        jdbcTemplate.update("""
-                insert into backtest_rejection (run_id, seq, reason, signal_date, signal_close, signal_indicators)
-                values (?, 2, 'ZERO_QUANTITY', '2024-01-02', 100, '[]'::jsonb)
-                """, runId);
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    // --- F/G: benchmark accounting identity -------------------------------------
-
-    @Test
-    void tamperedBenchmarkCashCostBasisMismatchIsDetected() {
-        BacktestFixtures.Inputs in = inputs("tamper-benchmark");
-        Map<String, Object> values = baselineValues(in);
-        values.put("benchmark_cash", new BigDecimal("50")); // 50 + 9900 != 10000
-        long runId = insertRun(values);
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    // --- G: a PerformanceMetrics structural invariant violated ------------------
-
-    @Test
-    void tamperedPerformanceMetricsStructuralValueIsDetected() {
-        BacktestFixtures.Inputs in = inputs("tamper-metrics");
-        Map<String, Object> values = baselineValues(in);
-        // closed_trade_count = 0 but win_rate present - PerformanceMetrics's own
-        // constructor requires winRate to be empty iff closedTradeCount == 0.
-        values.put("win_rate", 0.5);
-        long runId = insertRun(values);
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 2), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2024, 1, 3), "10000", 0, "0", "0", "101");
-
-        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(in.owner(), runId));
-    }
-
-    // --- H: DatasetVersion tampered after a run has completed -------------------
-
-    @Test
-    void completedRunSurvivesDatasetTamperingButANewRunAgainstItFails() {
-        UserId owner = TestUsers.create(jdbcTemplate, "tamper-dataset");
-        StrategySummary strategy = strategyService.createStrategy(owner, "tamper-dataset-strategy-" + System.nanoTime(),
-                "", BacktestFixtures.simpleStrategyDefinition());
-        DatasetSummary dataset = datasetService.createDataset(owner, "tamper-dataset-ds-" + System.nanoTime(), "AAPL");
-        datasetService.createVersionFromCsv(owner, dataset.id(), DatasetFixtures.simpleCsv(), AdjustmentBasis.RAW,
-                "a.csv");
-
-        BacktestConfig config = new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
-                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 3));
-        BacktestRunSummary summary = backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
-                new DatasetVersionRef(dataset.id(), 1), config);
-
-        // Tamper directly: insert a third bar the stored barCount/hash metadata does not
-        // account for (the same technique DatasetSchemaIT uses).
-        long datasetVersionRowId = jdbcTemplate.queryForObject(
-                "select id from dataset_version where dataset_id = ? and version_number = 1", Long.class,
-                dataset.id());
-        jdbcTemplate.update(
-                "insert into dataset_bar (dataset_version_id, bar_date, open, high, low, close, volume) "
-                        + "values (?, '2024-01-04', 108, 115, 107, 112, 900)", datasetVersionRowId);
-
-        // The already-completed run never reloads the original dataset bars, so it still reads back fine.
-        BacktestRunDetail detail = backtestRunService.getRun(owner, summary.id());
-        assertEquals(2, detail.equityCurve().size());
-
-        // A brand-new run against the now-tampered dataset version fails with the existing,
-        // unrelated dataset-integrity failure - not a backtest-specific one.
-        assertThrows(DatasetIntegrityException.class, () -> backtestRunService.createRun(owner,
-                new StrategyVersionRef(strategy.id(), 1), new DatasetVersionRef(dataset.id(), 1), config));
-    }
-
-    // --- I: StrategyVersion tampered after a run has completed ------------------
-
-    @Test
-    void completedRunSurvivesStrategyTamperingButANewRunAgainstItFails() {
-        UserId owner = TestUsers.create(jdbcTemplate, "tamper-strategy");
-        StrategySummary strategy = strategyService.createStrategy(owner, "tamper-strategy-s-" + System.nanoTime(),
-                "", BacktestFixtures.simpleStrategyDefinition());
-        DatasetSummary dataset = datasetService.createDataset(owner, "tamper-strategy-ds-" + System.nanoTime(), "AAPL");
-        datasetService.createVersionFromCsv(owner, dataset.id(), DatasetFixtures.simpleCsv(), AdjustmentBasis.RAW,
-                "a.csv");
-
-        BacktestConfig config = new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
-                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 3));
-        BacktestRunSummary summary = backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
-                new DatasetVersionRef(dataset.id(), 1), config);
-
-        // Tamper: insert a second, never-decoded version of the same strategy directly,
-        // bypassing the codec's own encode() call, with a hash that disagrees with its content.
-        jdbcTemplate.update(
-                "insert into strategy_version (strategy_id, version_number, definition, "
-                        + "definition_schema_version, definition_hash) values (?, 2, "
-                        + "'{\"schemaVersion\":1,\"entryCondition\":{\"type\":\"compare\",\"left\":{\"type\":"
-                        + "\"close\"},\"operator\":\"GT\",\"right\":{\"type\":\"constant\",\"value\":\"0\"}},"
-                        + "\"exitCondition\":{\"type\":\"compare\",\"left\":{\"type\":\"close\"},\"operator\":"
-                        + "\"LT\",\"right\":{\"type\":\"constant\",\"value\":\"0\"}},\"positionSizing\":{\"type\":"
-                        + "\"cashFraction\",\"fraction\":\"1\"}}'::jsonb, 1, ?)",
-                strategy.id(), "0".repeat(64));
-
-        // The already-completed run never re-decodes the original strategy version, so it
-        // still reads back fine.
-        BacktestRunDetail detail = backtestRunService.getRun(owner, summary.id());
-        assertEquals(2, detail.equityCurve().size());
-
-        // A brand-new run against the tampered version fails with the existing, unrelated
-        // strategy-definition-integrity failure - not a backtest-specific one.
-        assertThrows(StrategyDefinitionIntegrityException.class, () -> backtestRunService.createRun(owner,
-                new StrategyVersionRef(strategy.id(), 2), new DatasetVersionRef(dataset.id(), 1), config));
-    }
-
-    // --- §9: stored metrics/benchmark are never recomputed on read --------------
-
-    @Test
-    void storedMetricsAndBenchmarkAreReturnedVerbatimNeverRecomputed() {
-        BacktestFixtures.Inputs in = inputs("no-recompute");
-        Map<String, Object> values = baselineValues(in);
-        // A span over 365 days with real growth would, if genuinely recomputed by
-        // PerformanceMetrics.of(...), produce a specific cagr close to
-        // (12000/10000)^(365/517) - 1 - never this deliberately arbitrary value.
-        values.put("start_date", LocalDate.of(2020, 1, 1));
-        values.put("end_date", LocalDate.of(2021, 6, 1));
-        values.put("cagr", 0.123456);
-        values.put("total_return", 0.2);
-        values.put("benchmark_total_return", 0.777);
-        long runId = insertRun(values);
-        insertEquityPoint(runId, LocalDate.of(2020, 1, 1), "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, LocalDate.of(2021, 6, 1), "12000", 0, "0", "0", "120");
-
-        BacktestRunDetail detail = backtestRunService.getRun(in.owner(), runId);
-
-        assertEquals(0.123456, detail.metrics().cagr().orElseThrow());
-        assertEquals(0.777, detail.benchmarkTotalReturn());
-    }
-
-    // --- §10: full engine result reproducibility through create + read ----------
+    // --- shared real-run fixture -------------------------------------------------
+    //
+    // One entry, one exit, over six bars - deterministic, commission/slippage
+    // both zero (so fillPrice == referenceOpen exactly, commission == 0
+    // exactly), giving every tamper test a real, non-trivial closed trade to
+    // work from.
 
     private static StrategyDefinition tradingStrategy() {
         return new StrategyDefinition(
@@ -406,20 +99,41 @@ class BacktestRunIntegrityIT {
                 + "2024-01-04,105,109,104,108,1000\n"
                 + "2024-01-05,108,110,95,96,1000\n"
                 + "2024-01-08,96,99,90,92,1000\n"
-                + "2024-01-09,92,95,88,90,1000\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+                + "2024-01-09,92,95,88,90,1000\n").getBytes(StandardCharsets.US_ASCII);
     }
+
+    private static BacktestConfig tradingConfig() {
+        return new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 9));
+    }
+
+    /** Creates a real, persisted run via the actual service (never fabricated) and returns its id. */
+    private long createRealRun(UserId owner, String label) {
+        StrategySummary strategy = strategyService.createStrategy(owner, BacktestFixtures.uniqueName(label + "-s"),
+                "", tradingStrategy());
+        DatasetSummary dataset = datasetService.createDataset(owner, BacktestFixtures.uniqueName(label + "-d"),
+                "AAPL");
+        datasetService.createVersionFromCsv(owner, dataset.id(), sixBarCsv(), AdjustmentBasis.RAW, "a.csv");
+        return backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
+                new DatasetVersionRef(dataset.id(), 1), tradingConfig()).id();
+    }
+
+    // --- §10: full engine result reproducibility through create + read ----------
 
     @Test
     void createdRunRoundTripsExactlyThroughGetRun() {
+        // Two independent proofs at once: (a) determinism/reproducibility (D-15) -
+        // a SECOND, independent Backtester.run()/PerformanceMetrics.of()/
+        // BuyAndHoldBenchmark.of() call, outside the service entirely, must equal
+        // what getRun returns; (b) that Phase 9 Batch 2c's own deep read-time
+        // recomputation/replay does not reject a genuinely valid run.
         UserId owner = TestUsers.create(jdbcTemplate, "repro");
         StrategyDefinition strategyDef = tradingStrategy();
         StrategySummary strategy = strategyService.createStrategy(owner, "repro-strategy-" + System.nanoTime(), "",
                 strategyDef);
         DatasetSummary dataset = datasetService.createDataset(owner, "repro-dataset-" + System.nanoTime(), "AAPL");
         datasetService.createVersionFromCsv(owner, dataset.id(), sixBarCsv(), AdjustmentBasis.RAW, "a.csv");
-
-        BacktestConfig config = new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
-                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 9));
+        BacktestConfig config = tradingConfig();
 
         VerifiedDatasetVersion verified = datasetService.getVerifiedSeries(owner, dataset.id(), 1);
         BacktestResult expectedResult = new Backtester().run(verified.series(), strategyDef, config);
@@ -453,37 +167,323 @@ class BacktestRunIntegrityIT {
                 Double.doubleToRawLongBits(detail.benchmarkTotalReturn()));
     }
 
-    @Test
-    void twoIdenticalCreateRequestsProduceIdenticalResultContent() {
-        UserId owner = TestUsers.create(jdbcTemplate, "repro-idempotent");
-        StrategyDefinition strategyDef = tradingStrategy();
-        StrategySummary strategy = strategyService.createStrategy(owner, "repro2-strategy-" + System.nanoTime(), "",
-                strategyDef);
-        DatasetSummary dataset = datasetService.createDataset(owner, "repro2-dataset-" + System.nanoTime(), "AAPL");
-        datasetService.createVersionFromCsv(owner, dataset.id(), sixBarCsv(), AdjustmentBasis.RAW, "a.csv");
-        BacktestConfig config = new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
-                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 9));
+    // --- §13: column-by-column identical-run reproducibility --------------------
 
+    @Test
+    void identicalRunsAreColumnByColumnIdenticalInThePersistedState() {
+        UserId owner = TestUsers.create(jdbcTemplate, "repro-column");
+        StrategySummary strategy = strategyService.createStrategy(owner, BacktestFixtures.uniqueName("repro-col-s"),
+                "", tradingStrategy());
+        DatasetSummary dataset = datasetService.createDataset(owner, BacktestFixtures.uniqueName("repro-col-d"),
+                "AAPL");
+        datasetService.createVersionFromCsv(owner, dataset.id(), sixBarCsv(), AdjustmentBasis.RAW, "a.csv");
         StrategyVersionRef strategyRef = new StrategyVersionRef(strategy.id(), 1);
         DatasetVersionRef datasetRef = new DatasetVersionRef(dataset.id(), 1);
-        BacktestRunSummary first = backtestRunService.createRun(owner, strategyRef, datasetRef, config);
-        BacktestRunSummary second = backtestRunService.createRun(owner, strategyRef, datasetRef, config);
 
-        BacktestRunDetail firstDetail = backtestRunService.getRun(owner, first.id());
-        BacktestRunDetail secondDetail = backtestRunService.getRun(owner, second.id());
+        long firstId = backtestRunService.createRun(owner, strategyRef, datasetRef, tradingConfig()).id();
+        long secondId = backtestRunService.createRun(owner, strategyRef, datasetRef, tradingConfig()).id();
+        assertTrue(firstId != secondId);
 
-        assertEquals(firstDetail.config(), secondDetail.config());
-        assertEquals(firstDetail.firstEvaluableDate(), secondDetail.firstEvaluableDate());
-        assertEquals(firstDetail.equityCurve(), secondDetail.equityCurve());
-        assertEquals(firstDetail.fills(), secondDetail.fills());
-        assertEquals(firstDetail.rejections(), secondDetail.rejections());
-        assertEquals(firstDetail.metrics(), secondDetail.metrics());
-        assertEquals(firstDetail.totalCommission(), secondDetail.totalCommission());
-        assertEquals(firstDetail.totalSlippageCost(), secondDetail.totalSlippageCost());
-        assertEquals(firstDetail.benchmarkCash(), secondDetail.benchmarkCash());
-        assertEquals(firstDetail.benchmarkQuantity(), secondDetail.benchmarkQuantity());
-        assertEquals(firstDetail.benchmarkCostBasis(), secondDetail.benchmarkCostBasis());
-        assertEquals(firstDetail.benchmarkTotalReturn(), secondDetail.benchmarkTotalReturn());
-        assertTrue(first.id() != second.id());
+        // The parent row, every column except the two that are expected to differ
+        // (the surrogate id and the insert timestamp).
+        Map<String, Object> firstRun = new LinkedHashMap<>(
+                jdbcTemplate.queryForMap("select * from backtest_run where id = ?", firstId));
+        Map<String, Object> secondRun = new LinkedHashMap<>(
+                jdbcTemplate.queryForMap("select * from backtest_run where id = ?", secondId));
+        firstRun.remove("id");
+        firstRun.remove("created_at");
+        secondRun.remove("id");
+        secondRun.remove("created_at");
+        assertEquals(firstRun, secondRun);
+
+        assertEquals(
+                jdbcTemplate.queryForList("select bar_date, cash, quantity, cost_basis, realized_pnl, close "
+                        + "from backtest_equity_point where run_id = ? order by bar_date", firstId),
+                jdbcTemplate.queryForList("select bar_date, cash, quantity, cost_basis, realized_pnl, close "
+                        + "from backtest_equity_point where run_id = ? order by bar_date", secondId));
+
+        assertEquals(
+                jdbcTemplate.queryForList("select order_id, fill_date, quantity, reference_open, fill_price, "
+                        + "commission, signal_type, signal_date, signal_close, signal_indicators::text "
+                        + "from backtest_fill where run_id = ? order by order_id", firstId),
+                jdbcTemplate.queryForList("select order_id, fill_date, quantity, reference_open, fill_price, "
+                        + "commission, signal_type, signal_date, signal_close, signal_indicators::text "
+                        + "from backtest_fill where run_id = ? order by order_id", secondId));
+
+        assertEquals(
+                jdbcTemplate.queryForList(
+                        "select seq, reason from backtest_rejection where run_id = ? order by seq", firstId),
+                jdbcTemplate.queryForList(
+                        "select seq, reason from backtest_rejection where run_id = ? order by seq", secondId));
+    }
+
+    // --- §12.G: a valid historical run still returns successfully ---------------
+
+    @Test
+    void aFreshlyCreatedRunPassesFullIntegrityVerification() {
+        UserId owner = TestUsers.create(jdbcTemplate, "valid-run");
+        long runId = createRealRun(owner, "valid-run");
+
+        BacktestRunDetail detail = backtestRunService.getRun(owner, runId);
+
+        assertEquals(2, detail.fills().size());
+        assertEquals(1, detail.metrics().closedTradeCount());
+    }
+
+    @Test
+    void anUnchangedFullCloneAlsoPassesFullIntegrityVerification() {
+        // Sanity check on the clone-and-tamper infrastructure itself: cloning
+        // every row unchanged (the same helpers every tamper test below uses for
+        // the parts it does NOT tamper) must not, by itself, break verification.
+        UserId owner = TestUsers.create(jdbcTemplate, "valid-clone");
+        long sourceRunId = createRealRun(owner, "valid-clone");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneChildRows(jdbcTemplate, clonedRunId, sourceRunId);
+
+        BacktestRunDetail original = backtestRunService.getRun(owner, sourceRunId);
+        BacktestRunDetail clone = backtestRunService.getRun(owner, clonedRunId);
+        assertEquals(original.equityCurve(), clone.equityCurve());
+        assertEquals(original.fills(), clone.fills());
+        assertEquals(original.metrics(), clone.metrics());
+    }
+
+    // --- §12.A: metric tampering --------------------------------------------------
+
+    @Test
+    void metricTamperedByOneUlpIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-metric");
+        long sourceRunId = createRealRun(owner, "tamper-metric");
+        double realTotalReturn = jdbcTemplate.queryForObject(
+                "select total_return from backtest_run where id = ?", Double.class, sourceRunId);
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId,
+                Map.of("total_return", Math.nextUp(realTotalReturn)));
+        BacktestFixtures.cloneChildRows(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- §12.B: equity ledger tampering -------------------------------------------
+
+    @Test
+    void equityLedgerCashTamperingIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-ledger");
+        long sourceRunId = createRealRun(owner, "tamper-ledger");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        // 2024-01-02: the first bar, still flat (before entry) - cash == initialCapital.
+        // A different, still-nonnegative cash value is otherwise EquityPoint-constructor-valid,
+        // so only ledger replay (not row-level reconstruction) can catch this.
+        BacktestFixtures.cloneEquityPointsWithCashOverride(jdbcTemplate, clonedRunId, sourceRunId,
+                LocalDate.of(2024, 1, 2), new BigDecimal("9999"));
+        BacktestFixtures.cloneFills(jdbcTemplate, clonedRunId, sourceRunId);
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- §12.C: fill tampering -----------------------------------------------------
+
+    @Test
+    void fillDateTamperingIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-fill-date");
+        long sourceRunId = createRealRun(owner, "tamper-fill-date");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // order 1 (the BUY, originally 2024-01-04) moved to a different real equity
+        // date - it no longer lines up with the equity point where the cash actually
+        // changed, so ledger replay must reject it.
+        BacktestFixtures.cloneFillsWithOverride(jdbcTemplate, clonedRunId, sourceRunId, 1, null,
+                LocalDate.of(2024, 1, 5), null, null);
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    @Test
+    void fillPriceTamperingIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-fill-price");
+        long sourceRunId = createRealRun(owner, "tamper-fill-price");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // slippageRate == 0, so fillPrice must equal referenceOpen exactly (105) - any
+        // other value fails verifyFillsMatchConfig's exact formula check.
+        BacktestFixtures.cloneFillsWithOverride(jdbcTemplate, clonedRunId, sourceRunId, 1, null, null,
+                new BigDecimal("106"), null);
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    @Test
+    void fillCommissionTamperingIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-fill-commission");
+        long sourceRunId = createRealRun(owner, "tamper-fill-commission");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // commissionPerFill == 0 in this fixture's config - any nonzero commission
+        // fails verifyFillsMatchConfig's exact commission check.
+        BacktestFixtures.cloneFillsWithOverride(jdbcTemplate, clonedRunId, sourceRunId, 1, null, null, null,
+                new BigDecimal("1"));
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- §12.D: result metadata tampering ------------------------------------------
+
+    @Test
+    void invalidFirstEvaluableDateIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-first-evaluable");
+        long sourceRunId = createRealRun(owner, "tamper-first-evaluable");
+
+        // 2024-01-05 is a real equity-curve date, inside the run's own range, so it
+        // passes the (still-kept) range check - but the BUY fill's own signal was
+        // dated 2024-01-03, strictly before this "first evaluable" date, which can
+        // never happen (no signal can predate readiness, D-25).
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId,
+                Map.of("first_evaluable_date", LocalDate.of(2024, 1, 5)));
+        BacktestFixtures.cloneChildRows(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    @Test
+    void illegalOrderIdSequenceIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-order-id");
+        long sourceRunId = createRealRun(owner, "tamper-order-id");
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId, Map.of());
+        BacktestFixtures.cloneEquityPoints(jdbcTemplate, clonedRunId, sourceRunId);
+        // Two fills exist (order ids 1, 2); renumbering the SELL from 2 to 3 leaves
+        // {1, 3} - order id 3 is outside the expected [1, 2] range (no InsufficientCash
+        // rejection exists to justify a third id), and order id 2 is never consumed.
+        BacktestFixtures.cloneFillsWithOverride(jdbcTemplate, clonedRunId, sourceRunId, 2, 3, null, null, null);
+        BacktestFixtures.cloneRejections(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    @Test
+    void unsupportedSemanticsVersionIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-semantics");
+        long sourceRunId = createRealRun(owner, "tamper-semantics");
+
+        // Checked first, before any child row is even read - children need not be cloned.
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId,
+                Map.of("engine_semantics_version", Backtester.SEMANTICS_VERSION + 1));
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- §12.F/benchmark: buy-and-hold benchmark tampering --------------------------
+
+    @Test
+    void benchmarkCashCostBasisMismatchIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-benchmark-identity");
+        long sourceRunId = createRealRun(owner, "tamper-benchmark-identity");
+        BigDecimal realCash = jdbcTemplate.queryForObject(
+                "select benchmark_cash from backtest_run where id = ?", BigDecimal.class, sourceRunId);
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId,
+                Map.of("benchmark_cash", realCash.add(BigDecimal.ONE)));
+        BacktestFixtures.cloneChildRows(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    @Test
+    void benchmarkTotalReturnTamperedByOneUlpIsDetected() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-benchmark-return");
+        long sourceRunId = createRealRun(owner, "tamper-benchmark-return");
+        double realReturn = jdbcTemplate.queryForObject(
+                "select benchmark_total_return from backtest_run where id = ?", Double.class, sourceRunId);
+
+        long clonedRunId = BacktestFixtures.cloneRunRow(jdbcTemplate, sourceRunId,
+                Map.of("benchmark_total_return", Math.nextUp(realReturn)));
+        BacktestFixtures.cloneChildRows(jdbcTemplate, clonedRunId, sourceRunId);
+
+        assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(owner, clonedRunId));
+    }
+
+    // --- §12.E/H: DatasetVersion/StrategyVersion tampered after a run has completed ---
+
+    @Test
+    void completedRunSurvivesDatasetTamperingButANewRunAgainstItFails() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-dataset");
+        StrategySummary strategy = strategyService.createStrategy(owner, "tamper-dataset-strategy-" + System.nanoTime(),
+                "", BacktestFixtures.simpleStrategyDefinition());
+        DatasetSummary dataset = datasetService.createDataset(owner, "tamper-dataset-ds-" + System.nanoTime(), "AAPL");
+        datasetService.createVersionFromCsv(owner, dataset.id(), DatasetFixtures.simpleCsv(), AdjustmentBasis.RAW,
+                "a.csv");
+
+        BacktestConfig config = new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 3));
+        BacktestRunSummary summary = backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
+                new DatasetVersionRef(dataset.id(), 1), config);
+
+        // Tamper directly: insert a third bar the stored barCount/hash metadata does not
+        // account for (the same technique DatasetSchemaIT uses).
+        long datasetVersionRowId = jdbcTemplate.queryForObject(
+                "select id from dataset_version where dataset_id = ? and version_number = 1", Long.class,
+                dataset.id());
+        jdbcTemplate.update(
+                "insert into dataset_bar (dataset_version_id, bar_date, open, high, low, close, volume) "
+                        + "values (?, '2024-01-04', 108, 115, 107, 112, 900)", datasetVersionRowId);
+
+        // The already-completed run never reloads the dataset's bars (Phase 9 Batch 2c
+        // keeps this true - only DatasetVersion METADATA is loaded, never DatasetBar), so
+        // it still reads back fine even though the bars underneath are now inconsistent.
+        BacktestRunDetail detail = backtestRunService.getRun(owner, summary.id());
+        assertEquals(2, detail.equityCurve().size());
+
+        // A brand-new run against the now-tampered dataset version fails with the existing,
+        // unrelated dataset-integrity failure - not a backtest-specific one.
+        assertThrows(DatasetIntegrityException.class, () -> backtestRunService.createRun(owner,
+                new StrategyVersionRef(strategy.id(), 1), new DatasetVersionRef(dataset.id(), 1), config));
+    }
+
+    @Test
+    void completedRunSurvivesStrategyTamperingButANewRunAgainstItFails() {
+        UserId owner = TestUsers.create(jdbcTemplate, "tamper-strategy");
+        StrategySummary strategy = strategyService.createStrategy(owner, "tamper-strategy-s-" + System.nanoTime(),
+                "", BacktestFixtures.simpleStrategyDefinition());
+        DatasetSummary dataset = datasetService.createDataset(owner, "tamper-strategy-ds-" + System.nanoTime(), "AAPL");
+        datasetService.createVersionFromCsv(owner, dataset.id(), DatasetFixtures.simpleCsv(), AdjustmentBasis.RAW,
+                "a.csv");
+
+        BacktestConfig config = new BacktestConfig(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO,
+                LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 3));
+        BacktestRunSummary summary = backtestRunService.createRun(owner, new StrategyVersionRef(strategy.id(), 1),
+                new DatasetVersionRef(dataset.id(), 1), config);
+
+        // Tamper: insert a second, never-decoded version of the same strategy directly,
+        // bypassing the codec's own encode() call, with a hash that disagrees with its content.
+        // This run still references version 1, untouched - it is a DIFFERENT version (2)
+        // that is corrupted here, proving an unrelated corrupted version doesn't affect an
+        // existing run that never referenced it.
+        jdbcTemplate.update(
+                "insert into strategy_version (strategy_id, version_number, definition, "
+                        + "definition_schema_version, definition_hash) values (?, 2, "
+                        + "'{\"schemaVersion\":1,\"entryCondition\":{\"type\":\"compare\",\"left\":{\"type\":"
+                        + "\"close\"},\"operator\":\"GT\",\"right\":{\"type\":\"constant\",\"value\":\"0\"}},"
+                        + "\"exitCondition\":{\"type\":\"compare\",\"left\":{\"type\":\"close\"},\"operator\":"
+                        + "\"LT\",\"right\":{\"type\":\"constant\",\"value\":\"0\"}},\"positionSizing\":{\"type\":"
+                        + "\"cashFraction\",\"fraction\":\"1\"}}'::jsonb, 1, ?)",
+                strategy.id(), "0".repeat(64));
+
+        // The already-completed run's OWN referenced version (1) is untouched, so Phase 9
+        // Batch 2c's new decode-and-verify step for it still succeeds.
+        BacktestRunDetail detail = backtestRunService.getRun(owner, summary.id());
+        assertEquals(2, detail.equityCurve().size());
+
+        // A brand-new run against the tampered version fails with the existing, unrelated
+        // strategy-definition-integrity failure - not a backtest-specific one.
+        assertThrows(StrategyDefinitionIntegrityException.class, () -> backtestRunService.createRun(owner,
+                new StrategyVersionRef(strategy.id(), 2), new DatasetVersionRef(dataset.id(), 1), config));
     }
 }

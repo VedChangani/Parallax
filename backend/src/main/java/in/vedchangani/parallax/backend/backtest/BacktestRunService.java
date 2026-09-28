@@ -1,15 +1,21 @@
 package in.vedchangani.parallax.backend.backtest;
 
+import in.vedchangani.parallax.backend.dataset.DatasetNotFoundException;
 import in.vedchangani.parallax.backend.dataset.DatasetService;
+import in.vedchangani.parallax.backend.dataset.DatasetVersionNotFoundException;
 import in.vedchangani.parallax.backend.dataset.VerifiedDatasetVersion;
+import in.vedchangani.parallax.backend.strategy.StrategyNotFoundException;
 import in.vedchangani.parallax.backend.strategy.StrategyService;
 import in.vedchangani.parallax.backend.strategy.StrategyVersionDetail;
+import in.vedchangani.parallax.backend.strategy.StrategyVersionNotFoundException;
+import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionIntegrityException;
 import in.vedchangani.parallax.backend.user.UserId;
 import in.vedchangani.parallax.engine.Backtester;
 import in.vedchangani.parallax.engine.metrics.BuyAndHoldBenchmark;
 import in.vedchangani.parallax.engine.metrics.PerformanceMetrics;
 import in.vedchangani.parallax.engine.result.BacktestConfig;
 import in.vedchangani.parallax.engine.result.BacktestResult;
+import in.vedchangani.parallax.engine.strategy.StrategyDefinition;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -144,14 +150,28 @@ public class BacktestRunService {
 
     /**
      * Reconstructs one completed run as engine-backed immutable views and
-     * verifies its structural and cross-field integrity (D-34 Batch 2 §7-9)
-     * — never by reloading the original {@code DatasetVersion} bars or
-     * decoding the original {@code StrategyVersion}; the persisted run is a
-     * historical result snapshot. This is the only place that verification
-     * happens; {@link #listRuns} deliberately does not perform it.
+     * verifies it end to end (Phase 9 Batch 2c, revising D-34 Batch 2's
+     * never-recompute policy): the referenced immutable {@code
+     * StrategyVersion} <strong>is now decoded</strong> (via {@code
+     * StrategyService#getVersion}, the existing owner-scoped, D-30
+     * hash-verified read path — never trusting the stored {@code jsonb}
+     * directly) and the referenced {@code DatasetVersion}'s <strong>
+     * metadata only</strong> is loaded (via {@code DatasetService#getVersion}
+     * — never its bars, never {@link #datasetService}{@code
+     * .getVerifiedSeries}); both are used only to reconstruct and verify the
+     * stored result, never re-persisted, never exposed in the response
+     * beyond what {@link BacktestRunDetail} already carries. A missing,
+     * corrupted, unsupported-schema, or hash-mismatched referenced strategy
+     * version — or a missing referenced dataset version — is a stored-run
+     * integrity failure here (500), <strong>never</strong> the 404/500 it
+     * would be during {@code createRun}: the run itself was found; its
+     * <em>reference</em> is what failed. This is the only place any of this
+     * verification happens; {@link #listRuns} deliberately does not perform
+     * it, and {@link #createRun} never reruns because of it.
      *
      * @throws BacktestRunNotFoundException      if no such run is owned by {@code owner}
-     * @throws BacktestResultIntegrityException if the stored run fails verification
+     * @throws BacktestResultIntegrityException if the stored run, or either of its
+     *                                            referenced immutable versions, fails verification
      */
     @Transactional(readOnly = true)
     public BacktestRunDetail getRun(UserId owner, long runId) {
@@ -160,10 +180,47 @@ public class BacktestRunService {
         BacktestRun run = runRepository.findByIdAndOwnerId(runId, owner.value())
                 .orElseThrow(() -> new BacktestRunNotFoundException(runId));
 
+        StrategyDefinition strategyDefinition = loadReferencedStrategyDefinition(owner, run);
+        String datasetSymbol = loadReferencedDatasetSymbol(owner, run);
+
         List<BacktestEquityPointRow> equityRows = equityPointRepository.findOwned(runId, owner.value());
         List<BacktestFillRow> fillRows = fillRepository.findOwned(runId, owner.value());
         List<BacktestRejectionRow> rejectionRows = rejectionRepository.findOwned(runId, owner.value());
 
-        return BacktestResultReconstructor.reconstruct(run, equityRows, fillRows, rejectionRows);
+        return BacktestResultReconstructor.reconstruct(run, strategyDefinition, datasetSymbol, equityRows, fillRows,
+                rejectionRows);
+    }
+
+    /**
+     * Owner-scoped (the run's own owner, already established by {@link
+     * #getRun}), D-30-integrity-verified decode of the run's referenced
+     * {@code StrategyVersion} — never its mutable parent {@code Strategy}'s
+     * metadata, and never the run's own copied {@code strategyDefinitionHash}
+     * column, which the database's own composite foreign key already
+     * guarantees agrees with what {@code strategy_version} stores.
+     */
+    private StrategyDefinition loadReferencedStrategyDefinition(UserId owner, BacktestRun run) {
+        try {
+            return strategyService.getVersion(owner, run.strategyId(), run.strategyVersionNumber()).definition();
+        } catch (StrategyNotFoundException | StrategyVersionNotFoundException | StrategyDefinitionIntegrityException e) {
+            throw new BacktestResultIntegrityException(
+                    "stored backtest run " + run.id() + " references a strategy version that failed its own "
+                            + "integrity verification: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Owner-scoped metadata-only read of the run's referenced {@code
+     * DatasetVersion} — its bars are never loaded here (D-32's {@code
+     * getVerifiedSeries} remains {@link #createRun}'s own concern only).
+     */
+    private String loadReferencedDatasetSymbol(UserId owner, BacktestRun run) {
+        try {
+            return datasetService.getVersion(owner, run.datasetId(), run.datasetVersionNumber()).symbol();
+        } catch (DatasetNotFoundException | DatasetVersionNotFoundException e) {
+            throw new BacktestResultIntegrityException(
+                    "stored backtest run " + run.id() + " references a dataset version that no longer exists: "
+                            + e.getMessage(), e);
+        }
     }
 }

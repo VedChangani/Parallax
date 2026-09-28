@@ -956,7 +956,10 @@ strategy REST API (`/api/strategies`). Packages: `user`, `strategy`,
   (`SeededCurrentUser` today, resolving the seeded `dev` user on every
   call) is the sole source of the owner id — no request ever supplies
   one, and a later Spring Security-backed `CurrentUser` replaces only
-  that bean.
+  that bean. **Revised by D-37:** `SeededCurrentUser` is deleted and
+  replaced by `AuthenticatedCurrentUser`, exactly as anticipated here —
+  every owner-scoped repository/service method, and this paragraph's
+  ownership rule, are unchanged.
 - **REST + D-30 boundary:** every strategy-definition-bearing body is
   read with `@RequestBody String` and parsed exactly once by the D-30
   strict codec, never Spring's global JSON binding. Two additive D-30
@@ -1477,6 +1480,112 @@ backtest run and is not a `Backtester`/`BacktestRunService` dependency of
 any kind. Spring Security/authentication and the frontend remain the only
 unimplemented pieces of the originally sketched Phase 7 path.
 
+## D-35 Persisted-result read-time verification by recomputation, and the broadened `SEMANTICS_VERSION` scope (Phase 9 Batch 2c)
+
+**Decision:** revises D-34 Batch 2's never-recompute-on-read policy.
+`BacktestRunService.getRun` still performs the owner-scoped lookup first
+(404 if absent, unchanged), then reconstructs and **independently
+recomputes** the stored result rather than trusting it structurally:
+
+- **Referenced identity**, loaded but never reloaded as bars: the
+  referenced `StrategyVersion` is now **decoded** (`StrategyService
+  .getVersion` — the existing owner-scoped, D-30 hash-verified path), and
+  the referenced `DatasetVersion`'s **metadata only** is loaded
+  (`DatasetService.getVersion` — never `getVerifiedSeries`, never a
+  `DatasetBar` row). A missing, corrupted, unsupported-schema, or
+  hash-mismatched referenced strategy version, or a missing referenced
+  dataset version, is a **stored-run integrity failure (500)** here —
+  never the 404/500 it would be during `createRun`: the run itself was
+  found; its *reference* is what failed. Cross-owner access to the run
+  itself is unchanged (still the ordinary owner-scoped 404).
+- **An actual `BacktestResult`** is reconstructed via the engine's own
+  constructor (D-24) from the persisted config/equity/fill/rejection rows
+  plus the decoded strategy and dataset symbol — not a parallel "verified
+  result" model. Its constructor performs every cross-list structural
+  check (equity curve strictly ascending and range-contained, fills
+  strictly ascending and alternating BUY/SELL from BUY, rejections
+  non-decreasing) as one checked fact, replacing what D-34 Batch 2
+  duplicated by hand in the reconstructor.
+- **Ledger replay:** a real `Portfolio`, seeded from the persisted
+  `initialCapital`, replays every fill in chronological order; each
+  resulting `EquityPoint` must equal — by exact record equality, scale-
+  sensitive `BigDecimal` — the corresponding persisted equity point.
+  Never calls `Backtester.run(...)`; only replays the same engine
+  `Portfolio` the original run used.
+- **Fill-versus-config verification:** every fill's `fillPrice` must
+  equal `referenceOpen` adjusted by the persisted config's own slippage
+  formula (D-7/D-23), and its `commission` must equal the persisted
+  `commissionPerFill`, exactly.
+- **Order id continuity:** `{fill ids} ∪ {InsufficientCash ids}` must be
+  exactly `{1..n}` (D-21) — checked explicitly, since neither
+  `BacktestResult` nor any per-row constructor enforces it.
+- **`firstEvaluableDate` semantics:** empty is incompatible with any fill
+  or rejection existing (D-25: no signal before indicators are ready);
+  present must name an actual equity-curve date, and no fill/rejection
+  signal may predate it. This cannot prove the date is where indicators
+  *actually* became ready (that needs the original bars) — only that it
+  is not incompatible with what the persisted result already shows.
+- **`PerformanceMetrics` is recomputed**, via `PerformanceMetrics.of` on
+  the reconstructed result, and compared by exact record equality (bit-
+  exact for every `double`/`OptionalDouble`) against the stored metrics —
+  never Backtester, never a tolerance/epsilon.
+- **The buy-and-hold benchmark** is verified only as far as the persisted
+  state allows: its fixed reference point (`cash`/`quantity`/`costBasis`,
+  D-28) is paired with the *result's own* (already ledger-verified)
+  equity-curve dates and closes into a real `BuyAndHoldBenchmark`, whose
+  constructor proves `cash + costBasis == initialCapital`, and whose
+  recomputed `totalReturn()` is compared bit-exact against the stored
+  value. This cannot independently rederive the entry quantity/cost basis
+  from the original first-bar opening price (D-28's option-A entry) —
+  that requires the original bars and is out of this verification's reach
+  by design.
+- **Never rerun**: `Backtester.run(...)`, a market-data provider, and full
+  `DatasetBar` loading are never invoked by `getRun` — this is read-time
+  verification of an already-completed, persisted result, bounded by
+  exactly what that result and its immutable referenced identities
+  already contain, not a re-run of the experiment. `listRuns` still
+  performs none of this (unchanged, deliberately cheap).
+- **`SEMANTICS_VERSION`'s documented scope is broadened** (Phase 9 Batch
+  2a; value unchanged, still `1`) to explicitly cover *any* convention
+  capable of altering a persisted result for identical inputs: the run
+  loop, indicator formulas, sizing/execution, portfolio accounting,
+  trading-cost derivation, `PerformanceMetrics` conventions, and
+  `BuyAndHoldBenchmark` behavior — not only the run loop and portfolio
+  accounting D-34 originally named. One version remains sufficient
+  (Option A, not a second version field): every value it covers is now
+  independently recomputed and compared on read, so an unversioned
+  formula drift would already fail loudly rather than silently.
+- **Still no result hash/checksum column** — integrity comes from
+  reconstructing and recomputing through the engine's own types, not a
+  stored digest that tampering could rewrite alongside the data.
+
+**Why:** the engine's own constructors and functions (`BacktestResult`,
+`Portfolio`, `PerformanceMetrics.of`, `BuyAndHoldBenchmark`) are the
+existing, already-tested source of truth for every one of these
+properties; recomputing through them — rather than re-deriving the same
+rules by hand in the reconstructor, or trusting stored values structurally
+— is both the smallest correct implementation and the strongest guarantee
+available without reloading the original dataset bars.
+
+**Rejected:** rerunning `Backtester.run(...)` on read (would need the
+original bars, and cannot verify a run from a semantics version the
+codebase no longer implements); loading `DatasetBar` rows for historical
+verification (the bars are not required to prove any of the properties
+above, and loading them at read time reintroduces the exact cost/coupling
+D-34 avoided); a result hash/checksum column; a second `SEMANTICS_VERSION`-
+like field for metrics/benchmark conventions specifically; tolerance-based
+comparison for any monetary or metric value (a one-cent or one-ulp
+difference must fail exactly where the persisted domain is exact).
+
+**Consequence:** a corrupted or tampered persisted result now fails closed
+(500) rather than silently returning inconsistent historical data. A
+genuinely valid historical run — including every run this codebase could
+already produce before this decision, since no prior valid persisted
+semantics changed — continues to read back successfully. `getRun` costs a
+bounded, small number of additional queries (the referenced strategy
+version's decode, the referenced dataset version's metadata) on top of the
+existing child-row reads, never proportional to dataset size.
+
 ## D-36 Defensive numeric input bounds at the JSON/mapper boundary (Phase 9 Batch 2b)
 
 **Decision:** two new, purely defensive bounds on externally supplied decimal
@@ -1570,6 +1679,394 @@ unbounded `BigDecimal` construction/arithmetic cost through either mapper.
 Every value a genuine client could reasonably supply — including every
 value any existing test exercised before this decision — remains accepted
 with an identical canonical representation and hash.
+
+## D-37 Session authentication, CSRF, and the `AuthenticatedCurrentUser` replacement (Phase 9 Batch 3.1)
+
+**Decision:** Spring Security with a server-side `HttpSession`, cookie-based
+SPA CSRF protection, and bcrypt-family password hashing — no JWT, no OAuth,
+no API tokens. `CurrentUser` (D-31's seam) gets its production
+implementation; every owner-scoped service/repository/controller is
+unchanged, exactly as D-31 anticipated.
+
+- **Mechanism:** `spring-boot-starter-security` plus a single
+  `SecurityConfig` (`@EnableWebSecurity`, one `SecurityFilterChain` bean).
+  Login is Spring Security's own `formLogin`, posted to `/api/auth/login`
+  as `application/x-www-form-urlencoded` `username`/`password` — chosen
+  over a hand-written JSON login controller because `formLogin` already
+  provides session-fixation protection (`changeSessionId()`) and CSRF
+  token rotation on authentication; reimplementing either by hand is
+  exactly where ad hoc login endpoints go wrong. A custom `successHandler`/
+  `failureHandler` pair replaces the default redirect behavior with fixed
+  JSON: `200 {"username": ...}` on success, a single generic `401`
+  ProblemDetail (`"invalid username or password"`) on any failure. Logout
+  (`POST /api/auth/logout`) uses `HttpStatusReturningLogoutSuccessHandler`
+  (`204`), invalidates the session, and deletes the `JSESSIONID` cookie.
+  `.loginPage("/api/auth/login")` doubles as the login-processing URL,
+  which is what suppresses Spring Security's generated HTML login page
+  (`isCustomLoginPage()` becomes true, so `DefaultLoginPageGeneratingFilter`
+  is never populated) — this backend is a pure JSON API with no
+  browser-facing login form.
+- **Password storage:** `PasswordEncoderFactories.createDelegatingPasswordEncoder()`,
+  storing every hash as `{bcrypt}$2a$...`. `AppUserDetailsService`
+  (`UserDetailsService`) throws `UsernameNotFoundException` for both an
+  unknown username and a username with a `null` `password_hash`;
+  `DaoAuthenticationProvider`'s default `hideUserNotFoundExceptions`
+  collapses that, and a wrong password, into the same
+  `BadCredentialsException` — a login response can never distinguish "no
+  such user" from "this user has no password" from "wrong password".
+- **Schema** (`V6__add_app_user_password.sql`): one nullable
+  `password_hash varchar(255)` column on `app_user`, plus a CHECK
+  enforcing the `{id}encodedHash` format. `NULL` is the single "cannot
+  authenticate" state — it covers the seeded `dev` row (never deleted,
+  per D-31) and any account an operator disables later. There is no
+  `enabled` column and no roles/authorities table: V1 has exactly one
+  capability level.
+- **`CurrentUser` replacement:** `SeededCurrentUser` is deleted.
+  `AuthenticatedCurrentUser` resolves the owner id from
+  `SecurityContextHolder`'s authenticated principal — a
+  `ParallaxUserPrincipal` (`UserDetails` + `CredentialsContainer`, so
+  `DaoAuthenticationProvider` erases the hash from the principal actually
+  held in the session) that already carries the `UserId`, so no second
+  database lookup happens per request. It never falls back to a default
+  identity: no authentication, or a principal of the wrong type, throws
+  rather than guessing — unreachable for a protected endpoint under this
+  batch's `authorizeHttpRequests` rules, so a thrown exception here
+  indicates a wiring defect, not a normal unauthenticated request.
+- **Authorization:** `authorizeHttpRequests` is default-deny, evaluated in
+  registration order: `permitAll` for exactly `POST /api/auth/login`,
+  `GET /api/auth/me`, `GET /actuator/health`, and `/error`; `authenticated`
+  for the rest of `/api/**`; `denyAll` for anything else. `401`
+  (`ProblemDetailAuthenticationEntryPoint`) is unauthenticated-on-a-
+  protected-path — never a redirect, a `WWW-Authenticate` challenge, or an
+  HTML page. `403` (`ProblemDetailAccessDeniedHandler`) covers both a
+  missing/invalid CSRF token and a `denyAll` path for an authenticated
+  user, deliberately with the same generic body. `404` for a
+  missing-or-cross-owner resource is entirely unchanged (D-31/D-32/D-34):
+  authentication only changes *where* the owner id in `CurrentUser` comes
+  from, never how ownership is checked.
+- **CSRF:** `csrf().spa()` (Spring Security 7's SPA-oriented cookie
+  repository/request handler — a non-`HttpOnly` `XSRF-TOKEN` cookie, an
+  `X-XSRF-TOKEN` header, BREACH protection via XOR encoding) applies to
+  every state-changing request, including login, logout, (later)
+  registration, and every `/api/**` write — never disabled or exempted
+  anywhere. A same-origin `CsrfCookieFilter` (the standard filter from
+  Spring Security's own SPA CSRF guide, added once directly after
+  `CsrfFilter`) forces the deferred token to resolve on every request, so
+  the cookie is actually written even though nothing in a pure JSON API
+  ever reads the `_csrf` request attribute the lazy default relies on. The
+  CSRF cookie's `Secure` attribute is left to `CookieCsrfTokenRepository`'s
+  own `request.isSecure()` default rather than tied to
+  `PARALLAX_COOKIE_SECURE`: `spa()` does not expose the repository
+  instance afterward for further customization, and mirroring the actual
+  request scheme is at least as correct as a static flag.
+- **Session cookie:** `JSESSIONID` is `HttpOnly`, `SameSite=Lax`, and
+  `Secure` unless `PARALLAX_COOKIE_SECURE=false` (for local
+  `http://localhost` development) — set entirely through Boot's native
+  `server.servlet.session.cookie.*`/`server.servlet.session.timeout`
+  properties; no custom code configures the session cookie itself.
+  `HttpSecurity`'s baseline `SessionManagementConfigurer` already applies
+  `IF_REQUIRED` creation and `changeSessionId()` fixation protection with
+  no explicit configuration.
+- **No CORS.** The deployment topology is same-origin (the SPA and
+  `/api` share one origin — a dev proxy locally, a reverse proxy in
+  production); `SameSite=Lax` plus CSRF already blocks cross-origin
+  writes, and there is no `CorsConfigurationSource` to permit cross-origin
+  reads.
+- **Password-claim mechanism:** `PasswordClaimRunner` (an
+  `ApplicationRunner`) is the only way, in this batch, to set a password
+  on a pre-existing, passwordless account — most importantly the seeded
+  `dev` row, which owns every strategy/dataset/run created before
+  authentication existed. It runs only when both
+  `parallax.auth.claim-username`/`-password` (bound from
+  `PARALLAX_CLAIM_USERNAME`/`PARALLAX_CLAIM_PASSWORD`) are set; it never
+  creates a user and never overwrites an existing hash (a username already
+  claimed is left untouched, logged at INFO); an unknown username or a
+  password failing `PasswordPolicy` fails startup outright, with no
+  message ever including the password itself. `PasswordPolicy` (≥15
+  characters, ≤72 UTF-8 bytes, no composition rules) is factored out now
+  purely because the not-yet-implemented registration batch will reuse it
+  unchanged.
+- **Test infrastructure:** `AuthenticatedMockMvcConfig` (test-only,
+  `MockMvcBuilderCustomizer`) makes every `MockMvc` request in an
+  importing test authenticated (`.with(user(...))`) and CSRF-exempt
+  (`.with(csrf())`) by default, so the pre-existing D-31/D-32/D-34
+  controller tests — which already override `CurrentUser` with
+  `@MockitoBean` to control ownership directly — keep proving what they
+  proved before Spring Security existed, without becoming real-session
+  login tests themselves. `AuthenticationIT` is the real-session proof: it
+  imports neither `AuthenticatedMockMvcConfig` nor a mocked `CurrentUser`,
+  driving the actual filter chain end to end (login, logout, CSRF,
+  session rotation, cookie attributes, the generic-failure invariant).
+
+**Why:** a server-side session needs no client-held secret to protect and
+gives logout real revocation, unlike a JWT; this application has no
+third-party API-client or horizontal-scaling requirement that would justify
+JWT's added complexity (key/secret management, no server-side revocation).
+`formLogin` over a hand-written login controller avoids re-implementing
+session-fixation and CSRF-rotation protection that already exist and are
+already tested upstream.
+
+**Rejected:** JWT/stateless auth (no revocation on logout without an
+allow/deny-list, and no consumer needs statelessness); OAuth2/OIDC/social
+login (no concrete architectural reason, and it adds an external identity
+dependency); HTTP Basic (resends credentials every request, browser-cached
+with no logout, native popup dialogs); a dev-profile authentication bypass
+(a second security mode a production deployment could end up running by
+accident — explicitly rejected by the project owner); an `enabled`
+column or roles/authorities table (no V1 use case; a `NULL` hash already
+expresses "disabled"); auto-login immediately after registration (would
+duplicate the session-creation path outside `formLogin` — moot in this
+batch, since registration itself is deferred); Spring Session
+JDBC/Redis (only needed for multiple instances or session survival across
+a restart, neither of which V1 requires).
+
+**Consequence:** every `/api/**` endpoint requires a real authenticated
+session; the seeded `dev` user cannot log in until claimed via
+`PasswordClaimRunner`. Self-registration (D-38), the frontend identity
+lifecycle (D-39), and password change (D-40) were separate, later batches
+(3.2/3.3/3.4 respectively) — this decision covers only the backend
+authentication core.
+
+## D-38 Public self-registration (Phase 9 Batch 3.2)
+
+**Decision:** `POST /api/auth/register` — always `permitAll`, reusing
+every D-37 mechanism unchanged (the D-30 strict codec, `PasswordEncoder`,
+`PasswordPolicy`, `ApiExceptionHandler`'s `ProblemDetail` conventions).
+Registration is on by default, matching a public application.
+
+- **Request/DTO:** `RegisterRequest(username, password)`, read exactly
+  once by `StrategyDefinitionCodec.parseRequest(String, Class)` — the
+  same generic strict-envelope overload `CreateDatasetRequest` already
+  uses for a request that has nothing to do with strategy definitions.
+  An unknown property (`id`, `passwordHash`, `ownerId`, ...) fails before
+  Bean Validation ever runs, which is what rules out mass assignment; the
+  response echoes only `{"username": ...}`.
+- **Username:** `AppUser.USERNAME_PATTERN =
+  "^[a-z0-9][a-z0-9._-]{2,63}$"` — lowercase-only (so the case-sensitive
+  `uq_app_user_username` constraint also behaves as case-insensitive
+  uniqueness), 3–64 characters, matching the `username varchar(64)`
+  column exactly at the upper bound. Enforced as a `@Pattern` on the
+  envelope record → `ConstraintViolationException` → 400, the same path
+  every other envelope constraint already uses.
+- **Password:** `PasswordPolicy` (D-37: ≥15 characters, ≤72 UTF-8 bytes,
+  no composition rules), reused byte-for-byte, not reimplemented — the
+  only reason it was factored out of `PasswordClaimRunner` in D-37. A
+  violation throws `WeakPasswordException` → 400 (a shape failure, not a
+  422 semantic question — mirrors `MalformedStrategyDefinitionException`'s
+  own 400, not `InvalidStrategyDefinitionException`'s 422).
+- **`UserRegistrationService`:** the only write path for a new `AppUser`.
+  Encodes the password, then a single `AppUserRepository.saveAndFlush`
+  inside a try/catch — mirroring `StrategyService.createStrategy`'s exact
+  `isConstraint(e, "uq_app_user_username")` idiom (constraint-name
+  matching on `DataIntegrityViolationException`'s Hibernate cause, never
+  a racy `exists()` pre-check, which cannot see a concurrent writer
+  between the check and the insert). `AppUserRepository` gains
+  `saveAndFlush` in place of D-37's plain `save`, needed for exactly the
+  same reason `StrategyRepository` exposes it: the constraint violation
+  must surface synchronously, not at an unrelated later flush.
+  Registration never logs the caller in — `AuthController.register`
+  returns `201`, and the frontend performs a separate `POST
+  /api/auth/login` afterward, so session creation keeps exactly the one
+  code path D-37 established (`formLogin`).
+- **`parallax.auth.registration-enabled`** (`PARALLAX_REGISTRATION_ENABLED`,
+  default `true`): checked inside `UserRegistrationService.register`,
+  never at the `SecurityConfig` authorization layer. The endpoint stays
+  `permitAll` regardless of the flag — moving it to `denyAll`/
+  `authenticated` when disabled would turn an anonymous attempt into a
+  generic 401 instead of the specific `RegistrationDisabledException` →
+  403 the flag is meant to produce.
+- **Errors** (`ApiExceptionHandler`): `WeakPasswordException` → 400 (new
+  handler, same `ProblemDetail` shape as every other malformed-request
+  case); `DuplicateUsernameException` → 409 (added to the existing
+  duplicate-name/version-conflict handler's exception list, unchanged
+  otherwise); `RegistrationDisabledException` → 403 (a new handler — the
+  first `ApiExceptionHandler`-originated 403 in the backend; every other
+  403 comes from Spring Security's filter-level handlers).
+- **`AppUser` construction:** a second package-private constructor,
+  `AppUser(String username, String passwordHash)`, alongside D-37's
+  `assignPassword` path — registration knows the hash at creation time
+  and never goes through the "claim a passwordless row later" state
+  machine.
+
+**Why:** every mechanism D-38 needs (strict parsing, password hashing,
+password policy, constraint-based conflict detection, the `ProblemDetail`
+error shape) already exists from D-30/D-31/D-37; registration is
+additive wiring, not new architecture.
+
+**Rejected:** an `exists()` pre-check for the duplicate-username case
+(D-31 precedent: racy, and the database constraint is authoritative);
+disabling the endpoint at the authorization layer when registration is
+off (produces the wrong status code, 401 instead of 403); auto-login
+after registration (would duplicate `formLogin`'s session-creation path);
+email verification, password confirmation, CAPTCHA, or rate limiting at
+this layer (out of scope for V1; rate limiting belongs at a reverse
+proxy, per D-37's deployment notes).
+
+**Consequence:** an anonymous visitor can create an account and
+immediately log in with it. The frontend identity lifecycle (resolved by
+D-39) and password change (resolved by D-40) were separate, later
+batches.
+
+## D-39 Frontend identity lifecycle: AuthProvider, epoch-based cache isolation, and cross-tab sync (Phase 9 Batch 3.3)
+
+**Decision:** a single `AuthProvider` (React context) owns
+`loading`/`anonymous`/`authenticated` state, resolved from `GET
+/api/auth/me` on mount; `RequireAuth` gates every protected route;
+`httpClient.js` carries `credentials: 'same-origin'` and `X-XSRF-TOKEN` on
+every state-changing request; `immutableCache.js` gains an epoch counter
+so a response that resolves after a login/logout/401 can never populate
+the cache with stale-identity data; a `BroadcastChannel('parallax-auth')`
+keeps every open tab's identity in sync.
+
+- **`AuthProvider`/`RequireAuth`/`AuthContext`** (`src/auth/`): `refresh()`
+  calls `getMe()` (D-37/D-38's `api/auth.js`, a thin wrapper exactly like
+  every other endpoint module) and resolves to `anonymous` on any failure
+  — `getMe`/`login` both pass `skipUnauthorizedHandling` so their own
+  401s are treated as the expected, normal outcome they are, not a
+  session that just expired. `RequireAuth` redirects an anonymous visitor
+  to `/login?next=<requested path>`, and `LoginPage` navigates to that
+  `next` (or `/`) on success. `/login`/`/register`
+  (`src/features/auth/`) are the only public routes; both, and every
+  protected page, render inside the same `AppLayout` shell — `Nav` adapts
+  by auth status rather than the app having two shells.
+- **CSRF/credentials** (`httpClient.js`): every request carries
+  `credentials: 'same-origin'` explicitly (never relying on the fetch
+  spec's own default); every request but GET/HEAD reads the `XSRF-TOKEN`
+  cookie and sends it back as `X-XSRF-TOKEN`, matching D-37's
+  `CookieCsrfTokenRepository`/`SpaCsrfTokenRequestHandler` contract
+  exactly (the header must carry the *raw* cookie value, never an encoded
+  one). A module-level `setUnauthorizedHandler(handler)` — the one
+  callback `AuthProvider` registers — is invoked on any 401 except one
+  from a call passing `skipUnauthorizedHandling`; this is a plain module
+  singleton, not React context, because `httpClient.request` is the one
+  non-React fetch call site and every caller (including one outside a
+  component, e.g. `useApiResource`) must reach it identically.
+- **Cache/identity isolation** (`immutableCache.js`): `bumpEpoch()`
+  (called by `AuthProvider` on every login, logout, and unexpected 401)
+  clears the store and advances a counter; `set(key, value, atEpoch)`
+  silently drops a write whose `atEpoch` no longer matches the current
+  epoch. `useApiResource` captures `currentEpoch()` when a fetch starts
+  and passes it to the eventual `set` call — the one change needed
+  outside the auth code itself, since this hook is the sole caller of
+  `immutableCache.set`.
+- **Cross-tab sync:** a `BroadcastChannel('parallax-auth')` message
+  (`{type: 'identity-changed'}`), posted by `AuthProvider` after every
+  login/logout/unexpected-401, is received by every open tab including
+  the one that posted it; each reacts by bumping its own epoch and
+  re-running `refresh()`. A tab without `BroadcastChannel` (an old
+  browser, or a test's jsdom) still works correctly on its own — it just
+  cannot announce or hear about a change in another tab.
+- **Error display:** `ErrorState` shows a fixed "reload the page" message
+  for any `status === 403` (a CSRF/`denyAll` failure is never something a
+  retry-the-same-click can fix) instead of the backend's own generic
+  `detail`; every other status still shows the backend's own message
+  unchanged. A login failure always shows the same fixed message,
+  regardless of which of unknown-user/wrong-password/passwordless-account
+  actually happened — mirroring D-37's own backend-side generic-failure
+  invariant.
+- **A real bug this design surfaced:** D-37's `CsrfLogoutHandler` expires
+  the `XSRF-TOKEN` cookie along with the session. Without re-establishing
+  it, the very next login attempt in the same browser session would
+  submit no CSRF token and fail with a 403 (masked by the generic login
+  message, since "login failures remain generic" is itself a requirement)
+  — found only during manual browser verification, since jsdom's cookie
+  jar doesn't model cookie expiry the way a real `Set-Cookie: ...;
+  Expires=...` response does. Fixed by having `logout()` call the same
+  `refresh()` used on mount immediately after clearing local state, which
+  re-triggers the backend's `CsrfCookieFilter` and issues a fresh cookie.
+
+**Why:** every mechanism here is additive wiring onto D-37/D-38's already-
+decided backend contract (session cookie, CSRF cookie/header pair,
+`ProblemDetail` shapes) — no backend behavior changed to accommodate the
+frontend. The epoch mechanism is the smallest correct fix for the actual
+race it exists to close (a slow response outliving a login/logout), a
+plain counter plus a per-write comparison, not a larger state-management
+library or a request-cancellation scheme.
+
+**Rejected:** a stateless axios-style request interceptor library (the
+existing single `request()` call site already gives one place to add
+CSRF/credentials/401 handling — no second abstraction needed); storing
+auth state in `localStorage`/`sessionStorage` (the session cookie is
+already the source of truth; mirroring it into browser storage would just
+create a second, staler copy that also cannot be `HttpOnly`); a `SharedWorker`
+or `localStorage` `storage` event for cross-tab sync instead of
+`BroadcastChannel` (equivalent in effect, `BroadcastChannel` is the
+simpler, purpose-built API); canceling in-flight requests on logout via
+`AbortController` instead of the epoch counter (would require plumbing a
+shared abort signal through every call site; dropping a late write is
+sufficient since the component holding that stale data is about to
+unmount via `RequireAuth` anyway); a two-shell design (a bare login layout
+distinct from the authenticated app shell).
+
+**Consequence:** the D-37/D-38 backend authentication core now has a
+complete, working frontend. Password change (D-40) is the one remaining
+piece of Phase 9 Batch 3, and it is backend-only — no frontend UI calls it
+yet.
+
+## D-40 Password change (Phase 9 Batch 3.4)
+
+**Decision:** `POST /api/auth/password` — authenticated, CSRF-protected
+(no `SecurityConfig` change: the endpoint simply isn't in the `permitAll`
+list, so the existing default-deny rule already covers it). Reuses every
+D-37/D-38 mechanism unchanged: the strict envelope reader, the shared
+`PasswordEncoder`, and `PasswordPolicy`.
+
+- **Request/DTO:** `ChangePasswordRequest(currentPassword, newPassword)`,
+  read once by the same generic strict-envelope overload every other
+  request body uses. No `username`/`userId` field — the account changed
+  is always the one `CurrentUser` names, so this endpoint can never touch
+  another user's password.
+- **`PasswordChangeService`:** the only write path that *replaces* an
+  existing hash, distinct from D-37's `PasswordClaimRunner` (only ever
+  fills a `null` one) and D-38's `UserRegistrationService` (only ever
+  creates a new row). Loads the caller's own row via a new
+  `AppUserRepository.findById` (the one owner-id-based lookup this
+  package needs — never a lookup by any id a request could supply),
+  verifies `currentPassword` with `PasswordEncoder.matches`, applies
+  `PasswordPolicy` to `newPassword`, then calls `AppUser`'s new
+  `changePassword(hash)` mutator (the counterpart to `assignPassword`,
+  which only ever fills a `null` hash) and `saveAndFlush`s it.
+- **Session rotation:** on success, the controller calls
+  `HttpServletRequest.changeSessionId()` — the same fixation-protection
+  primitive `formLogin` uses internally. The Servlet API copies the
+  session's existing attributes, including Spring Security's
+  `SecurityContext`, to the new session id, so the caller stays
+  authenticated under the rotated id with no re-login required, while the
+  old session id stops working immediately.
+- **`WeakPasswordException` gained a `field`:** previously hardcoded to
+  `"password"` by the one handler that existed for it (D-38's
+  registration); now the exception itself carries the actual field name
+  (`"password"` for registration, `"newPassword"` here), and the handler
+  reports whichever one it was given.
+- **Errors:** a wrong `currentPassword` → `InvalidCurrentPasswordException`
+  → 401, with the exact same generic body a failed login gets (D-37's
+  `GenericAuthenticationFailureHandler` shape, reused via
+  `ApiExceptionHandler` rather than a second filter-level handler, since
+  this is an ordinary authenticated `@RestController` endpoint, not part
+  of the `formLogin` flow); a `newPassword` failing `PasswordPolicy` →
+  `WeakPasswordException` → 400. Both leave the stored hash untouched. The
+  response body is empty (`204`) on success — nothing for it to leak.
+
+**Why:** every mechanism this needs (strict parsing, password hashing,
+password policy, the generic-auth-failure `ProblemDetail` shape, session
+fixation protection) already exists from D-37/D-38 — this is additive
+wiring, not new architecture, matching D-38's own precedent.
+
+**Rejected:** a dedicated Spring Security filter/handler for this endpoint
+(it is an ordinary authenticated REST call, not part of the
+authentication filter chain itself — `ApiExceptionHandler` is the right
+layer, exactly like every other domain exception); requiring
+re-authentication (a full login) instead of session id rotation (rotation
+alone already defeats fixation, and forcing a fresh login for a password
+change the user just proved they can make is unnecessary friction); a
+separate password-history/reuse-prevention table (no V1 requirement, and
+it would be its own password model, which this decision explicitly avoids
+creating).
+
+**Consequence:** Phase 9 Batch 3 (D-37 backend authentication core, D-38
+self-registration, D-39 frontend identity lifecycle, D-40 password
+change) is complete. No frontend UI calls this endpoint yet — that is
+deferred, not scheduled as a numbered batch.
 
 ## Open questions
 

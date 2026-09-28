@@ -5,6 +5,7 @@ import in.vedchangani.parallax.backend.TestcontainersConfiguration;
 import in.vedchangani.parallax.backend.dataset.AdjustmentBasis;
 import in.vedchangani.parallax.backend.dataset.DatasetService;
 import in.vedchangani.parallax.backend.dataset.DatasetSummary;
+import in.vedchangani.parallax.backend.security.AuthenticatedMockMvcConfig;
 import in.vedchangani.parallax.backend.strategy.StrategyService;
 import in.vedchangani.parallax.backend.strategy.StrategySummary;
 import in.vedchangani.parallax.backend.strategy.TestUsers;
@@ -66,7 +67,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
 class BacktestRunControllerIT {
 
     @Autowired
@@ -231,7 +232,7 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$.field").value("config.initialCapital"));
     }
 
-    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) ---------------------
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-36) ---------------------
 
     @Test
     void over100CharDecimalLiteralIsBadRequest() throws Exception {
@@ -666,24 +667,47 @@ class BacktestRunControllerIT {
                 any(BacktestConfig.class));
     }
 
+    /**
+     * Phase 9 Batch 2c revises D-34 Batch 2's never-recompute-on-read policy:
+     * {@code getRun} now recomputes {@code PerformanceMetrics} and replays
+     * the benchmark, comparing both exactly against the stored values. This
+     * baseline is fully self-consistent under every OTHER check (ledger
+     * replay, benchmark cash+costBasis identity) - a flat, no-trade, no
+     * price-change two-point curve 517 days apart, so {@code totalReturn},
+     * {@code cagr} (present and exactly {@code 0.0}, since the span exceeds
+     * 365 days and the ratio is exactly 1), and the true benchmark return
+     * ({@code (100 + 10*100 - 10000) / 10000 = -0.89} for the reference
+     * state below) are all genuinely correct - ONLY the tampered field
+     * differs from what recomputation would produce, isolating exactly what
+     * this test means to prove.
+     */
     @Test
-    void storedMetricsAndBenchmarkAreReturnedVerbatimNeverRecomputed() throws Exception {
+    void tamperedMetricIsInternalServerError() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), twoBarCsv());
         Map<String, Object> values = goldenRunValues(refs.strategyId(), refs.datasetId());
-        // A span over 365 days with real growth 10000 -> 12000 would, if genuinely
-        // recomputed by PerformanceMetrics.of(...), produce a specific cagr near
-        // (12000/10000)^(365/517) - 1 (~0.137) - never this deliberately arbitrary value.
         values.put("start_date", LocalDate.of(2020, 1, 1));
         values.put("end_date", LocalDate.of(2021, 6, 1));
-        values.put("cagr", 0.123456);
-        values.put("benchmark_total_return", 0.777);
+        values.put("cagr", 0.123456); // true recomputed value is exactly 0.0
+        values.put("benchmark_total_return", new BigDecimal("-0.89").doubleValue()); // true value - left correct
         long runId = insertRun(values);
         insertEquityPoint(runId, "2020-01-01", "10000", 0, "0", "0", "100");
-        insertEquityPoint(runId, "2021-06-01", "12000", 0, "0", "0", "120");
+        insertEquityPoint(runId, "2021-06-01", "10000", 0, "0", "0", "100");
 
-        mockMvc.perform(get("/api/backtest-runs/" + runId))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.metrics.cagr").value(0.123456))
-                .andExpect(jsonPath("$.benchmark.totalReturn").value(0.777));
+        mockMvc.perform(get("/api/backtest-runs/" + runId)).andExpect(status().isInternalServerError());
+    }
+
+    @Test
+    void tamperedBenchmarkTotalReturnIsInternalServerError() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), twoBarCsv());
+        Map<String, Object> values = goldenRunValues(refs.strategyId(), refs.datasetId());
+        values.put("start_date", LocalDate.of(2020, 1, 1));
+        values.put("end_date", LocalDate.of(2021, 6, 1));
+        values.put("cagr", 0.0); // true recomputed value - left correct
+        values.put("benchmark_total_return", 0.777); // true value is exactly -0.89
+        long runId = insertRun(values);
+        insertEquityPoint(runId, "2020-01-01", "10000", 0, "0", "0", "100");
+        insertEquityPoint(runId, "2021-06-01", "10000", 0, "0", "0", "100");
+
+        mockMvc.perform(get("/api/backtest-runs/" + runId)).andExpect(status().isInternalServerError());
     }
 }

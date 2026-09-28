@@ -24,6 +24,10 @@ import in.vedchangani.parallax.backend.strategy.StrategyVersionNotFoundException
 import in.vedchangani.parallax.backend.strategy.definition.InvalidStrategyDefinitionException;
 import in.vedchangani.parallax.backend.strategy.definition.MalformedStrategyDefinitionException;
 import in.vedchangani.parallax.backend.strategy.definition.StrategyDefinitionIntegrityException;
+import in.vedchangani.parallax.backend.user.DuplicateUsernameException;
+import in.vedchangani.parallax.backend.user.InvalidCurrentPasswordException;
+import in.vedchangani.parallax.backend.user.RegistrationDisabledException;
+import in.vedchangani.parallax.backend.user.WeakPasswordException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -106,6 +110,23 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static Map<String, String> toFieldError(ConstraintViolation<?> violation) {
         return Map.of("field", violation.getPropertyPath().toString(), "message", violation.getMessage());
+    }
+
+    /** Registration password fails {@link in.vedchangani.parallax.backend.user.PasswordPolicy} (D-38) → 400. */
+    @ExceptionHandler(WeakPasswordException.class)
+    public ProblemDetail handleWeakPassword(WeakPasswordException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
+        problem.setTitle("Malformed request");
+        problem.setProperty("field", e.field());
+        return problem;
+    }
+
+    /** Wrong current password on a password change (D-40) → 401, the same generic body a failed login gets. */
+    @ExceptionHandler(InvalidCurrentPasswordException.class)
+    public ProblemDetail handleInvalidCurrentPassword(InvalidCurrentPasswordException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, e.getMessage());
+        problem.setTitle("Unauthorized");
+        return problem;
     }
 
     /** Semantically invalid strategy definition (D-30 layer 3, engine semantics) → 422. */
@@ -228,12 +249,21 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Duplicate name, or a version-allocation conflict (strategy or dataset) → 409. */
+    /** Duplicate name, a version-allocation conflict (strategy or dataset), or a duplicate username (D-38) → 409. */
     @ExceptionHandler({DuplicateStrategyNameException.class, StrategyVersionConflictException.class,
-            DuplicateDatasetNameException.class, DatasetVersionConflictException.class})
+            DuplicateDatasetNameException.class, DatasetVersionConflictException.class,
+            DuplicateUsernameException.class})
     public ProblemDetail handleConflict(RuntimeException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
         problem.setTitle("Conflict");
+        return problem;
+    }
+
+    /** Self-registration is currently switched off (D-38) → 403. */
+    @ExceptionHandler(RegistrationDisabledException.class)
+    public ProblemDetail handleRegistrationDisabled(RegistrationDisabledException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, e.getMessage());
+        problem.setTitle("Forbidden");
         return problem;
     }
 

@@ -312,7 +312,7 @@ class StrategyDefinitionMapperTest {
         }
     }
 
-    // --- defensive numeric bounds (Phase 9 Batch 2b, D-35) --------------------
+    // --- defensive numeric bounds (Phase 9 Batch 2b, D-36) --------------------
 
     @Test
     void fractionAtExactlyTheLengthBoundIsAcceptedBecauseItsCanonicalValueIsTiny() {

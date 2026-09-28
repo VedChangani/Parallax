@@ -72,7 +72,7 @@ public final class BacktestConfigMapper {
      * the constructor itself; both are treated as malformed input, with the
      * field path, rather than allowed to escape raw.
      *
-     * <p>Phase 9 Batch 2b (D-35): once parsed, the value's canonical
+     * <p>Phase 9 Batch 2b (D-36): once parsed, the value's canonical
      * precision is bounded by {@code StrategyDefinitionMapper}'s shared
      * {@link StrategyDefinitionMapper#requireWithinCanonicalPrecisionBounds}
      * — a semantic-class (422) check, layered after this method's own
@@ -98,7 +98,7 @@ public final class BacktestConfigMapper {
             throw new MalformedBacktestConfigException(path,
                     "must match the decimal grammar " + StrategyDefinitionMapper.DECIMAL.pattern() + ", was null");
         }
-        // Phase 9 Batch 2b (D-35): the raw-length bound runs before the grammar
+        // Phase 9 Batch 2b (D-36): the raw-length bound runs before the grammar
         // regex itself, shared with StrategyDefinitionMapper's identical check.
         StrategyDefinitionMapper.requireBoundedLength(text, path, MalformedBacktestConfigException::new);
         Matcher matcher = StrategyDefinitionMapper.DECIMAL.matcher(text);

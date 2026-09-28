@@ -45,11 +45,11 @@ This independence exists so that:
 The backend is a Spring Boot application. It is responsible for:
 
 - exposing REST APIs to the frontend
-- persisting application data (strategies, experiments, results) once those
-  entities are introduced
+- persisting application data (users, strategies, datasets, backtest runs)
 - orchestrating engine runs: constructing engine inputs, invoking the
   engine, and storing/returning engine outputs
-- market data provider integration (introduced in a later milestone)
+- market data provider integration (Alpha Vantage, D-33) and session
+  authentication (D-37 through D-40)
 
 The backend depends on the engine module. The backend does not implement
 backtesting logic itself; it delegates to the engine and handles everything
@@ -105,8 +105,12 @@ root):
 - `Backtester`: the chronological run loop (`run(BarSeries,
   StrategyDefinition, BacktestConfig) -> BacktestResult`), D-25;
   `Backtester.SEMANTICS_VERSION` (currently `1`) is the engine's persisted
-  chronological/execution-semantics identity, recorded by a stored
-  `BacktestRun` alongside its inputs
+  result-semantics identity — covering any convention capable of altering
+  a persisted result for identical inputs, not only the run loop and
+  portfolio accounting (Phase 9 Batch 2a broadened its documented scope to
+  also cover indicator formulas, sizing/execution, trading-cost
+  derivation, `PerformanceMetrics`, and `BuyAndHoldBenchmark`; see D-35) —
+  recorded by a stored `BacktestRun` alongside its inputs
 - `data`: `Bar`, `BarSeries`
 - `indicator`: `IndicatorType`, `IndicatorSpec`, `Indicator` (including
   its `Indicator.create(IndicatorSpec)` factory method),
@@ -125,9 +129,13 @@ is a working chronological simulation, `PerformanceMetrics.of(...)`
 computes the full V1 metric set from its result, `BacktestResult` exposes
 exact trading-cost totals (D-27), and `BuyAndHoldBenchmark.of(...)`
 computes the independent passive benchmark (D-28). Backend integration now
-exists end to end (D-29 through D-34 — persistence, orchestration, and a
-REST API; see the Backend Architecture section below). The frontend
-remains unimplemented.
+exists end to end (D-29 through D-40 — persistence, orchestration, a REST
+API, read-time integrity verification by recomputation, defensive input
+bounds, and session authentication/registration/password-change; see the
+Backend Architecture section below). The React frontend (Phase 8: routed
+pages for strategies/datasets/backtests; Phase 9 Batch 3.3: the identity
+lifecycle described in D-39) is implemented too — see Git history for the
+Phase 8 batch sequence, since it predates this file's frontend coverage.
 
 This section reflects current state only; see Git history for how it was
 reached.
@@ -1464,10 +1472,10 @@ Trading-cost totals — implemented (D-27)
 Buy-and-hold benchmark — implemented (D-28)
         |
         v
-Backend integration (Spring Boot: persistence, REST, provider integration, backtest orchestration) — implemented (D-29 through D-34)
+Backend integration (Spring Boot: persistence, REST, provider integration, backtest orchestration, read-time integrity verification, defensive input bounds, authentication/registration/password-change) — implemented (D-29 through D-40)
         |
         v
-Frontend (React: presenting strategies, experiments, results)
+Frontend (React: presenting strategies, experiments, results, and the identity lifecycle) — implemented (Phase 8; D-39)
 ```
 
 Each step is designed in its own checkpoint when work on it begins, not
@@ -1475,15 +1483,20 @@ in advance.
 
 ---
 
-# Backend Architecture (Phase 7 — D-29 through D-34 implemented)
+# Backend Architecture (Phase 7 — D-29 through D-34; Phase 9 — D-35 through D-40 implemented)
 
 Status: the foundation (D-29), the strategy-definition JSON boundary
 (D-30), strategy persistence/ownership/REST (D-31), dataset
 persistence/CSV ingestion (D-32, below), Alpha Vantage ingestion end to
-end — provider, dataset persistence, and REST (D-33, below) — and backtest
-run orchestration, persistence, read-time integrity verification, and REST
-(D-34, below) are all implemented. Spring Security/authentication and the
-frontend remain future checkpoints.
+end — provider, dataset persistence, and REST (D-33, below), backtest run
+orchestration, persistence, and REST (D-34, below), read-time integrity
+verification by recomputation (D-35, below), defensive numeric input
+bounds (D-36, below), the backend authentication core (D-37, below),
+public self-registration (D-38, below), and password change (D-40, below)
+are all implemented. The frontend identity lifecycle (D-39) is the
+corresponding frontend piece — see the "Frontend identity lifecycle"
+section further below. Phase 9 Batch 3 (D-37 through D-40) is complete;
+there is no further planned batch in this checkpoint.
 
 ## Dependency direction
 
@@ -1696,8 +1709,15 @@ The first persistent market-data layer: `AppUser → Dataset → immutable
 DatasetVersion → immutable dataset_bar rows`, plus the CSV upload REST API
 (`/api/datasets`). Packages: `dataset` (entities/repositories/service/
 content-hash), `dataset.csv` (parser, independent of Spring), `api`
-(controller/DTOs, alongside D-31's). A future `BacktestRun` will
-reference `DatasetVersion`, never `Dataset`.
+(controller/DTOs, alongside D-31's). `BacktestRun` (D-34) references
+`DatasetVersion`, never `Dataset`.
+
+The frontend's "Markets" nav link and "Market"/"Data Snapshot" page labels
+(`pages/datasets/*`) are presentation names for exactly `Dataset` and
+`DatasetVersion` — there is no separate frontend concept or a different
+identifier scheme; a market's id and a dataset's id are the same number,
+and its API calls (`getDatasetVersion`, etc.) use the backend names
+unchanged.
 
 **Schema** (`V3__create_dataset.sql`): `dataset` (id, owner_id FK `ON
 DELETE RESTRICT`, name, symbol, latest_version_number starting at **0**
@@ -2024,32 +2044,61 @@ idempotency infrastructure.
 
 ### Read-time integrity and the two read costs
 
-Reading a run has two deliberately different costs. `getRun` (one run)
-reconstructs every child row through its own engine constructor and runs
-the full check: **structural** (valid row shape and engine construction;
-strictly ascending equity/fill dates; rejection `seq` preserves append
-order and dates are non-decreasing) and **cross-field** (the stored
-commission/slippage totals equal the exact sum over reconstructed fills;
-the reconstructed closed-trade count agrees with the stored metric; the
-benchmark's `cash + costBasis` equals `initialCapital`;
-`engine_semantics_version` is one this codebase still supports) — any
-failure is `BacktestResultIntegrityException`, never client-facing detail.
-This is the only place that check happens. `listRuns` (an owner's run
-history) returns cheap, owner-scoped `BacktestRunSummary` identity/metadata
-only, read directly off the `backtest_run` parent row; it does not load or
-verify any child row, so listing an owner's runs never touches the
+Reading a run has two deliberately different costs. `listRuns` (an owner's
+run history) returns cheap, owner-scoped `BacktestRunSummary` identity/
+metadata only, read directly off the `backtest_run` parent row; it does not
+load or verify any child row, so listing an owner's runs never touches the
 potentially many thousands of equity/fill/rejection rows behind them. A
 summary from `listRuns` is not a guarantee that a run's children pass
 integrity verification — only `getRun` establishes that, on demand, for one
-run at a time.
+run at a time. This split is unchanged by Phase 9 Batch 2c below.
 
-Every stored `PerformanceMetrics`/`BuyAndHoldBenchmark` value, and the
-persisted cost totals, are **historical snapshots**: `getRun` never calls
-`PerformanceMetrics.of(...)`, `BuyAndHoldBenchmark.of(...)`, or
-`Backtester.run(...)`, and never reloads the original `DatasetVersion` bars
-or re-decodes the original `StrategyVersion` — a completed run remains
-readable on its own stored integrity even after its inputs are later
-corrupted or superseded. There is no result checksum/hash column.
+`getRun` (one run) **recomputes** the stored result rather than trusting it
+structurally (D-35, revising D-34 Batch 2's never-recompute policy):
+
+- the referenced `StrategyVersion` is decoded (`StrategyService.getVersion`
+  — the existing owner-scoped, D-30 hash-verified path) and the referenced
+  `DatasetVersion`'s **metadata only** is loaded (`DatasetService.getVersion`
+  — never its bars); a missing/corrupted/unsupported/hash-mismatched
+  referenced version is a stored-run integrity failure (500) here, never
+  the 404/500 `createRun` would give for the same condition;
+- an actual `BacktestResult` is reconstructed via the engine's own
+  constructor (D-24), which performs every cross-list structural check
+  (ascending/alternating fills, non-decreasing rejections, range
+  containment) as one checked fact;
+- a real `Portfolio`, seeded from the persisted `initialCapital`, replays
+  every fill in chronological order and must reproduce every persisted
+  equity point exactly (scale-sensitive `BigDecimal` equality);
+- every fill's `fillPrice`/`commission` must match the persisted config's
+  own slippage/commission formulas exactly; order ids must form the exact
+  `{1..n}` range D-21 guarantees; `firstEvaluableDate` must be compatible
+  with every fill/rejection's own signal date (D-25);
+- `PerformanceMetrics.of(...)` is called on the reconstructed result and
+  compared by exact record equality (bit-exact) against the stored
+  metrics; a real `BuyAndHoldBenchmark` is rebuilt from the stored
+  reference point paired with the (already-verified) result's own equity
+  dates/closes, and its `totalReturn()` compared bit-exact against the
+  stored value;
+- `engine_semantics_version` must equal `Backtester.SEMANTICS_VERSION`,
+  checked first, before anything else is even read.
+
+Any failure at any of these steps is `BacktestResultIntegrityException`,
+never client-facing detail. This is the only place any of it happens.
+
+Even under this revised policy, `getRun` **never calls
+`Backtester.run(...)`**, never calls a market-data provider, and **never
+loads a `DatasetBar` row** — bars remain `createRun`'s concern alone. This
+is read-time *verification* of an already-persisted result, bounded by
+what that result and its immutable referenced identities already contain
+— not a re-run of the experiment. Some properties cannot be proven this
+way and are documented as out of reach in D-35 and in
+`BacktestResultReconstructor`'s own method Javadoc: whether
+`firstEvaluableDate` is the bar where indicators *actually* became ready,
+a fill's `referenceOpen` against the real dataset bar, `ZeroQuantity`
+sizing math, and the benchmark's entry quantity/cost basis against the
+original first-bar open — all require the original bars. There is still no
+result checksum/hash column: integrity comes from reconstructing and
+recomputing through the engine's own types, not a stored digest.
 
 Ownership is enforced the same way as D-31/D-32 throughout: every
 `BacktestRunService`/repository method is owner-scoped, a missing run and
@@ -2092,7 +2141,204 @@ other part of the orchestration/read path above. A `BacktestRun` only ever
 consumes an already-persisted, already-verified `DatasetVersion` — it has
 no notion of which `DatasetSource` produced it.
 
-Not yet implemented: Spring Security/authentication (`password_hash`,
-BCrypt, HTTP Basic), and the frontend. See decisions.md's D-29 through D-34
-entries and the Phase 7 design review for the approved plan and batch
-sequence.
+## Authentication and security (D-37)
+
+Server-side session authentication for every `/api/**` endpoint, replacing
+`SeededCurrentUser` with a real Spring Security identity — `StrategyService`,
+`DatasetService`, `BacktestRunService`, and every controller are unchanged
+(D-31's `CurrentUser` seam is exactly what made this possible). Packages:
+`user` (identity/principal/password), `security` (filter chain, CSRF,
+error handlers), `api.AuthController` (the one endpoint not owned by
+Spring Security's own filters).
+
+**Schema** (`V6__add_app_user_password.sql`): `app_user` gains a nullable
+`password_hash varchar(255)`, plus a CHECK enforcing the
+`{id}encodedHash` DelegatingPasswordEncoder format. `NULL` is the single
+"cannot authenticate" state — it is the state of every row created before
+this batch, including the seeded `dev` row (never deleted, per D-31).
+There is no `enabled` column and no roles/authorities.
+
+**Identity seam:** `AuthenticatedCurrentUser` (replacing the deleted
+`SeededCurrentUser`) resolves the owner id from
+`SecurityContextHolder`'s authenticated principal — a
+`ParallaxUserPrincipal` (`UserDetails` + `CredentialsContainer`) that
+already carries the `UserId`, so no per-request database lookup happens.
+`AppUserDetailsService` is the sole `UserDetailsService`, backed by
+`AppUserRepository` (now exposing a narrow `save` alongside
+`findByUsername`); an unknown username and a username with no
+`password_hash` both throw `UsernameNotFoundException`, which
+`DaoAuthenticationProvider`'s default `hideUserNotFoundExceptions`
+collapses into the same `BadCredentialsException` as a wrong password.
+
+**`SecurityConfig`** (one `SecurityFilterChain` bean): `authorizeHttpRequests`
+is default-deny, evaluated in registration order — `permitAll` for exactly
+`POST /api/auth/login`, `GET /api/auth/me`, `GET /actuator/health`, and
+`/error`; `authenticated` for the rest of `/api/**`; `denyAll` for
+everything else. Login is Spring Security's own `formLogin`
+(`loginProcessingUrl`/`loginPage` both `/api/auth/login`, which is what
+suppresses the generated HTML login page), with a custom success handler
+(`200 {"username": ...}`) and a single generic failure handler (`401`,
+`"invalid username or password"`, regardless of which of unknown
+user/wrong password/passwordless account caused it). Logout
+(`POST /api/auth/logout`) uses `HttpStatusReturningLogoutSuccessHandler`
+(`204`), invalidates the session, and deletes the `JSESSIONID` cookie. A
+`ProblemDetailAuthenticationEntryPoint` (401) and
+`ProblemDetailAccessDeniedHandler` (403, covering both a bad CSRF token
+and a `denyAll` path) write the same fixed `ProblemDetail` shape
+`ApiExceptionHandler` uses elsewhere, directly to the servlet response
+(these run at the filter level, outside Spring MVC's dispatcher, so
+`@RestControllerAdvice` cannot reach them).
+
+**CSRF/cookies:** `csrf().spa()` (a non-`HttpOnly` `XSRF-TOKEN` cookie, an
+`X-XSRF-TOKEN` header) applies to every state-changing request with no
+exemptions; `CsrfCookieFilter` forces the deferred token to resolve on
+every request so the cookie is actually written in a pure JSON API. The
+`JSESSIONID` cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` unless
+`PARALLAX_COOKIE_SECURE=false` (local `http://localhost` development),
+configured entirely through Boot's native `server.servlet.session.*`
+properties. There is no CORS configuration — the deployment topology is
+same-origin.
+
+**Password-claim mechanism:** `PasswordClaimRunner` (an
+`ApplicationRunner`, gated on `parallax.auth.claim-username`/`-password`)
+is the only way, in this batch, to set a password on a pre-existing,
+passwordless account — in particular the seeded `dev` row, which owns
+every strategy/dataset/run created before authentication existed. It
+never creates a user and never overwrites an existing hash.
+`PasswordPolicy` (≥15 characters, ≤72 UTF-8 bytes) is factored out for a
+later self-registration batch to reuse unchanged.
+
+**Test infrastructure:** `AuthenticatedMockMvcConfig` (test-only) makes
+every `MockMvc` request in an importing test authenticated and
+CSRF-exempt by default, so the pre-existing D-31/D-32/D-34 controller
+tests (which already override `CurrentUser` with `@MockitoBean`) keep
+working unchanged now that Spring Security is on the classpath.
+`AuthenticationIT` is the real-session proof — it imports neither that
+config nor a mocked `CurrentUser`.
+
+See decisions.md's D-37 entry for the exact rationale and rejected
+alternatives.
+
+## Public self-registration (D-38)
+
+`POST /api/auth/register` (`AuthController`, always `permitAll`) creates
+a new `AppUser` with a password already set — the counterpart to D-37's
+`PasswordClaimRunner`, which only ever claims a pre-existing, passwordless
+row. `RegisterRequest(username, password)` is read by the same generic
+strict-envelope overload every other request body uses
+(`StrategyDefinitionCodec.parseRequest`), so an unknown property (e.g. an
+attempted `id`, `passwordHash`, or `ownerId`) is rejected before Bean
+Validation runs. Username is validated as `AppUser.USERNAME_PATTERN`
+(`@Pattern` on the envelope, → 400 via the existing
+`ConstraintViolationException` path); password is validated by D-37's
+`PasswordPolicy`, reused unchanged.
+
+`UserRegistrationService` is the sole write path: it encodes the password,
+then a single `AppUserRepository.saveAndFlush` (added alongside D-37's
+plain `save`) inside a try/catch matching the failed write against the
+actual `uq_app_user_username` constraint name — exactly
+`StrategyService.createStrategy`'s duplicate-detection idiom, never a
+racy `exists()` pre-check. Registration never logs the caller in, and
+never changes an already-authenticated caller's session — the frontend
+performs a separate `POST /api/auth/login` afterward.
+`parallax.auth.registration-enabled` (`PARALLAX_REGISTRATION_ENABLED`,
+default `true`) is checked inside the service, not at the
+`SecurityConfig` authorization layer, so a disabled registration still
+returns the specific `RegistrationDisabledException` → 403 rather than a
+generic 401. `ApiExceptionHandler` gains three mappings:
+`WeakPasswordException` → 400, `DuplicateUsernameException` → 409 (joins
+the existing duplicate-name/version-conflict handler), and
+`RegistrationDisabledException` → 403 (the first backend-originated 403;
+every other 403 comes from Spring Security's filter-level handlers).
+
+See decisions.md's D-38 entry for the exact rationale and rejected
+alternatives.
+
+## Password change (D-40)
+
+`POST /api/auth/password` (`AuthController`, authenticated — not in the
+`permitAll` list, so the default `authenticated()`/CSRF rule already
+covers it with no `SecurityConfig` change). `ChangePasswordRequest
+(currentPassword, newPassword)` is read by the same strict envelope
+reader every other request body uses.
+
+`PasswordChangeService` is the only write path that *replaces* an
+existing hash — distinct from D-37's `PasswordClaimRunner` (only ever
+fills a `null` one) and D-38's `UserRegistrationService` (only ever
+creates a new row). It verifies `currentPassword` against the stored hash
+via the same `PasswordEncoder`, applies D-37's `PasswordPolicy` unchanged
+to `newPassword`, and — only once both checks pass — calls `AppUser`'s
+new `changePassword(hash)` mutator and `saveAndFlush`s it. The account
+changed is always the one `CurrentUser` names; the request body carries no
+`username`/`userId`, so this can never touch another user's password.
+
+On success, the controller calls `HttpServletRequest.changeSessionId()`
+(the same fixation-protection primitive `formLogin` uses) — the Servlet
+API copies the existing session's attributes, including Spring Security's
+`SecurityContext`, to the new session id, so the caller stays
+authenticated under the rotated id with no re-login required, while the
+old session id stops working immediately.
+
+**Errors:** a wrong `currentPassword` → `InvalidCurrentPasswordException`
+→ 401, with the exact same generic body a failed login gets (never
+revealing that the *rest* of the request was well-formed); a `newPassword`
+failing `PasswordPolicy` → `WeakPasswordException` → 400, with `field:
+"newPassword"` (the same exception class D-38's registration uses for
+`field: "password"` — `WeakPasswordException` now carries its own field
+name rather than the handler assuming one call site). Neither failure
+changes the stored hash. The response body is empty (`204`) on success,
+so there is nothing for it to ever leak.
+
+See decisions.md's D-40 entry for the exact rationale and rejected
+alternatives.
+
+Phase 9 Batch 3 (D-37 backend authentication core, D-38 self-registration,
+D-39 frontend identity lifecycle, D-40 password change) is complete. See
+decisions.md's D-29 through D-40 entries and the Phase 7 design review for
+the full approved plan and batch sequence.
+
+# Frontend identity lifecycle (D-39)
+
+`AuthProvider` (`src/auth/`) is the root of every identity-dependent piece
+of frontend state: `loading` → `anonymous`/`authenticated`, resolved from
+`GET /api/auth/me` on mount. `RequireAuth` gates every protected route,
+redirecting an anonymous visitor to `/login?next=<requested path>`;
+`/login` and `/register` (`src/features/auth/`) are the only public
+routes, both rendered inside the same `AppLayout` shell as every protected
+page — `Nav` itself adapts (username + logout, or a "Log in" link) rather
+than the app having two different shells.
+
+`httpClient.js` sends `credentials: 'same-origin'` on every request and
+attaches `X-XSRF-TOKEN` (read from the `XSRF-TOKEN` cookie) to every
+non-GET/HEAD request, matching D-37's CSRF contract exactly. A module-level
+`setUnauthorizedHandler` callback — registered by `AuthProvider`, invoked
+on any unexpected 401 except from `getMe`/`login` (which treat 401 as a
+normal, expected outcome, not a session that expired) — is what lets a
+plain data-fetch 401 anywhere in the app reach the identity layer with no
+other coupling between them.
+
+**Cache/identity isolation:** `immutableCache.js` (D-31's session cache)
+gained an epoch counter. `bumpEpoch()` (called on every login, logout, and
+unexpected 401) clears the cache and advances the epoch; `useApiResource`
+captures the epoch when a fetch starts and passes it to `set`, so a
+response that resolves after a since-superseded identity change is
+silently dropped rather than populating the cache with one user's data
+under another user's session. A `BroadcastChannel('parallax-auth')`
+message, posted on every identity change, keeps every open tab in sync -
+each tab bumps its own epoch and re-checks `/api/auth/me` on receipt,
+including the tab that posted it.
+
+**A real bug this surfaced:** D-37's `CsrfLogoutHandler` expires the
+`XSRF-TOKEN` cookie along with the session, so `logout()` re-bootstraps a
+fresh one via the same `getMe()` call used on mount — without this, the
+very next login attempt in the same browser session would submit no CSRF
+token and fail with a 403 (surfaced during manual verification, not by
+any automated test, since jsdom's cookie jar doesn't expire a cookie the
+way a real server response does).
+
+See decisions.md's D-39 entry for the exact rationale and rejected
+alternatives.
+
+Not yet implemented: a frontend UI for D-40's `POST /api/auth/password` —
+that endpoint exists and is fully tested on the backend, but nothing in
+the frontend calls it yet.

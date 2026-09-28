@@ -359,6 +359,33 @@ class BacktestSchemaIT {
                 in.datasetId(), in.datasetVersionNumber()));
     }
 
+    /**
+     * Phase 9 Batch 2c §14: a {@code strategy_version} row a real
+     * {@code backtest_run} references is rejected on UPDATE by the same
+     * D-31 immutability trigger every {@code strategy_version} row already
+     * carries (unconditionally, referenced or not) - proving the specific
+     * invariant this batch's read-time verification depends on: a
+     * <em>referenced</em> version cannot silently drift out from under an
+     * existing run.
+     */
+    @Test
+    void updatingAReferencedStrategyVersionIsRejectedByTheDatabase() {
+        BacktestFixtures.Inputs in = inputs("schema");
+        insertRun(in, Map.of());
+        assertThrows(DataAccessException.class, () -> jdbcTemplate.update(
+                "update strategy_version set definition_hash = ? where strategy_id = ? and version_number = ?",
+                "0".repeat(64), in.strategyId(), in.strategyVersionNumber()));
+    }
+
+    @Test
+    void updatingAReferencedDatasetVersionIsRejectedByTheDatabase() {
+        BacktestFixtures.Inputs in = inputs("schema");
+        insertRun(in, Map.of());
+        assertThrows(DataAccessException.class, () -> jdbcTemplate.update(
+                "update dataset_version set content_hash = ? where dataset_id = ? and version_number = ?",
+                "0".repeat(64), in.datasetId(), in.datasetVersionNumber()));
+    }
+
     // --- FK integrity: child rows require an existing parent run --------------
 
     @Test
