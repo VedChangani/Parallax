@@ -323,6 +323,184 @@ class PerformanceMetricsTest {
         assertTrue(m.averageLoss().isEmpty());
     }
 
+    // --- profit factor -------------------------------------------------------
+
+    @Test
+    void profitFactorIsGrossProfitOverAbsoluteGrossLoss() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
+                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0")); // +300
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertEquals(8.0, m.profitFactor().getAsDouble(), 1e-15); // 400 / 50
+    }
+
+    @Test
+    void profitFactorBelowOneWhenLossesOutweighWins() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "105", "0"), // +50
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "90", "0"));  // -100
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertEquals(0.5, m.profitFactor().getAsDouble(), 1e-15);
+    }
+
+    @Test
+    void onlyWinningTradesGiveUnavailableProfitFactorNotInfinity() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "120", "0"));
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertTrue(m.profitFactor().isEmpty());
+    }
+
+    @Test
+    void onlyLosingTradesGiveAProfitFactorOfExactlyZero() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "95", "0"),  // -50
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "97", "0"));  // -30
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertTrue(m.profitFactor().isPresent());
+        assertEquals(0.0, m.profitFactor().getAsDouble());
+    }
+
+    @Test
+    void breakevenTradesContributeToNeitherSideOfProfitFactor() {
+        List<Fill> withoutBreakeven = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"));  // -50
+        List<Fill> withBreakeven = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
+                buy(5, d(2024, 1, 5), "100", "5"), sell(6, d(2024, 1, 6), "101", "5")); // 0
+        assertEquals(2.0, metricsOfTrades(withoutBreakeven).profitFactor().getAsDouble(), 1e-15);
+        assertEquals(2.0, metricsOfTrades(withBreakeven).profitFactor().getAsDouble(), 1e-15);
+    }
+
+    @Test
+    void aBreakevenTradeAloneGivesUnavailableProfitFactor() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100", "5"),
+                sell(2, d(2024, 1, 2), "101", "5"));
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertEquals(1, m.closedTradeCount());
+        assertTrue(m.profitFactor().isEmpty());
+    }
+
+    @Test
+    void openTradeIsIgnoredByProfitFactor() {
+        List<Fill> closedOnly = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"));  // -50
+        List<Fill> withOpen = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
+                buy(5, d(2024, 1, 5), "100", "0")); // trailing open BUY
+        assertEquals(metricsOfTrades(closedOnly).profitFactor(), metricsOfTrades(withOpen).profitFactor());
+        assertEquals(2.0, metricsOfTrades(withOpen).profitFactor().getAsDouble(), 1e-15);
+    }
+
+    @Test
+    void onlyAnOpenTradeOrNoTradesGiveUnavailableProfitFactor() {
+        assertTrue(metricsOfTrades(List.of()).profitFactor().isEmpty());
+        assertTrue(metricsOfTrades(List.of(buy(1, d(2024, 1, 1), "100", "0"))).profitFactor().isEmpty());
+    }
+
+    // Gross profit/loss are summed exactly in BigDecimal: +0.10 + 0.20 is
+    // exactly 0.30 (a double running sum would be 0.30000000000000004), so a
+    // 0.30 loss gives a profit factor of exactly 1.0.
+    @Test
+    void profitFactorSumsAreExactNotFloatingPoint() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100.00", "0"), sell(2, d(2024, 1, 2), "100.01", "0"), // +0.10
+                buy(3, d(2024, 1, 3), "100.00", "0"), sell(4, d(2024, 1, 4), "100.02", "0"), // +0.20
+                buy(5, d(2024, 1, 5), "100.00", "0"), sell(6, d(2024, 1, 6), "99.97", "0"));  // -0.30
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertEquals(1.0, m.profitFactor().getAsDouble());
+    }
+
+    @Test
+    void profitFactorDoesNotChangeAnyOtherTradeMetric() {
+        List<Fill> fills = List.of(
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
+                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"), // +300
+                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5")); // 0
+        PerformanceMetrics m = metricsOfTrades(fills);
+        assertEquals(4, m.closedTradeCount());
+        assertEquals(0.5, m.winRate().getAsDouble(), 1e-15);
+        assertEquals(200.0, m.averageWin().getAsDouble(), 1e-12);
+        assertEquals(-50.0, m.averageLoss().getAsDouble(), 1e-12);
+        assertEquals(8.0, m.profitFactor().getAsDouble(), 1e-15);
+    }
+
+    @Test
+    void profitFactorMustBeNonNegativeAndFiniteWhenPresent() {
+        assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
+                OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(0.0),
+                OptionalDouble.empty(), OptionalDouble.of(-1.0), OptionalDouble.of(-0.5)));
+        assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
+                OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(0.0),
+                OptionalDouble.empty(), OptionalDouble.of(-1.0), OptionalDouble.of(Double.POSITIVE_INFINITY)));
+        assertThrows(NullPointerException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
+                OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 0, OptionalDouble.empty(),
+                OptionalDouble.empty(), OptionalDouble.empty(), null));
+    }
+
+    @Test
+    void profitFactorIsPresentExactlyWhenAverageLossIsPresent() {
+        assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
+                OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(1.0),
+                OptionalDouble.of(1.0), OptionalDouble.empty(), OptionalDouble.of(2.0)));
+        assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
+                OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(0.0),
+                OptionalDouble.empty(), OptionalDouble.of(-1.0), OptionalDouble.empty()));
+    }
+
+    // --- drawdown series -----------------------------------------------------
+
+    @Test
+    void drawdownSeriesIsAlignedWithTheCurveAndUsesTheRunningPeak() {
+        List<EquityPoint> curve = List.of(
+                point(d(2024, 1, 1), "10000"), point(d(2024, 1, 2), "12000"), point(d(2024, 1, 3), "9000"),
+                point(d(2024, 1, 4), "9600"), point(d(2024, 1, 5), "13000"));
+        double[] series = PerformanceMetrics.drawdownSeries(curve);
+
+        assertEquals(curve.size(), series.length);
+        assertEquals(0.0, series[0]); // first point defines the initial peak
+        assertEquals(0.0, series[1]); // new high
+        assertEquals(0.25, series[2], 1e-15); // (12000 - 9000) / 12000
+        assertEquals(0.20, series[3], 1e-15); // (12000 - 9600) / 12000
+        assertEquals(0.0, series[4]); // new high again
+    }
+
+    @Test
+    void drawdownSeriesMaximumIsExactlyMaxDrawdown() {
+        List<EquityPoint> curve = List.of(
+                point(d(2024, 1, 1), "10000"), point(d(2024, 1, 2), "12345.67"), point(d(2024, 1, 3), "8765.43"),
+                point(d(2024, 1, 4), "11000"), point(d(2024, 1, 5), "9999.99"));
+        double max = 0.0;
+        for (double dd : PerformanceMetrics.drawdownSeries(curve)) {
+            max = Math.max(max, dd);
+        }
+        assertEquals(metricsOf(curve).maxDrawdown(), max); // bit-exact, no tolerance
+    }
+
+    @Test
+    void drawdownSeriesOfRisingOrSinglePointCurveIsAllZero() {
+        assertEquals(0.0, PerformanceMetrics.drawdownSeries(List.of(point(d(2024, 1, 1), "10000")))[0]);
+        double[] rising = PerformanceMetrics.drawdownSeries(List.of(
+                point(d(2024, 1, 1), "10000"), point(d(2024, 1, 2), "10100"), point(d(2024, 1, 3), "10100")));
+        assertEquals(0.0, rising[0]);
+        assertEquals(0.0, rising[1]);
+        assertEquals(0.0, rising[2]);
+    }
+
+    @Test
+    void drawdownSeriesRejectsNullAndEmptyCurves() {
+        assertThrows(NullPointerException.class, () -> PerformanceMetrics.drawdownSeries(null));
+        assertThrows(IllegalArgumentException.class, () -> PerformanceMetrics.drawdownSeries(List.of()));
+    }
+
     // --- preconditions -------------------------------------------------------
 
     @Test
@@ -363,21 +541,21 @@ class PerformanceMetricsTest {
     void maxDrawdownOfOneIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 1.0, 0, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void maxDrawdownNegativeIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), -0.0001, 0, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void negativeClosedTradeCountIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, -1, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
@@ -389,14 +567,14 @@ class PerformanceMetricsTest {
     void winRatePresentWithZeroClosedTradesIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 0, OptionalDouble.of(0.5),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void winRateEmptyWithNonZeroClosedTradesIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
@@ -409,70 +587,71 @@ class PerformanceMetricsTest {
     void winRateOutsideRangeIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(1.0001),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(-0.0001),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void averageWinMustBePositiveWhenPresent() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(1.0),
-                OptionalDouble.of(0.0), OptionalDouble.empty()));
+                OptionalDouble.of(0.0), OptionalDouble.empty(), OptionalDouble.empty()));
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(1.0),
-                OptionalDouble.of(-1.0), OptionalDouble.empty()));
+                OptionalDouble.of(-1.0), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void averageLossMustBeNegativeWhenPresent() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(0.0),
-                OptionalDouble.empty(), OptionalDouble.of(0.0)));
+                OptionalDouble.empty(), OptionalDouble.of(0.0), OptionalDouble.empty()));
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 1, OptionalDouble.of(0.0),
-                OptionalDouble.empty(), OptionalDouble.of(1.0)));
+                OptionalDouble.empty(), OptionalDouble.of(1.0), OptionalDouble.empty()));
     }
 
     @Test
     void volatilityMustBeNonNegativeWhenPresent() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.of(-0.0001), OptionalDouble.empty(), 0.0, 0, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void nonFiniteTotalReturnIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(Double.NaN, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 0, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(Double.POSITIVE_INFINITY,
                 OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 0,
-                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void nonFiniteOptionalValuesAreRejected() {
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.of(Double.NaN),
                 OptionalDouble.empty(), OptionalDouble.empty(), 0.0, 0, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
         assertThrows(IllegalArgumentException.class, () -> new PerformanceMetrics(0.0, OptionalDouble.empty(),
                 OptionalDouble.empty(), OptionalDouble.of(Double.POSITIVE_INFINITY), 0.0, 0, OptionalDouble.empty(),
-                OptionalDouble.empty(), OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     @Test
     void nullOptionalComponentIsRejected() {
         assertThrows(NullPointerException.class, () -> new PerformanceMetrics(0.0, null, OptionalDouble.empty(),
                 OptionalDouble.empty(), 0.0, 0, OptionalDouble.empty(), OptionalDouble.empty(),
-                OptionalDouble.empty()));
+                OptionalDouble.empty(), OptionalDouble.empty()));
     }
 
     private static void assertValid(double totalReturn, double maxDrawdown, int closedTradeCount,
                                      OptionalDouble winRate, OptionalDouble averageWin, OptionalDouble averageLoss) {
         PerformanceMetrics m = new PerformanceMetrics(totalReturn, OptionalDouble.empty(), OptionalDouble.empty(),
-                OptionalDouble.empty(), maxDrawdown, closedTradeCount, winRate, averageWin, averageLoss);
+                OptionalDouble.empty(), maxDrawdown, closedTradeCount, winRate, averageWin, averageLoss,
+                averageLoss.isPresent() ? OptionalDouble.of(1.0) : OptionalDouble.empty());
         assertEquals(totalReturn, m.totalReturn());
         assertEquals(maxDrawdown, m.maxDrawdown());
     }

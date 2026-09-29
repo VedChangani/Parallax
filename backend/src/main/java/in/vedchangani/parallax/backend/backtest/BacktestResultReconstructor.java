@@ -143,8 +143,8 @@ final class BacktestResultReconstructor {
             verifyInsufficientCashAvailableCash(config, fills, rejections);
             verifyPositionStateAtSignal(config, fills, rejections);
 
-            PerformanceMetrics storedMetrics = reconstructMetrics(run);
             PerformanceMetrics recomputedMetrics = PerformanceMetrics.of(result);
+            PerformanceMetrics storedMetrics = reconstructMetrics(run, recomputedMetrics);
             verifyMetricsMatch(storedMetrics, recomputedMetrics);
 
             verifyCostTotals(run, result);
@@ -245,9 +245,16 @@ final class BacktestResultReconstructor {
         return value;
     }
 
-    private static PerformanceMetrics reconstructMetrics(BacktestRun run) {
+    /**
+     * The stored metrics. {@code profitFactor} has no persisted column: it is
+     * a pure function of the closed trades, which the ledger replay above has
+     * already verified, so the recomputed value is used as-is rather than
+     * compared against anything. Every other field is the persisted value.
+     */
+    private static PerformanceMetrics reconstructMetrics(BacktestRun run, PerformanceMetrics recomputed) {
         return new PerformanceMetrics(run.totalReturn(), run.cagr(), run.volatility(), run.sharpeRatio(),
-                run.maxDrawdown(), run.closedTradeCount(), run.winRate(), run.averageWin(), run.averageLoss());
+                run.maxDrawdown(), run.closedTradeCount(), run.winRate(), run.averageWin(), run.averageLoss(),
+                recomputed.profitFactor());
     }
 
     // --- order id continuity (D-21: {fill ids} u {InsufficientCash ids} = {1..n}) ---

@@ -24,7 +24,8 @@ import java.util.OptionalDouble;
  * never {@code NaN}, {@code Infinity}, or a sentinel value. The two metrics
  * that are always defined for any valid result ({@link #totalReturn()},
  * {@link #maxDrawdown()}) are plain {@code double}s, and
- * {@link #closedTradeCount()} is a plain {@code int}.
+ * {@link #closedTradeCount()} is a plain {@code int}. {@link #profitFactor()}
+ * is empty exactly when there is no losing closed trade.
  *
  * <p>Money figures ({@code equity}, {@code realizedPnl}) are summed and
  * differenced exactly in {@link BigDecimal}; every metric here converts to
@@ -36,7 +37,8 @@ import java.util.OptionalDouble;
  */
 public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, OptionalDouble volatility,
                                   OptionalDouble sharpeRatio, double maxDrawdown, int closedTradeCount,
-                                  OptionalDouble winRate, OptionalDouble averageWin, OptionalDouble averageLoss) {
+                                  OptionalDouble winRate, OptionalDouble averageWin, OptionalDouble averageLoss,
+                                  OptionalDouble profitFactor) {
 
     /** The fixed V1 annualization convention for per-bar returns (D-26). */
     public static final int TRADING_DAYS_PER_YEAR = 252;
@@ -51,6 +53,7 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         Objects.requireNonNull(winRate, "winRate must not be null");
         Objects.requireNonNull(averageWin, "averageWin must not be null");
         Objects.requireNonNull(averageLoss, "averageLoss must not be null");
+        Objects.requireNonNull(profitFactor, "profitFactor must not be null");
 
         if (!Double.isFinite(totalReturn)) {
             throw new IllegalArgumentException("totalReturn must be finite, was " + totalReturn);
@@ -87,6 +90,16 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         requireFiniteWhenPresent(averageLoss, "averageLoss");
         if (averageLoss.isPresent() && averageLoss.getAsDouble() >= 0.0) {
             throw new IllegalArgumentException("averageLoss must be < 0 when present, was " + averageLoss.getAsDouble());
+        }
+        requireFiniteWhenPresent(profitFactor, "profitFactor");
+        if (profitFactor.isPresent() && profitFactor.getAsDouble() < 0.0) {
+            throw new IllegalArgumentException("profitFactor must be >= 0 when present, was " + profitFactor.getAsDouble());
+        }
+        // Defined exactly when a losing closed trade exists (its denominator).
+        if (profitFactor.isPresent() != averageLoss.isPresent()) {
+            throw new IllegalArgumentException(
+                    "profitFactor must be present iff averageLoss is present (averageLoss=" + averageLoss
+                            + ", profitFactor=" + profitFactor + ")");
         }
     }
 
@@ -171,8 +184,15 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
                 ? OptionalDouble.empty()
                 : OptionalDouble.of(lossSum.doubleValue() / losses);
 
+        // Profit factor: gross profit / |gross loss| over closed trades. The
+        // sums are exact BigDecimal; the single division happens in double
+        // (D-14). Empty, never Infinity, when no closed trade lost money.
+        OptionalDouble profitFactor = losses == 0
+                ? OptionalDouble.empty()
+                : OptionalDouble.of(winSum.doubleValue() / lossSum.negate().doubleValue());
+
         return new PerformanceMetrics(totalReturn, cagr, volatility, sharpe, maxDrawdown, closedCount, winRate,
-                averageWin, averageLoss);
+                averageWin, averageLoss, profitFactor);
     }
 
     /**
@@ -272,20 +292,46 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
     }
 
     /**
-     * Maximum close-to-close drawdown as a fraction of the running peak
-     * equity, e.g. {@code 0.25} for a 25% decline (D-26 §8). Always
-     * {@code 0.0} or greater; never stores the drawdown series, an
-     * absolute monetary amount, or duration/dates.
+     * The drawdown at every equity point, aligned index-for-index with
+     * {@code curve}: {@code (runningPeak - equity) / runningPeak}, where the
+     * running peak is the highest equity seen up to and including that point
+     * (the first point's equity is the initial peak). Each value is a
+     * fraction {@code >= 0}, e.g. {@code 0.25} for 25% below the peak, and
+     * exactly {@code 0.0} at a new high. This is the single definition
+     * {@link #maxDrawdown()} is the maximum of.
+     *
+     * <p>Assumes strictly positive equity, which {@link #of(BacktestResult)}
+     * enforces for every result it accepts.
+     *
+     * @throws NullPointerException     if {@code curve} is null
+     * @throws IllegalArgumentException if {@code curve} is empty
      */
-    private static double maxDrawdown(List<EquityPoint> curve) {
+    public static double[] drawdownSeries(List<EquityPoint> curve) {
+        Objects.requireNonNull(curve, "curve must not be null");
+        if (curve.isEmpty()) {
+            throw new IllegalArgumentException("curve must not be empty");
+        }
+        double[] drawdowns = new double[curve.size()];
         BigDecimal peak = curve.get(0).equity();
-        double maxDd = 0.0;
-        for (EquityPoint point : curve) {
-            BigDecimal equity = point.equity();
+        for (int i = 0; i < drawdowns.length; i++) {
+            BigDecimal equity = curve.get(i).equity();
             if (equity.compareTo(peak) > 0) {
                 peak = equity;
             }
-            double dd = peak.subtract(equity).doubleValue() / peak.doubleValue();
+            drawdowns[i] = peak.subtract(equity).doubleValue() / peak.doubleValue();
+        }
+        return drawdowns;
+    }
+
+    /**
+     * Maximum close-to-close drawdown as a fraction of the running peak
+     * equity, e.g. {@code 0.25} for a 25% decline (D-26 §8): the maximum of
+     * {@link #drawdownSeries(List)}. Always {@code 0.0} or greater; the
+     * series itself is not stored on this record.
+     */
+    private static double maxDrawdown(List<EquityPoint> curve) {
+        double maxDd = 0.0;
+        for (double dd : drawdownSeries(curve)) {
             if (dd > maxDd) {
                 maxDd = dd;
             }

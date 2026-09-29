@@ -185,10 +185,10 @@ public final class Backtester {
                     pendingOrder = null;
                 }
 
-                // 2. Update every indicator with this bar's close —
+                // 2. Update every indicator with this bar —
                 //    lookback and in-range bars alike.
                 for (Indicator indicator : indicators.values()) {
-                    indicator.update(bar.close());
+                    indicator.update(bar);
                 }
 
                 // 3. Lookback bars stop here: no equity, no evaluation.

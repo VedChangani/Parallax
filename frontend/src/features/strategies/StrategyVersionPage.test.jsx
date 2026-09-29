@@ -80,6 +80,35 @@ describe('StrategyVersionPage', () => {
     expect(screen.queryByText('schemaVersion')).toBeNull();
   });
 
+  it('renders ATR and ROC operands of a saved version as TYPE(period)', async () => {
+    const atrRocVersion = {
+      ...sampleVersion,
+      definition: {
+        ...sampleVersion.definition,
+        entryCondition: {
+          type: 'compare',
+          left: { type: 'indicator', indicator: 'ATR', period: 14 },
+          operator: 'GT',
+          right: { type: 'constant', value: '2' },
+        },
+        exitCondition: {
+          type: 'compare',
+          left: { type: 'indicator', indicator: 'ROC', period: 12 },
+          operator: 'LT',
+          right: { type: 'constant', value: '-5' },
+        },
+      },
+    };
+    globalThis.fetch = vi.fn((url) => {
+      if (/\/versions\/2$/.test(url)) return Promise.resolve(jsonResponse(atrRocVersion));
+      return Promise.resolve(jsonResponse(sampleStrategy));
+    });
+    renderVersion();
+
+    expect(await screen.findByText('ATR(14) > 2')).toBeTruthy();
+    expect(screen.getByText('ROC(12) < -5')).toBeTruthy();
+  });
+
   it('shows the definition hash with a copy control', async () => {
     stubFetch();
     renderVersion();

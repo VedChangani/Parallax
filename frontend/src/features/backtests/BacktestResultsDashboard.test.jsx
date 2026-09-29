@@ -295,10 +295,126 @@ describe('Backtest results dashboard', () => {
       expect(section.getByText('3.25')).toBeTruthy(); // totalSlippageCost, exact string
     });
 
-    it('mentions that no drawdown series is exposed', async () => {
+    it('no longer claims the drawdown series is unavailable', async () => {
       globalThis.fetch = mockFetch();
       renderRun('/backtests/1');
-      expect(await screen.findByText(/Drawdown series is not currently exposed/)).toBeTruthy();
+      await screen.findByText('Performance');
+      expect(screen.queryByText(/Drawdown series is not currently exposed/)).toBeNull();
+    });
+  });
+
+  describe('export actions', () => {
+    it('shows the export actions on every tab of a completed run', async () => {
+      globalThis.fetch = mockFetch();
+      renderRun('/backtests/1');
+      await screen.findByRole('heading', { name: 'Backtest #1' });
+
+      expect(screen.getByRole('button', { name: 'Export equity CSV' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Export trades CSV' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Trades' }));
+      await screen.findByText(/Closed/);
+      expect(screen.getByRole('button', { name: 'Export equity CSV' })).toBeTruthy();
+    });
+
+    it('requests the equity CSV endpoint and hands the exact text to a browser download', async () => {
+      const csv = 'date,equity,drawdown\r\n2024-01-01,100000,0\r\n';
+      const base = mockFetch();
+      globalThis.fetch = vi.fn((url, init) =>
+        url === '/api/backtest-runs/1/equity-curve.csv'
+          ? Promise.resolve(new Response(csv, { status: 200, headers: { 'content-type': 'text/csv;charset=UTF-8' } }))
+          : base(url, init),
+      );
+      const createObjectURL = vi.fn(() => 'blob:x');
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = vi.fn();
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+      renderRun('/backtests/1');
+      await screen.findByRole('heading', { name: 'Backtest #1' });
+      fireEvent.click(screen.getByRole('button', { name: 'Export equity CSV' }));
+
+      await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+      expect(await createObjectURL.mock.calls[0][0].text()).toBe(csv);
+    });
+  });
+
+  describe('profit factor', () => {
+    it('renders the profit factor beside the other trade metrics when present', async () => {
+      globalThis.fetch = mockFetch({ run: { ...RUN, metrics: { ...RUN.metrics, profitFactor: 1.8765 } } });
+      renderRun('/backtests/1');
+      const heading = await screen.findByText('Performance');
+      const section = within(heading.closest('section'));
+
+      const value = section.getByText('Profit factor').closest('div').querySelector('dd');
+      expect(value.textContent).toBe('1.88');
+      // Sits in the same grid as the existing trade metrics.
+      expect(section.getByText('Average loss').closest('dl')).toBe(section.getByText('Profit factor').closest('dl'));
+      expect(section.queryByText('Needs at least one losing closed trade.')).toBeNull();
+    });
+
+    it('renders an exact zero profit factor as 0.00, not as unavailable', async () => {
+      globalThis.fetch = mockFetch({ run: { ...RUN, metrics: { ...RUN.metrics, profitFactor: 0 } } });
+      renderRun('/backtests/1');
+      const heading = await screen.findByText('Performance');
+      const section = within(heading.closest('section'));
+
+      expect(section.getByText('Profit factor').closest('div').querySelector('dd').textContent).toBe('0.00');
+      expect(section.queryByText('Needs at least one losing closed trade.')).toBeNull();
+    });
+
+    it('renders an unavailable profit factor as a dash with an explanation', async () => {
+      globalThis.fetch = mockFetch({ run: { ...RUN, metrics: { ...RUN.metrics, profitFactor: null } } });
+      renderRun('/backtests/1');
+      const heading = await screen.findByText('Performance');
+      const section = within(heading.closest('section'));
+
+      expect(section.getByText('Profit factor').closest('div').querySelector('dd').textContent).toBe('—');
+      expect(section.getByText('Needs at least one losing closed trade.')).toBeTruthy();
+    });
+  });
+
+  describe('drawdown chart', () => {
+    const EQUITY_WITH_DRAWDOWN = [
+      { ...EQUITY[0], date: '2024-01-01', drawdown: 0 },
+      { ...EQUITY[0], date: '2024-02-01', equity: '90000', drawdown: 0.1 },
+      { ...EQUITY[1], date: '2024-03-22', equity: '104000', drawdown: 0 },
+    ];
+
+    it('renders a Drawdown section below the equity chart with the exact dates and deepest value', async () => {
+      globalThis.fetch = mockFetch({ equity: EQUITY_WITH_DRAWDOWN });
+      renderRun('/backtests/1');
+
+      const heading = await screen.findByText('Drawdown');
+      const equityHeading = screen.getByText('Equity curve');
+      // Document order: Equity curve section precedes the Drawdown section.
+      expect(equityHeading.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      const summary = within(heading.closest('section')).getByText(/Drawdown from/);
+      expect(summary.textContent).toContain('2024-01-01 to 2024-03-22');
+      expect(summary.textContent).toContain('Deepest drawdown 10.00% on 2024-02-01');
+    });
+
+    it('shows a safe message for a single-point series instead of a chart', async () => {
+      globalThis.fetch = mockFetch({ equity: [{ ...EQUITY[0], drawdown: 0 }] });
+      renderRun('/backtests/1');
+
+      expect(await screen.findByText('Too few equity points to chart a drawdown.')).toBeTruthy();
+    });
+
+    it('shows a safe message when the response carries no drawdown values', async () => {
+      globalThis.fetch = mockFetch(); // EQUITY fixture has no `drawdown`
+      renderRun('/backtests/1');
+
+      expect(await screen.findByText('No drawdown data was returned for this run.')).toBeTruthy();
+    });
+
+    it('renders no drawdown section when the run has no equity points', async () => {
+      globalThis.fetch = mockFetch({ equity: [] });
+      renderRun('/backtests/1');
+      await screen.findByText('No equity points were recorded for this run.');
+
+      expect(screen.queryByText('Drawdown')).toBeNull();
     });
   });
 

@@ -2,7 +2,10 @@ package in.vedchangani.parallax.engine.indicator;
 
 import org.junit.jupiter.api.Test;
 
+import in.vedchangani.parallax.engine.data.Bar;
+
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -41,6 +44,39 @@ class IndicatorTest {
         Indicator indicator = Indicator.create(new IndicatorSpec(IndicatorType.RSI, 3));
 
         assertInstanceOf(RelativeStrengthIndex.class, indicator);
+    }
+
+    @Test
+    void atrSpecCreatesAverageTrueRange() {
+        Indicator indicator = Indicator.create(new IndicatorSpec(IndicatorType.ATR, 3));
+
+        assertInstanceOf(AverageTrueRange.class, indicator);
+    }
+
+    @Test
+    void rocSpecCreatesRateOfChange() {
+        Indicator indicator = Indicator.create(new IndicatorSpec(IndicatorType.ROC, 3));
+
+        assertInstanceOf(RateOfChange.class, indicator);
+    }
+
+    @Test
+    void atrAndRocPeriodsArePreservedAndObservableThroughReadiness() {
+        // ATR(2): not ready until the 2nd bar.
+        Indicator atr = Indicator.create(new IndicatorSpec(IndicatorType.ATR, 2));
+        Bar bar = new Bar(LocalDate.of(2024, 1, 1), price("10"), price("12"), price("9"), price("11"), 0);
+        atr.update(bar);
+        assertFalse(atr.isReady());
+        atr.update(bar);
+        assertTrue(atr.isReady());
+
+        // ROC(2): not ready until the 3rd close.
+        Indicator roc = Indicator.create(new IndicatorSpec(IndicatorType.ROC, 2));
+        roc.update(price("100"));
+        roc.update(price("101"));
+        assertFalse(roc.isReady());
+        roc.update(price("102"));
+        assertTrue(roc.isReady());
     }
 
     @Test

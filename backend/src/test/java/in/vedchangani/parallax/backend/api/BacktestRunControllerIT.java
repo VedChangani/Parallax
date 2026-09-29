@@ -459,6 +459,238 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$[2].benchmarkEquity").exists());
     }
 
+    // --- V1.1 Batch 3: profit factor and drawdown series ---------------------------
+
+    @Test
+    void profitFactorIsZeroForARunWithOnlyALosingClosedTrade() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        // One closed trade, -855: gross profit 0 / |gross loss| 855 = 0.0 (present, not null).
+        mockMvc.perform(get("/api/backtest-runs/" + runId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.metrics.profitFactor").value(0.0))
+                // Existing metrics are unaffected by the new field.
+                .andExpect(jsonPath("$.metrics.winRate").value(0.0))
+                .andExpect(jsonPath("$.metrics.averageLoss").value(-855.0));
+    }
+
+    @Test
+    void profitFactorIsNullWhenThereIsNoLosingClosedTrade() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, alwaysEnterStrategy(), twoBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, "10000", "0", "0",
+                                "2024-01-02", "2024-01-03")))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        // Only an open trade: no closed trade, so no losing closed trade - unavailable, never Infinity.
+        String body = mockMvc.perform(get("/api/backtest-runs/" + runId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.metrics.profitFactor").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+        assertEquals(true, body.contains("\"profitFactor\":null"));
+    }
+
+    @Test
+    void equityCurveDrawdownIsAlignedWithEquityAndUsesTheRunningPeak() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        String body = mockMvc.perform(get("/api/backtest-runs/" + runId + "/equity-curve"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(6))
+                .andExpect(jsonPath("$[0].drawdown").value(0.0))
+                // 10285 is a new high over 10000: still exactly 0.
+                .andExpect(jsonPath("$[2].equity").value("10285"))
+                .andExpect(jsonPath("$[2].drawdown").value(0.0))
+                .andReturn().getResponse().getContentAsString();
+
+        // Independent recomputation from the response's own exact equity strings.
+        java.util.List<String> equities = JsonPath.read(body, "$[*].equity");
+        java.util.List<Number> drawdowns = JsonPath.read(body, "$[*].drawdown");
+        assertEquals(equities.size(), drawdowns.size());
+        BigDecimal peak = new BigDecimal(equities.get(0));
+        double maxSeen = 0.0;
+        for (int i = 0; i < equities.size(); i++) {
+            BigDecimal equity = new BigDecimal(equities.get(i));
+            if (equity.compareTo(peak) > 0) {
+                peak = equity;
+            }
+            double expected = peak.subtract(equity).doubleValue() / peak.doubleValue();
+            assertEquals(expected, drawdowns.get(i).doubleValue(), "drawdown at index " + i);
+            maxSeen = Math.max(maxSeen, drawdowns.get(i).doubleValue());
+        }
+        // The losing trade must show up as a real drawdown, and the series
+        // maximum is exactly the run's own maxDrawdown metric.
+        assertEquals(true, maxSeen > 0.0);
+        double maxDrawdownMetric = ((Number) JsonPath.read(
+                mockMvc.perform(get("/api/backtest-runs/" + runId)).andReturn().getResponse().getContentAsString(),
+                "$.metrics.maxDrawdown")).doubleValue();
+        assertEquals(maxDrawdownMetric, maxSeen);
+    }
+
+    // --- V1.1 Batch 4: CSV export ----------------------------------------------------
+
+    private String getCsv(String path, String expectedFilename) throws Exception {
+        MvcResult result = mockMvc.perform(get(path))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition", "attachment; filename=\"" + expectedFilename + "\""))
+                .andReturn();
+        return result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void equityCurveCsvHasTheDocumentedHeaderAndExactValues() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        String csv = getCsv("/api/backtest-runs/" + runId + "/equity-curve.csv",
+                "backtest-" + runId + "-equity-curve.csv");
+
+        assertEquals(true, csv.endsWith("\r\n"));
+        String[] lines = csv.split("\r\n", -1);
+        assertEquals(8, lines.length); // header + 6 bars + the empty tail after the final CRLF
+        assertEquals("", lines[7]);
+        assertEquals("date,equity,cash,quantity,close,market_value,cost_basis,realized_pnl,unrealized_pnl,"
+                + "benchmark_equity,drawdown", lines[0]);
+        assertEquals(true, lines[1].startsWith("2024-01-02,10000,10000,0,100,0,0,0,0,"));
+        assertEquals(true, lines[1].endsWith(",0"));
+        // Bar 3 (2024-01-04): the exact strings the JSON view returns for this point.
+        assertEquals(true, lines[3].startsWith("2024-01-04,10285,25,95,108,10260,9975,0,285,"));
+        assertEquals(true, lines[3].endsWith(",0")); // 10285 is a new high over 10000
+    }
+
+    @Test
+    void equityCurveCsvCellsAreCharacterForCharacterTheJsonApiValues() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        String json = mockMvc.perform(get("/api/backtest-runs/" + runId + "/equity-curve"))
+                .andReturn().getResponse().getContentAsString();
+        String[] lines = getCsv("/api/backtest-runs/" + runId + "/equity-curve.csv",
+                "backtest-" + runId + "-equity-curve.csv").split("\r\n");
+
+        String[] jsonFields = {"date", "equity", "cash", "quantity", "close", "marketValue", "costBasis",
+                "realizedPnl", "unrealizedPnl", "benchmarkEquity"};
+        for (int row = 0; row < 6; row++) {
+            String[] cells = lines[row + 1].split(",", -1);
+            assertEquals(11, cells.length);
+            for (int col = 0; col < jsonFields.length; col++) {
+                Object expected = JsonPath.read(json, "$[" + row + "]." + jsonFields[col]);
+                assertEquals(String.valueOf(expected), cells[col], "row " + row + " " + jsonFields[col]);
+            }
+            double drawdown = ((Number) JsonPath.read(json, "$[" + row + "].drawdown")).doubleValue();
+            assertEquals(drawdown, Double.parseDouble(cells[10]), "row " + row + " drawdown");
+            // Plain decimal, never scientific notation.
+            assertFalse(cells[10].contains("E") || cells[10].contains("e"), cells[10]);
+        }
+    }
+
+    @Test
+    void equityCurveCsvIsDeterministicAcrossRequests() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+        String path = "/api/backtest-runs/" + runId + "/equity-curve.csv";
+        String filename = "backtest-" + runId + "-equity-curve.csv";
+
+        assertEquals(getCsv(path, filename), getCsv(path, filename));
+    }
+
+    @Test
+    void tradesCsvHasOneRowPerClosedTradeWithExactValues() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        String csv = getCsv("/api/backtest-runs/" + runId + "/trades.csv", "backtest-" + runId + "-trades.csv");
+
+        assertEquals("status,quantity,entry_order_id,entry_date,entry_price,entry_commission,exit_order_id,"
+                + "exit_date,exit_price,exit_commission,realized_pnl,total_commission,total_slippage_cost,"
+                + "mark_date,mark_close,market_value,unrealized_pnl\r\n"
+                + "CLOSED,95,1,2024-01-04,105,0,2,2024-01-08,96,0,-855,0,0,,,,\r\n", csv);
+    }
+
+    @Test
+    void tradesCsvLeavesExitAndRealizedFieldsEmptyForAnOpenTrade() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, alwaysEnterStrategy(), twoBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, "10000", "0", "0",
+                                "2024-01-02", "2024-01-03")))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        String csv = getCsv("/api/backtest-runs/" + runId + "/trades.csv", "backtest-" + runId + "-trades.csv");
+
+        String[] lines = csv.split("\r\n");
+        assertEquals(2, lines.length);
+        String[] cells = lines[1].split(",", -1);
+        assertEquals(17, cells.length);
+        assertEquals("OPEN", cells[0]);
+        assertEquals("96", cells[1]);
+        assertEquals("104", cells[4]);
+        for (int col = 6; col <= 10; col++) { // exit_* and realized_pnl are unavailable, not placeholders
+            assertEquals("", cells[col], "column " + col);
+        }
+        assertEquals("2024-01-03", cells[13]);
+        assertEquals("108", cells[14]);
+        assertEquals("10368", cells[15]);
+        assertEquals("384", cells[16]);
+    }
+
+    @Test
+    void tradesCsvForARunWithNoTradesIsJustTheHeader() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, alwaysEnterStrategy(), twoBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, "10", "100", "0",
+                                "2024-01-02", "2024-01-03")))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        String csv = getCsv("/api/backtest-runs/" + runId + "/trades.csv", "backtest-" + runId + "-trades.csv");
+
+        assertEquals(BacktestCsv.TRADES_HEADER + "\r\n", csv);
+        // The equity curve of the same run is still exported in full.
+        String equityCsv = getCsv("/api/backtest-runs/" + runId + "/equity-curve.csv",
+                "backtest-" + runId + "-equity-curve.csv");
+        assertEquals(3, equityCsv.split("\r\n").length);
+    }
+
+    @Test
+    void csvExportsOfAnotherUsersOrMissingRunAreNotFound() throws Exception {
+        OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
+        MvcResult created = mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
+                        .content(tradingRunJson(refs)))
+                .andReturn();
+        long runId = idFromLocation(created);
+
+        UserId other = TestUsers.create(jdbcTemplate, "brc-other-csv");
+        when(currentUser.id()).thenReturn(other);
+
+        mockMvc.perform(get("/api/backtest-runs/" + runId + "/equity-curve.csv")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/backtest-runs/" + runId + "/trades.csv")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/backtest-runs/999999999/equity-curve.csv")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/backtest-runs/999999999/trades.csv")).andExpect(status().isNotFound());
+    }
+
     // --- F: trades -----------------------------------------------------------------
 
     @Test

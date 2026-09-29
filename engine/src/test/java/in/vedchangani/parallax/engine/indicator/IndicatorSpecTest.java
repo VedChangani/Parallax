@@ -52,6 +52,22 @@ class IndicatorSpecTest {
     }
 
     @Test
+    void acceptsAtrAndRocSpecificationsWithPeriodOfOne() {
+        assertDoesNotThrow(() -> new IndicatorSpec(IndicatorType.ATR, 1));
+        assertDoesNotThrow(() -> new IndicatorSpec(IndicatorType.ROC, 1));
+        assertDoesNotThrow(() -> new IndicatorSpec(IndicatorType.ATR, 14));
+        assertDoesNotThrow(() -> new IndicatorSpec(IndicatorType.ROC, 12));
+    }
+
+    @Test
+    void rejectsAtrAndRocPeriodsBelowOne() {
+        assertThrows(IllegalArgumentException.class, () -> new IndicatorSpec(IndicatorType.ATR, 0));
+        assertThrows(IllegalArgumentException.class, () -> new IndicatorSpec(IndicatorType.ATR, -1));
+        assertThrows(IllegalArgumentException.class, () -> new IndicatorSpec(IndicatorType.ROC, 0));
+        assertThrows(IllegalArgumentException.class, () -> new IndicatorSpec(IndicatorType.ROC, -1));
+    }
+
+    @Test
     void acceptsSmaPeriodOfOne() {
         assertDoesNotThrow(() -> new IndicatorSpec(IndicatorType.SMA, 1));
     }

@@ -118,7 +118,7 @@ class BacktestRunPersistenceIT {
     private PerformanceMetrics metrics() {
         return new PerformanceMetrics(TRICKY_TOTAL_RETURN, OptionalDouble.empty(), OptionalDouble.of(0.05),
                 OptionalDouble.of(TRICKY_SHARPE_RATIO), 0.2, 0, OptionalDouble.empty(), OptionalDouble.empty(),
-                OptionalDouble.empty());
+                OptionalDouble.empty(), OptionalDouble.empty());
     }
 
     private BuyAndHoldBenchmark benchmark() {

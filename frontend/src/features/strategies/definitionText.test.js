@@ -11,6 +11,11 @@ describe('describeOperand', () => {
     expect(describeOperand(sma20)).toBe('SMA(20)');
   });
 
+  it('renders ATR and ROC as TYPE(period)', () => {
+    expect(describeOperand({ type: 'indicator', indicator: 'ATR', period: 14 })).toBe('ATR(14)');
+    expect(describeOperand({ type: 'indicator', indicator: 'ROC', period: 12 })).toBe('ROC(12)');
+  });
+
   it('renders Close', () => {
     expect(describeOperand({ type: 'close' })).toBe('Close');
   });
@@ -28,6 +33,17 @@ describe('describeConditionOneLine', () => {
   it('renders SMA(20) > SMA(50)', () => {
     const condition = { type: 'compare', left: sma20, operator: 'GT', right: sma50 };
     expect(describeConditionOneLine(condition)).toBe('SMA(20) > SMA(50)');
+  });
+
+  it('renders ATR(14) > 2 AND ROC(12) < -5', () => {
+    const condition = {
+      type: 'all',
+      conditions: [
+        { type: 'compare', left: { type: 'indicator', indicator: 'ATR', period: 14 }, operator: 'GT', right: { type: 'constant', value: '2' } },
+        { type: 'compare', left: { type: 'indicator', indicator: 'ROC', period: 12 }, operator: 'LT', right: { type: 'constant', value: '-5' } },
+      ],
+    };
+    expect(describeConditionOneLine(condition)).toBe('ATR(14) > 2 AND ROC(12) < -5');
   });
 
   it('renders an ALL group joined by AND', () => {

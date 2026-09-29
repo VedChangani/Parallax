@@ -54,7 +54,7 @@
  */
 
 /**
- * @typedef {'SMA' | 'EMA' | 'RSI'} IndicatorTypeDto
+ * @typedef {'SMA' | 'EMA' | 'RSI' | 'ATR' | 'ROC'} IndicatorTypeDto
  */
 
 /**
@@ -195,6 +195,7 @@
  * @property {number | null} winRate
  * @property {number | null} averageWin
  * @property {number | null} averageLoss
+ * @property {number | null} profitFactor - gross profit / |gross loss| over closed trades; null when no closed trade lost money
  */
 
 /**
@@ -244,6 +245,7 @@
  * @property {string} equity
  * @property {string} unrealizedPnl
  * @property {string} benchmarkEquity
+ * @property {number} drawdown - fraction >= 0 below the running peak equity (0.25 = 25% below peak; 0 at a new high)
  */
 
 /**

@@ -7,6 +7,7 @@ import { Skeleton } from '../../components/Skeleton.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
 import { AssumptionsPanel } from './AssumptionsPanel.jsx';
 import { BenchmarkComparison } from './BenchmarkComparison.jsx';
+import { DrawdownChart } from './charts/DrawdownChart.jsx';
 import { EquityCurve } from './charts/EquityCurve.jsx';
 import { PerformanceSummary } from './PerformanceSummary.jsx';
 import { ResearchInputsPanel } from './ResearchInputsPanel.jsx';
@@ -83,6 +84,13 @@ export function BacktestOverviewPage() {
           <EquityCurve points={equity.data} />
         )}
       </section>
+
+      {equity.data && equity.data.length > 0 ? (
+        <section>
+          <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">Drawdown</h2>
+          <DrawdownChart points={equity.data} />
+        </section>
+      ) : null}
 
       <section>
         <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-ink-muted">Benchmark</h2>

@@ -1,10 +1,13 @@
 package in.vedchangani.parallax.engine.indicator;
 
 /**
- * The V1 indicator types. All operate on close prices.
+ * The indicator types. SMA, EMA, RSI and ROC operate on close prices; ATR
+ * also uses high and low.
  */
 public enum IndicatorType {
     SMA,
     EMA,
-    RSI
+    RSI,
+    ATR,
+    ROC
 }

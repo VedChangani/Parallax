@@ -2084,6 +2084,72 @@ self-registration, D-39 frontend identity lifecycle, D-40 password
 change) is complete. No frontend UI calls this endpoint yet — that is
 deferred, not scheduled as a numbered batch.
 
+## D-41 Profit factor and the per-point drawdown series (V1.1 Batch 3)
+
+**Decision:** `PerformanceMetrics` gains a tenth component, `OptionalDouble
+profitFactor` (revising D-26's "nine components"; the structural test now
+pins ten), and a public static `drawdownSeries(List<EquityPoint>)`.
+
+- **Profit factor** = gross profit of winning closed trades / absolute
+  gross loss of losing closed trades. Closed trades only; win = P&L > 0,
+  loss = P&L < 0; breakeven and open trades contribute to neither.
+  Empty iff no losing closed trade (never `Infinity`); exactly `0.0` when
+  there are losses and no wins. Sums are exact `BigDecimal`; the single
+  division is in `double` (D-14). Invariant: present iff `averageLoss` is
+  present.
+- **Drawdown series** = `(runningPeak - equity) / runningPeak` per equity
+  point, a fraction `>= 0` (`0.0` at a new high), index-aligned with the
+  curve. `maxDrawdown` is now computed as the maximum of this series, with
+  identical arithmetic (bit-identical result). The frontend plots it
+  negated so zero is "no drawdown" and negative is drawdown.
+- **No migration, no new persisted column.** `profitFactor` is a pure
+  function of the closed trades, which the ledger replay already verifies,
+  so `BacktestResultReconstructor` uses the recomputed value (nothing
+  stored to compare) while every other metric is still compared exactly
+  against its persisted column (D-35). The drawdown series is derived on
+  read from the verified equity curve and exposed as a `drawdown` number on
+  each `GET /{id}/equity-curve` point, so dates align by construction.
+  Runs persisted before this batch therefore gain both, retroactively.
+- No change to `SEMANTICS_VERSION`: no simulation, execution or existing
+  metric semantics changed.
+
+## D-42 CSV export of a completed run (V1.1 Batch 4)
+
+**Decision:** two read-only endpoints on the run, `GET
+/api/backtest-runs/{id}/equity-curve.csv` and `.../trades.csv`, each behind
+the same owner-scoped, integrity-verifying `getRun` as every other read.
+`BacktestCsv` only formats the exact response records the JSON endpoints
+return, so a cell is character-for-character the JSON value; nothing is
+recomputed or reparsed, no backtest is re-run, and there is no new table,
+migration or persisted state.
+
+- **Format (RFC 4180):** UTF-8 without BOM; comma separator; `CRLF` after
+  every record including the last; one header row; a field is quoted only if
+  it contains a comma, quote, CR or LF (quotes doubled). ISO-8601 dates,
+  the backend's exact decimal strings for money, an empty field where a
+  value does not apply (never a placeholder). Deterministic: output is a
+  pure function of the run.
+- **Equity CSV** columns: `date, equity, cash, quantity, close,
+  market_value, cost_basis, realized_pnl, unrealized_pnl,
+  benchmark_equity, drawdown` (one row per equity point). `drawdown` is the
+  D-41 fraction `>= 0`, as a plain decimal without exponent or trailing
+  zeros (`0`, `0.25`, `0.0001`).
+- **Trades CSV** is a separate file, one row per trade, so the equity file
+  never repeats a trade across rows: `status, quantity, entry_order_id,
+  entry_date, entry_price, entry_commission, exit_order_id, exit_date,
+  exit_price, exit_commission, realized_pnl, total_commission,
+  total_slippage_cost, mark_date, mark_close, market_value,
+  unrealized_pnl`. An open trade leaves `exit_*` and `realized_pnl` empty and
+  fills `mark_*`/`market_value`/`unrealized_pnl`; a closed trade leaves
+  those four empty. Per-trade signal indicators are omitted (nested,
+  variable-length data does not fit a flat schema).
+- **Cells are never free text** (only numbers, dates, enum names), so there
+  is no spreadsheet formula-injection surface.
+- **Frontend:** `ExportActions` (two low-emphasis buttons in the run page
+  header) fetches the file on click and saves it unchanged through a
+  temporary object URL. The endpoints set `text/csv` on the response instead
+  of `produces`, so a 404/500 stays an ordinary ProblemDetail.
+
 ## Open questions
 
 Not yet decided; not blocking current implementation:

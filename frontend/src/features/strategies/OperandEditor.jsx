@@ -1,7 +1,7 @@
 import { newCloseOperand, newConstantOperand, newIndicatorOperand, operandError } from './definitionMapping.js';
 import { inputClasses, selectClasses } from './formStyles.js';
 
-const INDICATORS = ['SMA', 'EMA', 'RSI'];
+const INDICATORS = ['SMA', 'EMA', 'RSI', 'ATR', 'ROC'];
 
 /**
  * A reusable editor for one {@link import('./definitionMapping.js').operandToDto}

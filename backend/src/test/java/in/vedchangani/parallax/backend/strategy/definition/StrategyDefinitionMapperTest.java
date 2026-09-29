@@ -106,6 +106,57 @@ class StrategyDefinitionMapperTest {
         assertEquals(original, roundTripped);
     }
 
+    @Test
+    void toEngineMapsAtrAndRocIndicators() {
+        ConditionDto entry = compare(indicator(IndicatorTypeDto.ATR, 14), OperatorDto.GT, constant("2"));
+        ConditionDto exit = compare(indicator(IndicatorTypeDto.ROC, 12), OperatorDto.LT, constant("-5"));
+
+        StrategyDefinition def = mapper.toEngine(definition(entry, exit, FULL));
+
+        assertEquals(new Operand.IndicatorRef(new in.vedchangani.parallax.engine.indicator.IndicatorSpec(
+                in.vedchangani.parallax.engine.indicator.IndicatorType.ATR, 14)),
+                ((Condition.Compare) def.entryCondition()).left());
+        assertEquals(new Operand.IndicatorRef(new in.vedchangani.parallax.engine.indicator.IndicatorSpec(
+                in.vedchangani.parallax.engine.indicator.IndicatorType.ROC, 12)),
+                ((Condition.Compare) def.exitCondition()).left());
+    }
+
+    @Test
+    void toDtoIsInverseOfToEngineForAtrAndRoc() {
+        StrategyDefinitionDto original = definition(
+                compare(indicator(IndicatorTypeDto.ATR, 14), OperatorDto.GT, indicator(IndicatorTypeDto.ROC, 1)),
+                compare(indicator(IndicatorTypeDto.ROC, 12), OperatorDto.LT, constant("-5.0")),
+                FULL);
+
+        assertEquals(original, mapper.toDto(mapper.toEngine(original)));
+    }
+
+    @Test
+    void atrAndRocPeriodOneIsValid() {
+        ConditionDto entry = compare(indicator(IndicatorTypeDto.ATR, 1), OperatorDto.GT,
+                indicator(IndicatorTypeDto.ROC, 1));
+
+        StrategyDefinition def = mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL));
+
+        assertEquals(entry, mapper.toDto(def).entryCondition());
+    }
+
+    @Test
+    void atrPeriodZeroIsInvalid() {
+        ConditionDto entry = compare(indicator(IndicatorTypeDto.ATR, 0), OperatorDto.GT, constant("0"));
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL)));
+        assertEquals("entryCondition.left", e.path());
+    }
+
+    @Test
+    void rocPeriodZeroIsInvalid() {
+        ConditionDto entry = compare(constant("1"), OperatorDto.GT, indicator(IndicatorTypeDto.ROC, 0));
+        InvalidStrategyDefinitionException e = assertThrows(InvalidStrategyDefinitionException.class,
+                () -> mapper.toEngine(definition(entry, ALWAYS_FALSE, FULL)));
+        assertEquals("entryCondition.right", e.path());
+    }
+
     // --- path tracking -------------------------------------------------------
 
     @Test

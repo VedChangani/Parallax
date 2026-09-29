@@ -161,6 +161,20 @@ describe('operandError', () => {
     expect(operandError(newIndicatorOperand('EMA', '1'))).toBeUndefined();
   });
 
+  it('allows ATR and ROC at period 1 and rejects them below 1', () => {
+    expect(operandError(newIndicatorOperand('ATR', '1'))).toBeUndefined();
+    expect(operandError(newIndicatorOperand('ROC', '1'))).toBeUndefined();
+    expect(operandError(newIndicatorOperand('ATR', '0'))).toBeTruthy();
+    expect(operandError(newIndicatorOperand('ROC', '0'))).toBeTruthy();
+    expect(operandError(newIndicatorOperand('ATR', '14.5'))).toBeTruthy();
+    expect(operandError(newIndicatorOperand('ROC', ''))).toBeTruthy();
+  });
+
+  it('serializes ATR and ROC operands with a numeric period', () => {
+    expect(operandToDto(newIndicatorOperand('ATR', '14'))).toEqual({ type: 'indicator', indicator: 'ATR', period: 14 });
+    expect(operandToDto(newIndicatorOperand('ROC', '12'))).toEqual({ type: 'indicator', indicator: 'ROC', period: 12 });
+  });
+
   it('accepts a well-formed constant and rejects a malformed one', () => {
     expect(operandError(newConstantOperand('70.5'))).toBeUndefined();
     expect(operandError(newConstantOperand('abc'))).toBeTruthy();
@@ -259,6 +273,22 @@ describe('requiredLookbackBars (I-3)', () => {
       { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
     );
     expect(requiredLookbackBars(definition)).toBe(15);
+  });
+
+  it('is the ATR period exactly - one true range per bar, so ready after that many bars', () => {
+    const definition = definitionWith(
+      { type: 'compare', left: indicatorRef('ATR', 14), operator: 'GT', right: { type: 'constant', value: '2' } },
+      { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
+    );
+    expect(requiredLookbackBars(definition)).toBe(14);
+  });
+
+  it('is the ROC period plus one - ROC needs the close `period` bars ago', () => {
+    const definition = definitionWith(
+      { type: 'compare', left: indicatorRef('ROC', 12), operator: 'GT', right: { type: 'constant', value: '0' } },
+      { type: 'compare', left: { type: 'close' }, operator: 'LT', right: { type: 'constant', value: '0' } },
+    );
+    expect(requiredLookbackBars(definition)).toBe(13);
   });
 
   it('takes the maximum across every indicator in both conditions, including nested groups', () => {

@@ -11,6 +11,10 @@ import { ApiError } from './apiError.js';
  *   `application/x-www-form-urlencoded` body (mutually exclusive with
  *   `json`/`formData`) - only `POST /api/auth/login` uses this today.
  * @property {AbortSignal} [signal]
+ * @property {'json' | 'text'} [responseType] - how a *successful* body is
+ *   read: `'json'` (default) parses it as JSON; `'text'` returns it as a
+ *   string exactly as received (used for CSV exports). An error response
+ *   is always a JSON ProblemDetail either way.
  * @property {boolean} [skipUnauthorizedHandling] - D-39: a 401 from this
  *   call never invokes the registered unauthorized handler. Used only by
  *   `api/auth.js`'s `getMe`/`login`: a bootstrap identity check and a
@@ -78,7 +82,16 @@ function readCookie(name) {
  * @throws {ApiError}
  */
 export async function request(path, options = {}) {
-  const { method = 'GET', headers = {}, json, formData, form, signal, skipUnauthorizedHandling = false } = options;
+  const {
+    method = 'GET',
+    headers = {},
+    json,
+    formData,
+    form,
+    signal,
+    responseType = 'json',
+    skipUnauthorizedHandling = false,
+  } = options;
 
   const bodyOptionCount = [json, formData, form].filter((value) => value !== undefined).length;
   if (bodyOptionCount > 1) {
@@ -115,6 +128,10 @@ export async function request(path, options = {}) {
       throw ApiError.aborted();
     }
     throw ApiError.network(error?.message ?? 'network request failed');
+  }
+
+  if (response.ok && responseType === 'text') {
+    return response.text();
   }
 
   const payload = await parseBody(response);

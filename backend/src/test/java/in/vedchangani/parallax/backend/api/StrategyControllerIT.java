@@ -63,6 +63,46 @@ class StrategyControllerIT {
         when(currentUser.id()).thenReturn(owner);
     }
 
+    // --- ATR / ROC -----------------------------------------------------------
+
+    @Test
+    void atrAndRocDefinitionsCreateAndReadBackUnchanged() throws Exception {
+        String definition =
+                "{\"entryCondition\":{\"type\":\"compare\",\"left\":{\"type\":\"indicator\","
+                        + "\"indicator\":\"ATR\",\"period\":14},\"operator\":\"GT\","
+                        + "\"right\":{\"type\":\"constant\",\"value\":\"2\"}},"
+                        + "\"exitCondition\":{\"type\":\"compare\",\"left\":{\"type\":\"indicator\","
+                        + "\"indicator\":\"ROC\",\"period\":12},\"operator\":\"LT\","
+                        + "\"right\":{\"type\":\"constant\",\"value\":\"-5\"}},"
+                        + "\"positionSizing\":{\"type\":\"cashFraction\",\"fraction\":\"1\"}}";
+
+        MvcResult created = mockMvc.perform(post("/api/strategies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createRequestJson(uniqueName(), "atr-roc", definition)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        long id = idFromLocation(created);
+
+        mockMvc.perform(get("/api/strategies/" + id + "/versions/1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.definition.entryCondition.left.indicator").value("ATR"))
+                .andExpect(jsonPath("$.definition.entryCondition.left.period").value(14))
+                .andExpect(jsonPath("$.definition.exitCondition.left.indicator").value("ROC"))
+                .andExpect(jsonPath("$.definition.exitCondition.left.period").value(12));
+    }
+
+    @Test
+    void atrPeriodZeroIsUnprocessable() throws Exception {
+        String definition = SIMPLE_DEFINITION.replace(
+                "\"left\":{\"type\":\"close\"},\"operator\":\"GT\"",
+                "\"left\":{\"type\":\"indicator\",\"indicator\":\"ATR\",\"period\":0},\"operator\":\"GT\"");
+
+        mockMvc.perform(post("/api/strategies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createRequestJson(uniqueName(), "bad", definition)))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
     // --- happy path ----------------------------------------------------------
 
     @Test

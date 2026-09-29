@@ -239,6 +239,8 @@ public final class StrategyDefinitionMapper {
             case SMA -> IndicatorType.SMA;
             case EMA -> IndicatorType.EMA;
             case RSI -> IndicatorType.RSI;
+            case ATR -> IndicatorType.ATR;
+            case ROC -> IndicatorType.ROC;
         };
     }
 
@@ -412,6 +414,8 @@ public final class StrategyDefinitionMapper {
             case SMA -> IndicatorTypeDto.SMA;
             case EMA -> IndicatorTypeDto.EMA;
             case RSI -> IndicatorTypeDto.RSI;
+            case ATR -> IndicatorTypeDto.ATR;
+            case ROC -> IndicatorTypeDto.ROC;
         };
     }
 }

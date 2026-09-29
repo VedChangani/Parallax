@@ -3,6 +3,7 @@ import {
   averageLossExplanation,
   averageWinExplanation,
   cagrExplanation,
+  profitFactorExplanation,
   sharpeExplanation,
   volatilityExplanation,
   winRateExplanation,
@@ -99,5 +100,16 @@ describe('averageLossExplanation', () => {
 
   it('explains a null average loss as no losing trades when some trades did close', () => {
     expect(averageLossExplanation({ ...BASE_METRICS, averageLoss: null, closedTradeCount: 3 })).toMatch(/No losing trades/);
+  });
+});
+
+describe('profitFactorExplanation', () => {
+  it('returns undefined when profit factor is present, including an exact zero', () => {
+    expect(profitFactorExplanation({ ...BASE_METRICS, profitFactor: 1.5 })).toBeUndefined();
+    expect(profitFactorExplanation({ ...BASE_METRICS, profitFactor: 0 })).toBeUndefined();
+  });
+
+  it('explains a null profit factor as needing a losing closed trade', () => {
+    expect(profitFactorExplanation({ ...BASE_METRICS, profitFactor: null })).toMatch(/losing closed trade/);
   });
 });
