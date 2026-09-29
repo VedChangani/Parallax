@@ -1,7 +1,6 @@
 import { EmptyState } from './EmptyState.jsx';
 import { PageHeader } from './PageHeader.jsx';
 
-/** Rendered for any route the router doesn't recognize. */
 export function NotFound() {
   return (
     <div>

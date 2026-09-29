@@ -14,20 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * D-32 {@link DatasetContent} tests: the content-hash byte contract, price
- * canonicalization, and every {@link DatasetContent#verify} failure mode.
- * No Spring context.
- */
 class DatasetContentTest {
 
-    /**
-     * Independently computed outside this codebase ({@code sha256sum} over
-     * the exact byte payload {@code "PARALLAX-BARS/1\nAAPL\n2024-01-02,
-     * 100,105,99,104,1000\n2024-01-03,104,110,103,108,2000\n"}, UTF-8,
-     * every line including the last ending in a single LF) — this pins the
-     * byte contract, not merely round-trip self-consistency.
-     */
     private static final String GOLDEN_HASH =
             "27837be1306108d6059a414ef7635511cc15e234b6abc89c1eaa3e3573524fb7";
 
@@ -96,19 +84,14 @@ class DatasetContentTest {
         assertEquals(new BigDecimal("100"), DatasetContent.canonicalPrice(new BigDecimal("100.00")));
         assertEquals(0, DatasetContent.canonicalPrice(new BigDecimal("100.00")).scale());
         assertEquals(new BigDecimal("1.5"), DatasetContent.canonicalPrice(new BigDecimal("1.50")));
-        // stripTrailingZeros() on an integer-valued BigDecimal like 1E+2 can produce a
-        // negative scale; canonicalPrice must clamp it back to a non-negative scale.
         assertEquals(0, DatasetContent.canonicalPrice(new BigDecimal("100")).scale());
     }
-
-    // --- verify() ----------------------------------------------------------------
 
     @Test
     void verifySucceedsForMatchingStoredMetadata() {
         DatasetContent content = DatasetContent.of(twoBarSeries());
         DatasetContent.verify(twoBarSeries(), content.barCount(), content.firstDate(), content.lastDate(),
                 content.contentHash());
-        // no exception
     }
 
     @Test

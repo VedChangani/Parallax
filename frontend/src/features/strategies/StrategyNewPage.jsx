@@ -2,7 +2,6 @@ import { useNavigate } from 'react-router';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { StrategyCreateForm } from './StrategyCreateForm.jsx';
 
-/** The "New strategy" page: metadata plus the visual Strategy Builder (D-31). */
 export function StrategyNewPage() {
   const navigate = useNavigate();
 

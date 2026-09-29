@@ -95,7 +95,6 @@ describe('useApiResource', () => {
 
     await waitFor(() => expect(fetcher).toHaveBeenCalled());
 
-    // Simulates a login/logout/401 elsewhere in the app while this request is still in flight.
     immutableCache.bumpEpoch();
 
     await act(async () => {

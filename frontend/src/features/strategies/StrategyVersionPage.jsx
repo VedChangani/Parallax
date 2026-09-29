@@ -11,17 +11,6 @@ import { useApiResource } from '../../hooks/useApiResource.js';
 import { formatInstantDate } from '../../lib/format.js';
 import { DefinitionPreview } from './DefinitionPreview.jsx';
 
-/**
- * One immutable strategy version (D-31) - read-only. A version can never be
- * edited directly: the only way forward is "Create new version", which
- * starts a fresh, editable copy of *this* definition at
- * `/strategies/{id}/versions/new` (passed via router state so the route
- * structure itself stays untouched, per D-31 §17).
- *
- * @param {object} props
- * @param {number} props.strategyId
- * @param {number} props.versionNumber
- */
 export function StrategyVersionPage({ strategyId, versionNumber }) {
   const navigate = useNavigate();
 

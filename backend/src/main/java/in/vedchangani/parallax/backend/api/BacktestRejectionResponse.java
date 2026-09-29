@@ -8,17 +8,6 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * The response shape for one reconstructed, integrity-verified engine
- * {@link OrderRejection} (D-34 Batch 3). {@code orderId}/{@code
- * executionDate}/{@code quantity}/{@code requiredCash}/{@code
- * availableCash} are {@code null} for {@link OrderRejection.ZeroQuantity}
- * (no order was ever created) and all present for {@link
- * OrderRejection.InsufficientCash} — matching D-21's own shape exactly, not
- * a new representation. {@code seq} is the rejection's 1-based position in
- * the already integrity-verified, exact-engine-append-order list — never
- * independently computed or re-sorted here.
- */
 public record BacktestRejectionResponse(int seq, RejectionReason reason, Integer orderId, LocalDate executionDate,
                                          Long quantity, String requiredCash, String availableCash,
                                          LocalDate signalDate, String signalClose,

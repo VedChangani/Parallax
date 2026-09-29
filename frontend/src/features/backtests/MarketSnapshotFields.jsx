@@ -6,23 +6,6 @@ import { LoadingState } from '../../components/LoadingState.jsx';
 import { ADJUSTMENT_BASIS_LABELS, SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { selectClasses } from '../strategies/formStyles.js';
 
-/**
- * The "Market" section of the New Backtest form (D-34 Batch 4): choose an
- * existing market, then choose one of its immutable data snapshots. Never
- * creates a market or loads bars - both selects are populated purely from
- * already-fetched metadata (`DatasetResponse`/`DatasetVersionResponse`),
- * and the coverage panel renders `snapshotDetail` (a cached, immutable
- * single-snapshot fetch - see BacktestNewPage.jsx).
- *
- * @param {object} props
- * @param {{data?: import('../../api/types.js').DatasetResponse[], loading: boolean, error?: import('../../api/apiError.js').ApiError, reload: () => void}} props.markets
- * @param {number | undefined} props.marketId
- * @param {(id: number) => void} props.onMarketChange
- * @param {{data?: import('../../api/types.js').DatasetVersionResponse[], loading: boolean, error?: import('../../api/apiError.js').ApiError}} props.versions
- * @param {number | undefined} props.snapshotVersion
- * @param {(version: number) => void} props.onSnapshotChange
- * @param {{data?: import('../../api/types.js').DatasetVersionResponse, loading: boolean, error?: import('../../api/apiError.js').ApiError}} props.snapshotDetail
- */
 export function MarketSnapshotFields({
   markets,
   marketId,

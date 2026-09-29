@@ -29,23 +29,6 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.when;
 
-/**
- * D-32 §3: a single upload above {@code
- * spring.servlet.multipart.max-file-size} is rejected with 413. This needs
- * a real HTTP request (MockMvc bypasses multipart size enforcement), so it
- * runs against a real random port using the JDK's own {@link HttpClient} —
- * no additional test dependency required.
- *
- * <p>Since D-37, every {@code /api/**} request also needs a real
- * authenticated session and CSRF token — {@code @MockitoBean CurrentUser}
- * only substitutes which owner a controller resolves, it does not satisfy
- * Spring Security's filter chain for a real socket-level request the way
- * it does for a {@code MockMvc} request (see {@code
- * AuthenticatedMockMvcConfig}). {@link #login()} performs the real
- * bootstrap-CSRF-cookie / login round trip once per test, directly setting
- * this owner's {@code password_hash} rather than going through the
- * (not-yet-implemented) registration endpoint or the startup claim runner.
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration.class)
 class DatasetUploadSizeLimitIT {
@@ -85,7 +68,7 @@ class DatasetUploadSizeLimitIT {
         long datasetId = createDataset();
 
         String boundary = "----D32Boundary" + System.nanoTime();
-        byte[] oversized = new byte[5 * 1024 * 1024 + 1]; // one byte over the 5MB limit
+        byte[] oversized = new byte[5 * 1024 * 1024 + 1];
 
         HttpRequest request = authenticated(HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + "/api/datasets/" + datasetId + "/versions"))
@@ -99,12 +82,6 @@ class DatasetUploadSizeLimitIT {
         assertEquals(413, response.statusCode());
     }
 
-    /**
-     * Establishes the CSRF cookie anonymously via {@code GET /api/auth/me}
-     * (D-37: the bootstrap request), then logs in — capturing the rotated
-     * session and CSRF cookies from the login response for every
-     * subsequent request in this test.
-     */
     private void login(String username) throws Exception {
         HttpRequest bootstrap = HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + "/api/auth/me"))
@@ -125,7 +102,6 @@ class DatasetUploadSizeLimitIT {
         assertEquals(200, loginResponse.statusCode(), "login must succeed for this test's fixture to work at all");
     }
 
-    /** Attaches the accumulated session/CSRF cookies and the CSRF header to a request builder. */
     private HttpRequest.Builder authenticated(HttpRequest.Builder builder) {
         String cookieHeader = cookies.entrySet().stream()
                 .map(entry -> entry.getKey() + "=" + entry.getValue())

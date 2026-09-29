@@ -18,8 +18,6 @@ class BacktestConfigTest {
         return new BacktestConfig(initialCapital, commission, slippage, start, end);
     }
 
-    // --- valid bounds ------------------------------------------------------
-
     @Test
     void smallPositiveInitialCapitalAccepted() {
         config(new BigDecimal("0.01"), BigDecimal.ZERO, BigDecimal.ZERO, START, END);
@@ -53,8 +51,6 @@ class BacktestConfigTest {
         assertEquals(START, cfg.startDate());
         assertEquals(END, cfg.endDate());
     }
-
-    // --- rejected values -----------------------------------------------------
 
     @Test
     void zeroInitialCapitalRejected() {
@@ -112,8 +108,6 @@ class BacktestConfigTest {
                 () -> config(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO, START, null));
     }
 
-    // --- canonicalization ----------------------------------------------------
-
     @Test
     void tenThousandEqualsTenThousandPointZeroZero() {
         BacktestConfig a = config(new BigDecimal("10000"), BigDecimal.ZERO, BigDecimal.ZERO, START, END);
@@ -139,12 +133,8 @@ class BacktestConfigTest {
         assertEquals(new BigDecimal("5"), cfg.commissionPerFill());
     }
 
-    // --- OQ2 / D-23 assumptions ------------------------------------------------
-
     @Test
     void slippageBoundGuaranteesPositiveSellFillPrice() {
-        // For any valid slippageRate (< 1) and any valid positive open,
-        // open * (1 - slippageRate) must remain strictly positive.
         BigDecimal open = new BigDecimal("0.01");
         BigDecimal maxSlippage = new BigDecimal("0.999999999");
         BigDecimal sellFillPrice = open.multiply(BigDecimal.ONE.subtract(maxSlippage));

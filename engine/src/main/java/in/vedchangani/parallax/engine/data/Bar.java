@@ -4,12 +4,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * A single validated daily OHLCV observation.
- *
- * <p>Invalid input fails fast at construction. A {@code Bar} is never repaired,
- * clamped, or reordered by the engine.
- */
 public record Bar(LocalDate date, BigDecimal open, BigDecimal high, BigDecimal low, BigDecimal close, long volume) {
 
     public Bar {

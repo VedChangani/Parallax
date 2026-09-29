@@ -9,19 +9,6 @@ import { useApiResource } from '../../hooks/useApiResource.js';
 import { definitionHasErrors, definitionToDto, dtoToDefinitionState } from './definitionMapping.js';
 import { StrategyBuilder } from './StrategyBuilder.jsx';
 
-/**
- * Creates a new immutable strategy version (D-31 §17: `POST
- * /api/strategies/{id}/versions`). The route itself carries no source
- * version number - it always starts from the strategy's latest version,
- * unless the caller navigated here from a specific older version's own
- * "Create new version" action, which passes `{ fromVersion }` via router
- * state (see StrategyVersionPage.jsx) so the approved route structure
- * never needs a query parameter. There is never a version-number input:
- * the backend allocates `latest + 1` itself.
- *
- * @param {object} props
- * @param {number} props.strategyId
- */
 export function StrategyVersionNewPage({ strategyId }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -42,12 +29,6 @@ export function StrategyVersionNewPage({ strategyId }) {
     cacheKey: sourceVersionNumber ? `/api/strategies/${strategyId}/versions/${sourceVersionNumber}` : undefined,
   });
 
-  // Seeded exactly once, the moment the source version's definition arrives -
-  // never re-seeded afterward, so the user's in-progress edits are never
-  // silently discarded by a later refetch. This adjusts state during
-  // rendering (React's documented pattern for deriving state from a prop
-  // that arrives asynchronously) rather than in an effect, since the seed
-  // must happen atomically with this render, not one render later.
   const [definition, setDefinition] = useState(null);
   const [seededFrom, setSeededFrom] = useState(null);
   if (sourceVersion.data && seededFrom !== sourceVersion.data) {
@@ -87,8 +68,6 @@ export function StrategyVersionNewPage({ strategyId }) {
       const version = await createStrategyVersion(strategyId, definitionToDto(definition));
       navigate(`/strategies/${strategyId}/versions/${version.versionNumber}`);
     } catch (error) {
-      // Preserve the entered builder state on failure (no reset) - only
-      // report the error, per D-31 §17.
       if (typeof error.field === 'string') {
         setDefinitionError(error.detail ?? error.title ?? 'This strategy definition is invalid.');
       } else {

@@ -1,27 +1,3 @@
-/**
- * @template T
- * @typedef {object} DataTableColumn
- * @property {string} key
- * @property {string} header
- * @property {(row: T) => import('react').ReactNode} [render] - defaults to
- *   `row[column.key]`
- * @property {'left' | 'right'} [align] - right-align a numeric column
- */
-
-/**
- * A generic, accessible data table with a financial-data-appropriate
- * treatment: compact rows, crisp separators, a strong header, and
- * right-alignable, tabular-numeral columns for numeric values.
- * Feature-specific tables (trades, rejections, equity curve, ...) are
- * built on top of this, not here.
- *
- * @template T
- * @param {object} props
- * @param {DataTableColumn<T>[]} props.columns
- * @param {T[]} props.rows
- * @param {(row: T) => string | number} props.getRowKey
- * @param {string} [props.caption]
- */
 export function DataTable({ columns, rows, getRowKey, caption }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border bg-surface">

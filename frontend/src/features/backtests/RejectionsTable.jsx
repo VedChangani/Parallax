@@ -26,16 +26,6 @@ const COLUMNS = [
   },
 ];
 
-/**
- * The rejected-order table (D-34 Batch 5 §14): fields other than
- * `seq`/`reason`/signal are `null` for a `ZERO_QUANTITY` rejection (no
- * order was ever created) and rendered as "—", never a fabricated value.
- * Rows are shown in the exact engine append order the backend already
- * returns - never re-sorted here.
- *
- * @param {object} props
- * @param {import('../../api/types.js').BacktestRejectionResponse[]} props.rejections
- */
 export function RejectionsTable({ rejections }) {
   if (rejections.length === 0) {
     return <p className="text-sm text-ink-secondary">No orders were rejected.</p>;

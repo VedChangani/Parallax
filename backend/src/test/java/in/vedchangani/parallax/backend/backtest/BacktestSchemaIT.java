@@ -18,13 +18,6 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * D-34 Batch 1 schema-level proof, against real PostgreSQL (Testcontainers):
- * the database-layer immutability triggers on the four new tables, every
- * CHECK constraint, and the composite foreign keys tying a run's strategy
- * and dataset identity to their immutable versions and owners. Mirrors
- * D-31/D-32's own {@code StrategySchemaIT}/{@code DatasetSchemaIT}.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class BacktestSchemaIT {
@@ -41,8 +34,6 @@ class BacktestSchemaIT {
     private BacktestFixtures.Inputs inputs(String label) {
         return BacktestFixtures.createInputs(jdbcTemplate, strategyService, datasetService, label);
     }
-
-    // --- valid row + insert helper -----------------------------------------
 
     private Map<String, Object> defaultValues(BacktestFixtures.Inputs in) {
         Map<String, Object> values = new LinkedHashMap<>();
@@ -90,8 +81,6 @@ class BacktestSchemaIT {
     private void assertRejected(BacktestFixtures.Inputs in, Map<String, Object> overrides) {
         assertThrows(DataAccessException.class, () -> insertRun(in, overrides));
     }
-
-    // --- immutability triggers ----------------------------------------------
 
     @Test
     void updatingABacktestRunRowIsRejectedByTheDatabase() {
@@ -189,8 +178,6 @@ class BacktestSchemaIT {
         assertThrows(DataAccessException.class, () -> jdbcTemplate.execute("truncate table backtest_rejection"));
     }
 
-    // --- CHECK constraints: backtest_run --------------------------------------
-
     @Test
     void hashFormatCheckRejectsANonHexStrategyHash() {
         assertRejected(inputs("schema"), Map.of("strategy_definition_hash", "not-a-valid-hash"));
@@ -241,8 +228,6 @@ class BacktestSchemaIT {
     void sharpeRatioMustBeFiniteWhenPresent_rejectsNaN() {
         assertRejected(inputs("schema"), Map.of("sharpe_ratio", Double.NaN));
     }
-
-    // --- CHECK constraints: backtest_fill / backtest_rejection ----------------
 
     @Test
     void fillSignalTypeCheckRejectsAnUnknownValue() {
@@ -303,8 +288,6 @@ class BacktestSchemaIT {
                 """, runId));
     }
 
-    // --- composite foreign keys -----------------------------------------------
-
     @Test
     void mismatchedStrategyHashIsRejected() {
         assertRejected(inputs("schema"), Map.of("strategy_definition_hash", "0".repeat(64)));
@@ -319,7 +302,6 @@ class BacktestSchemaIT {
     void wrongOwnerStrategyIsRejected() {
         BacktestFixtures.Inputs a = inputs("schema-a");
         BacktestFixtures.Inputs b = inputs("schema-b");
-        // b's owner, but a's strategy identity: fk_backtest_run_strategy (strategy_id, owner_id) fails.
         Map<String, Object> overrides = new LinkedHashMap<>();
         overrides.put("owner_id", b.owner().value());
         overrides.put("dataset_id", b.datasetId());
@@ -332,7 +314,6 @@ class BacktestSchemaIT {
     void wrongOwnerDatasetIsRejected() {
         BacktestFixtures.Inputs a = inputs("schema-a");
         BacktestFixtures.Inputs b = inputs("schema-b");
-        // b's owner, but a's dataset identity: fk_backtest_run_dataset (dataset_id, owner_id) fails.
         Map<String, Object> overrides = new LinkedHashMap<>();
         overrides.put("owner_id", b.owner().value());
         overrides.put("strategy_id", b.strategyId());
@@ -359,15 +340,6 @@ class BacktestSchemaIT {
                 in.datasetId(), in.datasetVersionNumber()));
     }
 
-    /**
-     * Phase 9 Batch 2c §14: a {@code strategy_version} row a real
-     * {@code backtest_run} references is rejected on UPDATE by the same
-     * D-31 immutability trigger every {@code strategy_version} row already
-     * carries (unconditionally, referenced or not) - proving the specific
-     * invariant this batch's read-time verification depends on: a
-     * <em>referenced</em> version cannot silently drift out from under an
-     * existing run.
-     */
     @Test
     void updatingAReferencedStrategyVersionIsRejectedByTheDatabase() {
         BacktestFixtures.Inputs in = inputs("schema");
@@ -385,8 +357,6 @@ class BacktestSchemaIT {
                 "update dataset_version set content_hash = ? where dataset_id = ? and version_number = ?",
                 "0".repeat(64), in.datasetId(), in.datasetVersionNumber()));
     }
-
-    // --- FK integrity: child rows require an existing parent run --------------
 
     @Test
     void anEquityPointCannotExistWithoutItsParentRun() {
@@ -412,8 +382,6 @@ class BacktestSchemaIT {
                 values (-1, 1, 'ZERO_QUANTITY', '2024-01-02', 100, '[]'::jsonb)
                 """));
     }
-
-    // --- shared helpers --------------------------------------------------------
 
     private void insertSampleFill(long runId) {
         jdbcTemplate.update("""

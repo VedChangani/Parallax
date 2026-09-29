@@ -28,13 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-31 {@link StrategyService} behavior against real PostgreSQL
- * (Testcontainers): version allocation, its concurrency guarantees, and
- * metadata/version-immutability interplay. No test relies on transaction
- * rollback for isolation — every scenario commits real rows, so
- * concurrency scenarios observe genuinely committed state.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class StrategyServiceIT {
@@ -242,8 +235,6 @@ class StrategyServiceIT {
         StrategySummary strategy = strategyService.createStrategy(owner, name(), "", StrategyFixtures.simple());
         assertEquals(1, strategy.latestVersionNumber());
 
-        // Out-of-band: insert version 2 directly, bypassing the service, so the parent
-        // row's latest_version_number stays at 1 while version_number 2 already exists.
         var canonical = codec.encode(StrategyFixtures.alternative());
         jdbcTemplate.update(
                 "insert into strategy_version (strategy_id, version_number, definition, "
@@ -253,7 +244,6 @@ class StrategyServiceIT {
         assertThrows(StrategyVersionConflictException.class,
                 () -> strategyService.createVersion(owner, strategy.id(), StrategyFixtures.simple()));
 
-        // The failed transaction rolled back in full: latest_version_number is unchanged.
         StrategySummary reloaded = strategyService.getStrategy(owner, strategy.id());
         assertEquals(1, reloaded.latestVersionNumber());
     }
@@ -276,8 +266,6 @@ class StrategyServiceIT {
         assertTrue(updated.name().endsWith("-renamed"));
         assertEquals("changed description", updated.description());
     }
-
-    // --- fixtures ----------------------------------------------------------
 
     private static final AtomicLong NAME_COUNTER = new AtomicLong();
 

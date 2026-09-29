@@ -1,16 +1,5 @@
 import { formatMoney } from '../../lib/format.js';
 
-/**
- * A compact "date · close" signal snapshot with its indicator values tucked
- * behind a native disclosure - shared by the Trades and Rejections views
- * (D-34 Batch 5 §12/§14). Indicator values are rendered exactly as the
- * backend returns them (`Double.toString`), never rounded or reformatted.
- *
- * @param {object} props
- * @param {string} props.date
- * @param {string} props.close
- * @param {import('../../api/types.js').BacktestIndicatorValueResponse[]} props.indicators
- */
 export function IndicatorSnapshot({ date, close, indicators }) {
   return (
     <div className="text-xs">

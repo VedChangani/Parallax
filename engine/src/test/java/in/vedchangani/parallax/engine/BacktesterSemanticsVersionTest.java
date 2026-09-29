@@ -8,12 +8,6 @@ import java.lang.reflect.Modifier;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins {@link Backtester#SEMANTICS_VERSION} (D-34): the persisted engine
- * identity a future {@code BacktestRun} row records alongside its inputs.
- * A future change to this value is a deliberate signal that engine
- * behavior changed, not an accidental regression.
- */
 class BacktesterSemanticsVersionTest {
 
     @Test

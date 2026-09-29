@@ -35,11 +35,6 @@ describe('BacktestRunLayout (N6)', () => {
     vi.restoreAllMocks();
   });
 
-  // Empty/whitespace-only segments are excluded here: react-router itself
-  // never matches an empty ":runId" segment against this route at all (a
-  // router-level "no match", handled by the app's own top-level "*" ->
-  // NotFound route, not this layout) - not a meaningful case for this
-  // isolated single-route test tree.
   it.each(['not-a-number', 'NaN', '1.5', '-1', '0', '01'])(
     'renders a clean not-found state and makes no API request for an invalid runId (%s)',
     async (invalidRunId) => {

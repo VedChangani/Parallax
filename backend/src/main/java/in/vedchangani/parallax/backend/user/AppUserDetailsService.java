@@ -5,15 +5,6 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
-/**
- * Spring Security's {@link UserDetailsService}, backed by {@link
- * AppUserRepository} (D-37). An unknown username and a username with no
- * {@code password_hash} (never claimed — e.g. the seeded {@code dev} user)
- * both throw {@link UsernameNotFoundException}: {@code
- * DaoAuthenticationProvider} maps either one (and a wrong password) to the
- * same {@code BadCredentialsException}, so a login response can never
- * reveal which of the three actually happened.
- */
 @Service
 public class AppUserDetailsService implements UserDetailsService {
 

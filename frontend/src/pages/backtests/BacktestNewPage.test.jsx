@@ -55,12 +55,6 @@ const VALID_CONFIG_INPUT = {
   endDate: '2022-01-01',
 };
 
-/**
- * @param {object} [overrides]
- * @param {Array} [overrides.markets]
- * @param {Array} [overrides.strategies]
- * @param {(url: string, init: object) => Response | undefined} [overrides.postHandler]
- */
 function mockFetch({ markets = [MARKET], strategies = [STRATEGY], postHandler } = {}) {
   return vi.fn((url, init = {}) => {
     if (init.method === 'POST' && url === '/api/backtest-runs') {
@@ -137,9 +131,6 @@ describe('BacktestNewPage', () => {
     globalThis.fetch = mockFetch();
     renderPage();
 
-    // DEFINITION_V4 needs SMA(50) - the largest of SMA(20)/SMA(50)/RSI(14)+1 -
-    // and the default start date is the snapshot's own first date (2018-01-01),
-    // so there is no lookback at all until the user moves it.
     expect(await screen.findByText(/needs at least 50 prior bars/)).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2019-01-01' } });
@@ -168,8 +159,6 @@ describe('BacktestNewPage', () => {
 
   it('preselects the strategy carried in router state (e.g. from a strategy\'s own "Create backtest" link)', async () => {
     const strategy2 = { id: 43, name: 'Mean Reversion', description: '', latestVersionNumber: 3, createdAt: '2024-01-01T00:00:00Z' };
-    // strategy2 is listed first, so this proves the preselection - not the
-    // default first-list-entry fallback - is what picks Momentum Cross.
     globalThis.fetch = mockFetch({ strategies: [strategy2, STRATEGY] });
     renderPageAt({ pathname: '/backtests/new', state: { strategyId: 42 } });
 

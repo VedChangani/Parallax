@@ -29,17 +29,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-33 Batch 3 {@link DatasetService#createVersionFromAlphaVantage}
- * behavior against real PostgreSQL (Testcontainers): every scenario uses a
- * {@link FakeMarketDataProvider} in place of the real Alpha Vantage HTTP
- * adapter (never a real network call), and constructs its own {@link
- * DatasetService} directly (bypassing the Spring-managed {@code
- * AlphaVantageMarketDataProvider} bean) so each test controls exactly what
- * the "provider" returns or throws. Mirrors {@code DatasetServiceIT}'s own
- * style; parser/HTTP-adapter behavior itself is D-33 Batch 1/2's concern
- * and is not retested here.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class DatasetAlphaVantageImportIT {
@@ -68,8 +57,6 @@ class DatasetAlphaVantageImportIT {
     }
 
     private DatasetService plainCsvService() {
-        // No Alpha Vantage call is expected on this path; a provider that fails loudly if
-        // ever invoked keeps that assumption honest.
         return serviceWith((symbol, depth) -> {
             throw new AssertionError("provider must not be called for a CSV-only test");
         });
@@ -229,7 +216,6 @@ class DatasetAlphaVantageImportIT {
         return sampleDailyBars(HistoryDepth.COMPACT);
     }
 
-    /** Mirrors the real Alpha Vantage parser's own {@code sourceDetail} convention. */
     private static DailyBars sampleDailyBars(HistoryDepth depth) {
         String sourceDetail = depth == HistoryDepth.COMPACT
                 ? "TIME_SERIES_DAILY;outputsize=compact"
@@ -237,12 +223,6 @@ class DatasetAlphaVantageImportIT {
         return new DailyBars(sampleBars(), sourceDetail);
     }
 
-    /**
-     * The same logical bars as {@link DatasetFixtures#simpleCsv()}, but with
-     * non-canonical price scales — exactly like a real Alpha Vantage response
-     * (e.g. {@code "100.0000"}) — so tests exercise {@code DatasetService}'s
-     * own canonicalization rather than assuming pre-canonicalized input.
-     */
     private static List<Bar> sampleBars() {
         return List.of(
                 new Bar(LocalDate.of(2024, 1, 2), new BigDecimal("100.0000"), new BigDecimal("105.0000"),
@@ -251,11 +231,6 @@ class DatasetAlphaVantageImportIT {
                         new BigDecimal("103.0000"), new BigDecimal("108.0000"), 2000));
     }
 
-    /**
-     * A minimal, non-network {@link MarketDataProvider} test double:
-     * records every call's arguments and either returns fixed {@link
-     * DailyBars} or throws a fixed exception.
-     */
     private static final class FakeMarketDataProvider implements MarketDataProvider {
         private final AtomicInteger callCount = new AtomicInteger();
         private final Supplier<DailyBars> behavior;

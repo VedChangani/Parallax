@@ -61,7 +61,6 @@ class SimpleMovingAverageTest {
             sma.update(price(p));
         }
 
-        // last three closes: 8, 9, 10 -> mean 9
         assertEquals(9.0, sma.value(), TOLERANCE);
     }
 
@@ -112,7 +111,6 @@ class SimpleMovingAverageTest {
         sma.update(price("2.2"));
         sma.update(price("3.3"));
 
-        // (1.1 + 2.2 + 3.3) / 3 = 2.2
         assertEquals(2.2, sma.value(), 1e-9);
     }
 
@@ -138,12 +136,8 @@ class SimpleMovingAverageTest {
         assertThrows(IllegalArgumentException.class, () -> new SimpleMovingAverage(0));
     }
 
-    // --- Phase 9 Batch 2a: lazy allocation must not require O(period) memory up front ---
-
     @Test
     void hugePeriodConstructsAndAcceptsAFewUpdatesWithoutAllocatingPeriodSizedMemory() {
-        // A period this large would need ~16 GB for an eagerly-allocated double[period].
-        // Construction and a handful of updates must succeed without that allocation.
         SimpleMovingAverage sma = new SimpleMovingAverage(Integer.MAX_VALUE);
 
         assertFalse(sma.isReady());
@@ -156,16 +150,12 @@ class SimpleMovingAverageTest {
 
     @Test
     void aFullPeriodExactlyFillsTheGrownBufferAndThenRollsIdenticallyToBeforeTheChange() {
-        // Exercises the lazy buffer growing 1 -> 2 -> 4 -> 5 (doubling, capped at period)
-        // to reach exactly period=5, then rolling past it - the same rolling behavior
-        // theWindowRollsPastTheInitialWarmUpValues already covers for period=3.
         SimpleMovingAverage sma = new SimpleMovingAverage(5);
 
         for (String p : new String[] {"1", "2", "3", "4", "5", "6", "7"}) {
             sma.update(price(p));
         }
 
-        // last five closes: 3, 4, 5, 6, 7 -> mean 5
         assertEquals(5.0, sma.value(), TOLERANCE);
     }
 }

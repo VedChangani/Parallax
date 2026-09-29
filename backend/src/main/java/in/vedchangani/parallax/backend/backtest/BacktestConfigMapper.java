@@ -11,24 +11,6 @@ import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 
-/**
- * Maps a {@link BacktestConfigRequest} (the JSON-transport shape) to the
- * engine's {@link BacktestConfig} (D-34 Batch 2), following the D-30/D-31
- * mapper precedent ({@code StrategyDefinitionMapper}) exactly: this class
- * owns only the syntax rules the engine has no vocabulary for — the shared
- * D-30 decimal grammar for the three monetary/rate fields, and the
- * ISO-8601 date grammar for {@code startDate}/{@code endDate} — and
- * delegates every semantic rule (positivity, bounds, {@code startDate <=
- * endDate}) to the {@link BacktestConfig} constructor, whose {@link
- * IllegalArgumentException} it rewraps as {@link
- * InvalidBacktestConfigException} with the offending field's path.
- *
- * <p>{@code initialCapital}, {@code commissionPerFill} and {@code
- * slippageRate} are parsed directly into {@link BigDecimal} — never through
- * a {@code double} — preserving the exact value the client supplied (D-14:
- * ledger values are exact). This mirrors {@code
- * StrategyDefinitionMapper#parseFraction}, not {@code #parseConstant}.
- */
 @Component
 public final class BacktestConfigMapper {
 
@@ -36,14 +18,6 @@ public final class BacktestConfigMapper {
         return toEngine(dto, "");
     }
 
-    /**
-     * Identical mapping to {@link #toEngine(BacktestConfigRequest)}, with
-     * every path prefixed by {@code rootPath} — for example {@code
-     * "config"} when this arrives nested inside a {@link
-     * CreateBacktestRunRequest} envelope, mirroring {@code
-     * StrategyDefinitionMapper#toEngine(StrategyDefinitionDto, String)}
-     * (D-31 §8).
-     */
     public BacktestConfig toEngine(BacktestConfigRequest dto, String rootPath) {
         Objects.requireNonNull(dto, "dto must not be null");
         Objects.requireNonNull(rootPath, "rootPath must not be null");
@@ -62,24 +36,6 @@ public final class BacktestConfigMapper {
         return rootPath.isEmpty() ? field : rootPath + "." + field;
     }
 
-    /**
-     * Parses {@code text} against the D-30 decimal grammar directly into a
-     * {@link BigDecimal}, never through a {@code double} — the same
-     * approach as {@code StrategyDefinitionMapper#parseFraction}. A
-     * grammar-valid literal whose exponent falls outside {@code
-     * BigDecimal}'s representable range (its scale is a 32-bit {@code int})
-     * throws {@link NumberFormatException}/{@link ArithmeticException} from
-     * the constructor itself; both are treated as malformed input, with the
-     * field path, rather than allowed to escape raw.
-     *
-     * <p>Phase 9 Batch 2b (D-36): once parsed, the value's canonical
-     * precision is bounded by {@code StrategyDefinitionMapper}'s shared
-     * {@link StrategyDefinitionMapper#requireWithinCanonicalPrecisionBounds}
-     * — a semantic-class (422) check, layered after this method's own
-     * malformed-class (400) ones and before {@code BacktestConfig}'s own
-     * semantic checks (positivity, {@code [0,1)}, {@code startDate <=
-     * endDate}), which remain entirely unchanged.
-     */
     private static BigDecimal parseDecimal(String text, String path) {
         requireDecimalGrammar(text, path);
         BigDecimal value;
@@ -98,8 +54,6 @@ public final class BacktestConfigMapper {
             throw new MalformedBacktestConfigException(path,
                     "must match the decimal grammar " + StrategyDefinitionMapper.DECIMAL.pattern() + ", was null");
         }
-        // Phase 9 Batch 2b (D-36): the raw-length bound runs before the grammar
-        // regex itself, shared with StrategyDefinitionMapper's identical check.
         StrategyDefinitionMapper.requireBoundedLength(text, path, MalformedBacktestConfigException::new);
         Matcher matcher = StrategyDefinitionMapper.DECIMAL.matcher(text);
         if (!matcher.matches()) {

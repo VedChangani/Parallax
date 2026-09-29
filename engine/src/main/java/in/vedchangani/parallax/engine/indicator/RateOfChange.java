@@ -3,20 +3,6 @@ package in.vedchangani.parallax.engine.indicator;
 import java.math.BigDecimal;
 import java.util.ArrayDeque;
 
-/**
- * Rate of change over {@code period} bars, in percentage points:
- *
- * <pre>
- * ROC = ((currentClose / close[period bars ago]) - 1) * 100
- * </pre>
- *
- * <p>Needs the current close plus the close {@code period} bars earlier,
- * so ROC(period) becomes ready after {@code period + 1} closes.
- *
- * <p>Keeps at most {@code period + 1} closes (a sliding window), so memory
- * is {@code O(min(period + 1, closes received))} and constructing
- * {@code RateOfChange(Integer.MAX_VALUE)} allocates nothing large up front.
- */
 public final class RateOfChange implements Indicator {
 
     private final int period;
@@ -32,7 +18,6 @@ public final class RateOfChange implements Indicator {
     @Override
     public void update(BigDecimal close) {
         window.addLast(close.doubleValue());
-        // size - 1 > period is size > period + 1 without int overflow.
         if (window.size() - 1 > period) {
             window.removeFirst();
         }

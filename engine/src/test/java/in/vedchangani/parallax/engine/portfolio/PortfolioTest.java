@@ -44,8 +44,6 @@ class PortfolioTest {
                 initialCapital.add(point.realizedPnl()).add(point.unrealizedPnl())));
     }
 
-    // --- initial state ---------------------------------------------------
-
     @Test
     void initialStateIsFlatWithInitialCash() {
         Portfolio portfolio = new Portfolio(new BigDecimal("10000"));
@@ -60,8 +58,6 @@ class PortfolioTest {
         assertEquals(0, point.equity().compareTo(new BigDecimal("10000")));
         assertInvariants(point, new BigDecimal("10000"));
     }
-
-    // --- BUY ---------------------------------------------------------------
 
     @Test
     void buyTenAtHundredWithCommissionFive() {
@@ -97,8 +93,6 @@ class PortfolioTest {
         assertEquals(0, at90.equity().compareTo(new BigDecimal("9895")));
         assertInvariants(at90, new BigDecimal("10000"));
     }
-
-    // --- SELL / exits --------------------------------------------------------
 
     @Test
     void winningExit() {
@@ -164,13 +158,10 @@ class PortfolioTest {
         assertEquals(0, portfolio.costBasis().compareTo(new BigDecimal("252")));
         portfolio.apply(sell(4, 5, new BigDecimal("40"), new BigDecimal("2")));
 
-        // trade 1 realized: +190; trade 2: proceeds 198, basis 252 -> -54
         assertEquals(0, portfolio.realizedPnl().compareTo(new BigDecimal("136")));
         assertEquals(0, portfolio.costBasis().compareTo(BigDecimal.ZERO));
         assertTrue(portfolio.isFlat());
     }
-
-    // --- rejected operations, state preserved -----------------------------
 
     private static void assertUnchanged(Portfolio portfolio, BigDecimal cash, long quantity,
                                          BigDecimal costBasis, BigDecimal realizedPnl) {
@@ -243,8 +234,6 @@ class PortfolioTest {
 
         assertUnchanged(portfolio, BigDecimal.ZERO, 1, new BigDecimal("100"), BigDecimal.ZERO);
     }
-
-    // --- invalid arguments ----------------------------------------------------
 
     @Test
     void nullInitialCashRejected() {

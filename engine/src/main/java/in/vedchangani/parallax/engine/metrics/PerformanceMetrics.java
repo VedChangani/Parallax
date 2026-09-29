@@ -10,40 +10,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.OptionalDouble;
 
-/**
- * Post-run performance statistics for one {@link BacktestResult} (D-26).
- * This is analysis, not simulation: {@link #of(BacktestResult)} is a pure
- * function of an already-produced, immutable result. It never mutates the
- * result, the {@code Portfolio} that produced it (already discarded), or
- * anything reachable from either, and it participates in none of signal
- * generation, sizing, execution, or chronological processing (D-5).
- *
- * <p>Every metric that can be undefined for a given result — because too
- * little history exists, or because a ratio's denominator is zero — is an
- * {@link OptionalDouble} with exactly one documented emptiness condition,
- * never {@code NaN}, {@code Infinity}, or a sentinel value. The two metrics
- * that are always defined for any valid result ({@link #totalReturn()},
- * {@link #maxDrawdown()}) are plain {@code double}s, and
- * {@link #closedTradeCount()} is a plain {@code int}. {@link #profitFactor()}
- * is empty exactly when there is no losing closed trade.
- *
- * <p>Money figures ({@code equity}, {@code realizedPnl}) are summed and
- * differenced exactly in {@link BigDecimal}; every metric here converts to
- * {@code double} only at its own statistical calculation boundary (D-14:
- * ledger values are exact, derived statistics are {@code double}). Ratios
- * involving {@link Math#pow} or a square root use {@link StrictMath},
- * never {@link Math}, for bit-reproducible results across platforms
- * (D-15).
- */
 public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, OptionalDouble volatility,
                                   OptionalDouble sharpeRatio, double maxDrawdown, int closedTradeCount,
                                   OptionalDouble winRate, OptionalDouble averageWin, OptionalDouble averageLoss,
                                   OptionalDouble profitFactor) {
 
-    /** The fixed V1 annualization convention for per-bar returns (D-26). */
     public static final int TRADING_DAYS_PER_YEAR = 252;
 
-    /** The fixed ACT/365 convention for {@link #cagr()}'s observed span (D-26). */
     public static final int DAYS_PER_YEAR = 365;
 
     public PerformanceMetrics {
@@ -95,7 +68,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         if (profitFactor.isPresent() && profitFactor.getAsDouble() < 0.0) {
             throw new IllegalArgumentException("profitFactor must be >= 0 when present, was " + profitFactor.getAsDouble());
         }
-        // Defined exactly when a losing closed trade exists (its denominator).
         if (profitFactor.isPresent() != averageLoss.isPresent()) {
             throw new IllegalArgumentException(
                     "profitFactor must be present iff averageLoss is present (averageLoss=" + averageLoss
@@ -109,20 +81,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         }
     }
 
-    /**
-     * Computes every V1 metric from {@code result} (D-26).
-     *
-     * <p>Two preconditions are enforced (never true of a genuine
-     * {@code Backtester} run, but not structurally guaranteed by
-     * {@link BacktestResult} itself): the first equity point's equity must
-     * equal {@code result.config().initialCapital()} exactly, and every
-     * equity point's equity must be strictly positive. Both make the
-     * formulas below (return base, log-free ratios) mutually consistent
-     * rather than silently assumed.
-     *
-     * @throws NullPointerException     if {@code result} is null
-     * @throws IllegalArgumentException if either precondition above is violated
-     */
     public static PerformanceMetrics of(BacktestResult result) {
         Objects.requireNonNull(result, "result must not be null");
 
@@ -153,7 +111,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
 
         double maxDrawdown = maxDrawdown(curve);
 
-        // --- trade statistics: closed trades only (D-26 §9) -------------
         int closedCount = 0;
         int wins = 0;
         int losses = 0;
@@ -171,7 +128,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
                     losses++;
                     lossSum = lossSum.add(pnl);
                 }
-                // sign == 0: breakeven — counted in closedCount/winRate denominator only
             }
         }
         OptionalDouble winRate = closedCount == 0
@@ -184,9 +140,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
                 ? OptionalDouble.empty()
                 : OptionalDouble.of(lossSum.doubleValue() / losses);
 
-        // Profit factor: gross profit / |gross loss| over closed trades. The
-        // sums are exact BigDecimal; the single division happens in double
-        // (D-14). Empty, never Infinity, when no closed trade lost money.
         OptionalDouble profitFactor = losses == 0
                 ? OptionalDouble.empty()
                 : OptionalDouble.of(winSum.doubleValue() / lossSum.negate().doubleValue());
@@ -195,11 +148,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
                 averageWin, averageLoss, profitFactor);
     }
 
-    /**
-     * ACT/365 CAGR over the observed span (first to last equity-point
-     * date), empty for a span under 365 days — V1 never annualizes a
-     * sub-year run (D-26).
-     */
     private static OptionalDouble cagr(EquityPoint first, EquityPoint last, BigDecimal initialCapital) {
         long days = ChronoUnit.DAYS.between(first.date(), last.date());
         if (days < DAYS_PER_YEAR) {
@@ -210,13 +158,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         return OptionalDouble.of(StrictMath.pow(ratio, 1.0 / years) - 1.0);
     }
 
-    /**
-     * Simple arithmetic per-bar returns between consecutive equity points
-     * only — {@code initialCapital} is never a separate observation
-     * (D-26 §5). {@code n} equity points give {@code n-1} returns. A data
-     * gap between two consecutive points is still exactly one return
-     * observation; it is not calendar-gap adjusted.
-     */
     private static double[] periodicReturns(List<EquityPoint> curve) {
         int n = curve.size();
         double[] returns = new double[Math.max(0, n - 1)];
@@ -228,13 +169,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         return returns;
     }
 
-    /**
-     * Sample standard deviation (divisor {@code n-1}) of {@code returns},
-     * empty for fewer than two observations. If every return is
-     * bitwise-equal, the result is defined as exactly {@code 0.0} — mean
-     * subtraction over identical doubles can otherwise leave ~1e-17 of
-     * spurious floating-point dispersion (D-26 §6).
-     */
     private static OptionalDouble sampleStdDev(double[] returns) {
         if (returns.length < 2) {
             return OptionalDouble.empty();
@@ -266,19 +200,12 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         return OptionalDouble.of(StrictMath.sqrt(sumSquares / (returns.length - 1)));
     }
 
-    /** {@code stdDev × √252} (D-26 §6, fixed 252 annualization). */
     private static OptionalDouble annualizedVolatility(OptionalDouble stdDev) {
         return stdDev.isPresent()
                 ? OptionalDouble.of(stdDev.getAsDouble() * StrictMath.sqrt(TRADING_DAYS_PER_YEAR))
                 : OptionalDouble.empty();
     }
 
-    /**
-     * {@code mean(returns) / stdDev × √252}, risk-free rate fixed at zero
-     * (D-26 §7). Empty for fewer than two returns or zero volatility
-     * (including a flat no-trade run, where the ratio is undefined) —
-     * never {@code NaN} or {@code Infinity}.
-     */
     private static OptionalDouble sharpeRatio(double[] returns, OptionalDouble stdDev) {
         if (stdDev.isEmpty() || stdDev.getAsDouble() == 0.0) {
             return OptionalDouble.empty();
@@ -291,21 +218,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         return OptionalDouble.of(mean / stdDev.getAsDouble() * StrictMath.sqrt(TRADING_DAYS_PER_YEAR));
     }
 
-    /**
-     * The drawdown at every equity point, aligned index-for-index with
-     * {@code curve}: {@code (runningPeak - equity) / runningPeak}, where the
-     * running peak is the highest equity seen up to and including that point
-     * (the first point's equity is the initial peak). Each value is a
-     * fraction {@code >= 0}, e.g. {@code 0.25} for 25% below the peak, and
-     * exactly {@code 0.0} at a new high. This is the single definition
-     * {@link #maxDrawdown()} is the maximum of.
-     *
-     * <p>Assumes strictly positive equity, which {@link #of(BacktestResult)}
-     * enforces for every result it accepts.
-     *
-     * @throws NullPointerException     if {@code curve} is null
-     * @throws IllegalArgumentException if {@code curve} is empty
-     */
     public static double[] drawdownSeries(List<EquityPoint> curve) {
         Objects.requireNonNull(curve, "curve must not be null");
         if (curve.isEmpty()) {
@@ -323,12 +235,6 @@ public record PerformanceMetrics(double totalReturn, OptionalDouble cagr, Option
         return drawdowns;
     }
 
-    /**
-     * Maximum close-to-close drawdown as a fraction of the running peak
-     * equity, e.g. {@code 0.25} for a 25% decline (D-26 §8): the maximum of
-     * {@link #drawdownSeries(List)}. Always {@code 0.0} or greater; the
-     * series itself is not stored on this record.
-     */
     private static double maxDrawdown(List<EquityPoint> curve) {
         double maxDd = 0.0;
         for (double dd : drawdownSeries(curve)) {

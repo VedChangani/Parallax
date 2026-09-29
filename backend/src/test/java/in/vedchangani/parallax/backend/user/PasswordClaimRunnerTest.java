@@ -20,12 +20,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-/**
- * Unit tests for {@link PasswordClaimRunner} (D-37), against a mocked
- * {@link AppUserRepository} and the real {@code
- * DelegatingPasswordEncoder} — the last case also doubles as the "stored
- * hash is delegated/bcrypt, not plaintext" proof for this batch.
- */
 class PasswordClaimRunnerTest {
 
     private final PasswordEncoder passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();

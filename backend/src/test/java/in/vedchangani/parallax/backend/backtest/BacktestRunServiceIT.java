@@ -46,15 +46,6 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
-/**
- * D-34 Batch 2 {@link BacktestRunService} orchestration behavior against
- * real PostgreSQL (Testcontainers): the create-run flow end to end, the
- * transaction boundary around engine execution and around persistence,
- * range-validation enforcement, ownership isolation, atomic rollback on a
- * failure during either engine execution or child-row insertion, and a
- * numeric edge case the engine itself cannot represent. Mirrors {@code
- * StrategyServiceIT}/{@code DatasetServiceIT}'s own style.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class BacktestRunServiceIT {
@@ -62,12 +53,6 @@ class BacktestRunServiceIT {
     @Autowired
     private BacktestRunService backtestRunService;
 
-    // Phase 9 Batch 2c: spies, not plain @Autowired - most tests use these exactly
-    // like a real bean (delegating to the genuine implementation via callRealMethod
-    // semantics is the spy default), but a few reference-corruption tests below stub
-    // one specific getVersion(...) call after a real run already exists, since a
-    // REFERENCED strategy/dataset version's own row is otherwise immutable/FK-protected
-    // and cannot be genuinely corrupted through SQL without defeating that protection.
     @MockitoSpyBean
     private StrategyService strategyService;
 
@@ -83,9 +68,6 @@ class BacktestRunServiceIT {
     @MockitoSpyBean
     private BacktestFillRepository fillRepository;
 
-    // --- fixtures: a strategy that genuinely enters and exits -----------------
-
-    /** Enters when close > 102, exits when close < 98, full cash fraction. */
     private static StrategyDefinition tradingStrategy() {
         return new StrategyDefinition(
                 new Condition.Compare(new Operand.Close(), Operator.GT, new Operand.Constant(102)),
@@ -93,7 +75,6 @@ class BacktestRunServiceIT {
                 new PositionSizing.CashFraction(BigDecimal.ONE));
     }
 
-    /** Six daily bars producing exactly one BUY (bar 3 open) then one SELL (bar 5 open). */
     private static byte[] sixBarCsv() {
         return ("date,open,high,low,close,volume\n"
                 + "2024-01-02,100,101,99,100,1000\n"
@@ -121,8 +102,6 @@ class BacktestRunServiceIT {
         return new OwnedRefs(owner, new StrategyVersionRef(strategy.id(), 1), new DatasetVersionRef(dataset.id(), 1));
     }
 
-    // --- orchestration flow -----------------------------------------------------
-
     @Test
     void createRunPersistsAndReturnsASummaryMatchingTheStoredRow() {
         OwnedRefs refs = createOwnedStrategyAndDataset("orch", tradingStrategy(), sixBarCsv());
@@ -135,8 +114,6 @@ class BacktestRunServiceIT {
         assertEquals(refs.dataset().datasetId(), summary.datasetId());
         assertEquals(refs.dataset().versionNumber(), summary.datasetVersionNumber());
         assertEquals(Backtester.SEMANTICS_VERSION, summary.engineSemanticsVersion());
-        // I8 (Phase 9 Batch 1): the cheap summary already carries startDate/endDate/
-        // totalReturn/benchmarkTotalReturn straight off the backtest_run parent row.
         assertEquals(tradingConfig().startDate(), summary.startDate());
         assertEquals(tradingConfig().endDate(), summary.endDate());
 
@@ -145,14 +122,9 @@ class BacktestRunServiceIT {
         assertEquals(2, detail.fills().size());
         assertEquals(0, detail.rejections().size());
         assertEquals(1, detail.metrics().closedTradeCount());
-        // The summary's totalReturn/benchmarkTotalReturn must agree exactly with the
-        // fully reconstructed, integrity-verified detail - same stored doubles, read
-        // through two different paths.
         assertEquals(detail.metrics().totalReturn(), summary.totalReturn());
         assertEquals(detail.benchmarkTotalReturn(), summary.benchmarkTotalReturn());
     }
-
-    // --- transaction boundary (D-34 Batch 2 §3, §15) ----------------------------
 
     @Test
     void engineExecutesOutsideAnyTransaction() {
@@ -170,8 +142,6 @@ class BacktestRunServiceIT {
         assertFalse(transactionActiveDuringEngineRun.get());
     }
 
-    // --- range validation --------------------------------------------------------
-
     @Test
     void aRangeOutsideDatasetCoverageIsRejectedAndPersistsNothing() {
         OwnedRefs refs = createOwnedStrategyAndDataset("range", tradingStrategy(), sixBarCsv());
@@ -183,8 +153,6 @@ class BacktestRunServiceIT {
 
         assertTrue(backtestRunService.listRuns(refs.owner()).isEmpty());
     }
-
-    // --- ownership (D-34 Batch 2 §11) --------------------------------------------
 
     @Test
     void anotherOwnersStrategyVersionIsNotFoundAndPersistsNothing() {
@@ -233,15 +201,11 @@ class BacktestRunServiceIT {
         List<BacktestRunSummary> aRuns = backtestRunService.listRuns(a.owner());
         assertEquals(1, aRuns.size());
         assertEquals(runA.id(), aRuns.get(0).id());
-        // I8: listRuns is the cheap history path - confirm the new fields are
-        // populated there too, not only on the just-created summary.
         assertEquals(tradingConfig().startDate(), aRuns.get(0).startDate());
         assertEquals(tradingConfig().endDate(), aRuns.get(0).endDate());
         assertEquals(runA.totalReturn(), aRuns.get(0).totalReturn());
         assertEquals(runA.benchmarkTotalReturn(), aRuns.get(0).benchmarkTotalReturn());
     }
-
-    // --- atomic rollback (D-34 Batch 2 §6) ---------------------------------------
 
     @Test
     void aChildInsertFailureRollsBackTheEntireRun() {
@@ -271,15 +235,8 @@ class BacktestRunServiceIT {
         assertTrue(backtestRunService.listRuns(refs.owner()).isEmpty());
     }
 
-    // --- numerical edge: an extreme valid value the engine cannot represent -----
-
     @Test
     void anExtremeInitialCapitalCausingEngineOverflowPersistsNothing() {
-        // A CashFraction(1) entry sized against an astronomically large initialCapital
-        // overflows Backtester.enterQuantity's longValueExact() - an engine-side
-        // ArithmeticException, not a BacktestConfig validation failure. CLAUDE.md/D-34:
-        // this may remain an uncaught 500-class failure; no arbitrary magnitude cap is
-        // introduced to prevent it.
         OwnedRefs refs = createOwnedStrategyAndDataset("numeric-edge", tradingStrategy(), sixBarCsv());
         BacktestConfig extreme = new BacktestConfig(new BigDecimal("1" + "0".repeat(25)), BigDecimal.ZERO,
                 BigDecimal.ZERO, LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 9));
@@ -289,22 +246,6 @@ class BacktestRunServiceIT {
 
         assertTrue(backtestRunService.listRuns(refs.owner()).isEmpty());
     }
-
-    // --- Phase 9 Batch 2c §14: referenced identity corruption on read -----------
-    //
-    // A REFERENCED strategy_version/dataset_version row cannot be genuinely
-    // corrupted through SQL: strategy_version/dataset_version are immutable
-    // (UPDATE/DELETE rejected by trigger), and backtest_run's own composite
-    // foreign keys additionally guarantee a referenced row can never be deleted
-    // out from under an existing run (DatasetSchemaIT/BacktestSchemaIT's own
-    // deletingAReferencedStrategyVersionIsRejected/deletingAReferencedDatasetVersionIsRejected
-    // already prove this for "missing"). These tests instead prove the actual
-    // CODE this batch adds - BacktestRunService's own catch-and-rewrap of
-    // StrategyService/DatasetService's read-path exceptions - by stubbing
-    // exactly the getVersion(...) call getRun makes, on a spy wrapping the real
-    // bean, after a genuine run already exists. Every OTHER call on the spy
-    // (createRun's own step 1, and the fixture's own createStrategy/getVersion
-    // calls) is untouched and still delegates to the real implementation.
 
     @Test
     void aMissingReferencedStrategyVersionOnReadIsAnIntegrityFailureNot404() {
@@ -344,8 +285,6 @@ class BacktestRunServiceIT {
 
         assertThrows(BacktestResultIntegrityException.class, () -> backtestRunService.getRun(refs.owner(), runId));
     }
-
-    // --- Phase 9 Batch 2c §14: cross-owner access is unchanged -------------------
 
     @Test
     void anotherOwnerStillGetsTheOrdinaryOwnerScoped404NotAnIntegrityFailure() {

@@ -11,16 +11,6 @@ import { useApiResource } from '../../hooks/useApiResource.js';
 import { ADJUSTMENT_BASIS_LABELS, SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { DatasetBarsTable } from './DatasetBarsTable.jsx';
 
-/**
- * One immutable data snapshot - the user-facing name for the backend's
- * DatasetVersion (D-32). Metadata is fetched through the session immutable
- * cache (it can never change); bars are fetched only once the user opens
- * "View historical bars" below.
- *
- * @param {object} props
- * @param {number} props.datasetId
- * @param {number} props.versionNumber
- */
 export function DatasetVersionPage({ datasetId, versionNumber }) {
   const [barsOpen, setBarsOpen] = useState(false);
 

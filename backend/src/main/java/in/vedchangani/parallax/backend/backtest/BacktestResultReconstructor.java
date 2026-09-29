@@ -27,61 +27,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * Reconstructs a {@link BacktestRunDetail} from a persisted {@link
- * BacktestRun}, its stored child rows, and its referenced (but not
- * reloaded-as-bars) {@link StrategyDefinition}/dataset symbol identity, and
- * verifies it end to end (Phase 9 Batch 2c): every row reconstructs through
- * its own engine constructor; an actual immutable {@link BacktestResult} is
- * built via the engine's own constructor (D-24), which performs every
- * cross-list structural check (ascending/alternating fills, non-decreasing
- * rejections, equity-curve range containment) as a checked fact rather than
- * a duplicated one; the persisted equity ledger is independently replayed
- * from the fills through {@link Portfolio} — the same engine type the
- * original run used, never re-implemented here; every stored fill is
- * checked against the persisted {@link BacktestConfig}'s own slippage/
- * commission formulas; {@code firstEvaluableDate} is checked against the
- * reconstructed result's own fills/rejections; order ids are checked to
- * form the exact contiguous {@code {1..n}} range D-21 guarantees; {@link
- * PerformanceMetrics} is <strong>recomputed</strong> via {@link
- * PerformanceMetrics#of(BacktestResult)} and compared exactly (record
- * equality — bit-exact for every {@code double}/{@code OptionalDouble}
- * field, D-26) against the stored metrics; and the persisted buy-and-hold
- * benchmark reference state is independently recomputed into a real {@link
- * BuyAndHoldBenchmark} (D-28) and its {@code totalReturn()} compared
- * bit-exact against the stored value.
- *
- * <p><strong>Phase 10 Batch 1</strong> closes the causal-verification gap
- * identified by the Phase 9 final audit: every fill and rejection's own
- * signal is now checked against the rest of the persisted result, not only
- * against the ledger and the config. Every one of these is provable from
- * data already loaded, uses no {@code DatasetBar}, and never calls {@code
- * Backtester.run(...)} — see each method's own Javadoc:
- * {@link #verifySnapshotIndicatorSpecs}, {@link #verifySignalCloseMatchesEquity},
- * {@link #verifyConditionTruth}, {@link #verifyFillCausalTiming}, {@link
- * #verifyInsufficientCashExecutionTiming}, {@link #verifyInsufficientCashAvailableCash},
- * and {@link #verifyPositionStateAtSignal}.
- *
- * <p><strong>Never reloads the original {@code DatasetVersion}'s bars, and
- * never calls {@code Backtester.run(...)}, {@code MarketDataProvider}, or
- * anything that would re-run the experiment</strong> — this is read-time
- * verification of an already-completed, persisted result, bounded by
- * exactly what that result and its immutable referenced identities already
- * contain (CLAUDE.md; see the class-level boundary note on each verify
- * method below for what specifically cannot be proven without the original
- * bars). {@code strategyDefinition} and {@code datasetSymbol} are supplied
- * by the caller ({@code BacktestRunService}), already owner-scoped and
- * integrity-verified through the existing {@code StrategyService}/{@code
- * DatasetService} read paths — this class never touches a repository or a
- * service itself, staying a pure, stateless, testable reconstruction.
- *
- * <p>Every failure — from an engine constructor's own {@link
- * IllegalArgumentException}, from {@link Portfolio}'s own {@link
- * IllegalStateException} during ledger replay, from a malformed stored
- * {@link IndicatorSnapshot} JSON, or from one of this class's own
- * cross-field checks — is caught in exactly one place and rethrown as
- * {@link BacktestResultIntegrityException}.
- */
 final class BacktestResultReconstructor {
 
     private BacktestResultReconstructor() {
@@ -98,14 +43,6 @@ final class BacktestResultReconstructor {
         Objects.requireNonNull(rejectionRows, "rejectionRows must not be null");
 
         try {
-            // A: an unsupported/future engine semantics version must never be
-            // silently interpreted with today's semantics. SEMANTICS_VERSION's
-            // scope (Phase 9 Batch 2a) covers every result-affecting convention:
-            // the run loop, indicator formulas, sizing/execution, portfolio
-            // accounting, trading-cost derivation, PerformanceMetrics, and
-            // BuyAndHoldBenchmark - so this single check is what makes every
-            // recomputation below meaningful: recomputing under formulas that
-            // may have since changed would not prove anything about the past.
             if (run.engineSemanticsVersion() != Backtester.SEMANTICS_VERSION) {
                 throw new IllegalArgumentException(
                         "unsupported engine semantics version: " + run.engineSemanticsVersion());
@@ -116,22 +53,12 @@ final class BacktestResultReconstructor {
             List<Fill> fills = reconstructFills(fillRows);
             List<OrderRejection> rejections = reconstructRejections(rejectionRows);
 
-            // D-24's own constructor performs every cross-list structural check
-            // (equity curve non-empty/strictly-ascending/range-contained, fills
-            // strictly-ascending and alternating BUY/SELL from BUY, rejections
-            // non-decreasing) - never duplicated here. This is "reconstruct an
-            // actual immutable BacktestResult" (not a parallel verified-result
-            // model): every later step in this method operates on this one
-            // engine-constructed object.
             BacktestResult result = new BacktestResult(datasetSymbol, strategyDefinition, config,
                     run.firstEvaluableDate(), equityCurve, fills, rejections);
 
             verifyOrderIdContinuity(fills, rejections);
             verifyFirstEvaluableDateSemantics(result);
 
-            // Phase 10 Batch 1: every signal's own recorded shape must agree with
-            // the rest of the persisted result before the ledger/config/metric
-            // checks below even run.
             verifySnapshotIndicatorSpecs(strategyDefinition, fills, rejections);
             verifySignalCloseMatchesEquity(equityCurve, fills, rejections);
             verifyConditionTruth(strategyDefinition, fills, rejections);
@@ -160,15 +87,9 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- structural row reconstruction (per-row engine validation only; every
-    // cross-list ordering/range invariant is left to BacktestResult's own
-    // constructor, called once in reconstruct() above) -------------------------
-
     private static BacktestConfig reconstructConfig(BacktestRun run) {
         BacktestConfig config = new BacktestConfig(run.initialCapital(), run.commissionPerFill(),
                 run.slippageRate(), run.startDate(), run.endDate());
-        // BacktestResult validates every equity/fill/rejection date against this
-        // range, but not firstEvaluableDate itself - that check stays here.
         run.firstEvaluableDate().ifPresent(date -> {
             if (date.isBefore(config.startDate()) || date.isAfter(config.endDate())) {
                 throw new IllegalArgumentException(
@@ -245,19 +166,11 @@ final class BacktestResultReconstructor {
         return value;
     }
 
-    /**
-     * The stored metrics. {@code profitFactor} has no persisted column: it is
-     * a pure function of the closed trades, which the ledger replay above has
-     * already verified, so the recomputed value is used as-is rather than
-     * compared against anything. Every other field is the persisted value.
-     */
     private static PerformanceMetrics reconstructMetrics(BacktestRun run, PerformanceMetrics recomputed) {
         return new PerformanceMetrics(run.totalReturn(), run.cagr(), run.volatility(), run.sharpeRatio(),
                 run.maxDrawdown(), run.closedTradeCount(), run.winRate(), run.averageWin(), run.averageLoss(),
                 recomputed.profitFactor());
     }
-
-    // --- order id continuity (D-21: {fill ids} u {InsufficientCash ids} = {1..n}) ---
 
     private static void verifyOrderIdContinuity(List<Fill> fills, List<OrderRejection> rejections) {
         int expectedCount = fills.size();
@@ -266,7 +179,7 @@ final class BacktestResultReconstructor {
                 expectedCount++;
             }
         }
-        boolean[] consumed = new boolean[expectedCount + 1]; // 1-indexed; index 0 unused
+        boolean[] consumed = new boolean[expectedCount + 1];
         for (Fill fill : fills) {
             markOrderIdConsumed(consumed, fill.orderId(), expectedCount);
         }
@@ -295,19 +208,6 @@ final class BacktestResultReconstructor {
         consumed[orderId] = true;
     }
 
-    // --- firstEvaluableDate semantics (D-25: no signal before indicators are ready) ---
-
-    /**
-     * <strong>Boundary:</strong> without the original bars, this cannot prove
-     * {@code firstEvaluableDate} is the bar where indicators <em>actually</em>
-     * became ready (that requires replaying indicator warm-up against real
-     * closes). What it can and does prove from the persisted result alone:
-     * a signal can never exist before indicators are ready (D-25), so an
-     * empty {@code firstEvaluableDate} is incompatible with any fill/
-     * rejection existing at all, and a present one is incompatible with any
-     * signal dated earlier than it, or with a date that is not even one of
-     * the result's own equity-curve dates.
-     */
     private static void verifyFirstEvaluableDateSemantics(BacktestResult result) {
         Optional<LocalDate> firstEvaluableDate = result.firstEvaluableDate();
         boolean hasAnySignal = !result.fills().isEmpty() || !result.rejections().isEmpty();
@@ -344,20 +244,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- signal shape verification (Phase 10 Batch 1) ---------------------------
-
-    /**
-     * Every fill/rejection's stored signal snapshot must reference exactly
-     * the indicator specs {@code strategy.requiredIndicatorSpecs()}
-     * declares, in the same canonical order — never more, fewer, or a
-     * different spec. A stored spec set that merely happens to be the same
-     * <em>size</em> as expected is not enough (a corrupted snapshot could
-     * substitute one spec for another of the same period/type count); exact
-     * list equality is checked instead. This closes a silent-collapse gap
-     * in {@link IndicatorSnapshotJson#read}: a duplicate stored spec is now
-     * rejected there directly, during row reconstruction, so it can never
-     * first collapse into one entry and then coincidentally match here.
-     */
     private static void verifySnapshotIndicatorSpecs(StrategyDefinition strategyDefinition, List<Fill> fills,
                                                        List<OrderRejection> rejections) {
         List<IndicatorSpec> expected = strategyDefinition.requiredIndicatorSpecs();
@@ -378,13 +264,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    /**
-     * Every fill/rejection's signal snapshot {@code close} must equal the
-     * result's own equity-curve close on that same signal date exactly — a
-     * signal and the equity point recorded for the same bar are two
-     * persisted views of one close price, and a genuine run can never
-     * disagree with itself about it.
-     */
     private static void verifySignalCloseMatchesEquity(List<EquityPoint> equityCurve, List<Fill> fills,
                                                          List<OrderRejection> rejections) {
         Map<LocalDate, BigDecimal> closeByDate = new HashMap<>();
@@ -412,17 +291,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    /**
-     * Every fill/rejection's stored signal must actually satisfy the
-     * strategy's own condition, evaluated fresh against its own stored
-     * snapshot — an ENTER signal against {@code entryCondition}, an EXIT
-     * signal against {@code exitCondition}. Every rejection is already
-     * structurally guaranteed to carry an ENTER signal (D-21's own engine
-     * constructors reject any other signal type when the row is
-     * reconstructed), so only {@code entryCondition} ever applies to one.
-     * This is a direct re-evaluation of the frozen {@link Condition} tree —
-     * no engine run, no market data, nothing beyond what is already loaded.
-     */
     private static void verifyConditionTruth(StrategyDefinition strategyDefinition, List<Fill> fills,
                                                List<OrderRejection> rejections) {
         for (Fill fill : fills) {
@@ -446,19 +314,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- fill <-> config verification (D-7/D-23 execution formulas) ------------
-
-    /**
-     * <strong>Boundary:</strong> this proves each fill's {@code fillPrice}
-     * is exactly {@code referenceOpen} adjusted by the persisted config's
-     * own slippage rate, and {@code commission} exactly equals the
-     * persisted {@code commissionPerFill} - both provable from the stored
-     * result and config alone. It cannot prove {@code referenceOpen} itself
-     * matches the original dataset bar's actual open (that requires the
-     * bars), nor can it re-derive {@code ZeroQuantity} sizing math (D-23's
-     * {@code enterQuantity}, a function of the signal-bar close, which is
-     * not the reference open stored on a fill).
-     */
     private static void verifyFillsMatchConfig(List<Fill> fills, BacktestConfig config) {
         BigDecimal buyMultiplier = BigDecimal.ONE.add(config.slippageRate());
         BigDecimal sellMultiplier = BigDecimal.ONE.subtract(config.slippageRate());
@@ -479,17 +334,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- next-bar-open causal timing (D-7, Phase 10 Batch 1) --------------------
-
-    /**
-     * Maps each equity-curve date to its position in {@code equityCurve} —
-     * shared by {@link #verifyFillCausalTiming} and {@link
-     * #verifyInsufficientCashExecutionTiming} to check that an execution
-     * (a fill, or an {@code InsufficientCash} rejection) lands on the
-     * equity-curve bar <em>immediately following</em> its own signal date,
-     * not merely some later one (D-7: next-bar-open, no same-bar execution,
-     * no skipped bar).
-     */
     private static Map<LocalDate, Integer> indexEquityCurveDates(List<EquityPoint> equityCurve) {
         Map<LocalDate, Integer> index = new HashMap<>();
         for (int i = 0; i < equityCurve.size(); i++) {
@@ -498,16 +342,6 @@ final class BacktestResultReconstructor {
         return index;
     }
 
-    /**
-     * <strong>Boundary:</strong> proves every fill executes strictly after
-     * its own signal date, and on the equity-curve bar immediately
-     * following it — the next-bar-open rule (D-7) — using only the
-     * persisted result's own dates. It cannot prove that date was the
-     * <em>only</em> possible next bar (that would need the original
-     * dataset bars); it proves the stored fill date is not an arbitrary
-     * later (or non-later) date, which is exactly what a tampered
-     * {@code fill_date}/{@code signal_date} pair would produce.
-     */
     private static void verifyFillCausalTiming(List<EquityPoint> equityCurve, List<Fill> fills) {
         Map<LocalDate, Integer> equityIndex = indexEquityCurveDates(equityCurve);
         for (Fill fill : fills) {
@@ -531,13 +365,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    /**
-     * The {@code InsufficientCash} counterpart to {@link
-     * #verifyFillCausalTiming}: its {@code executionDate} must be strictly
-     * after its own signal date, and on the equity-curve bar immediately
-     * following it. {@code ZeroQuantity} has no execution date at all — no
-     * order was ever created (D-21) — so it is not checked here.
-     */
     private static void verifyInsufficientCashExecutionTiming(List<EquityPoint> equityCurve,
                                                                 List<OrderRejection> rejections) {
         Map<LocalDate, Integer> equityIndex = indexEquityCurveDates(equityCurve);
@@ -568,23 +395,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- ledger replay (D-22 Portfolio, the central integrity check) -----------
-
-    /**
-     * Replays {@link Portfolio} accounting from {@code initialCapital}
-     * through {@code fills} in chronological order, marking to each equity
-     * point's own stored {@code close} exactly where the original run did
-     * (D-25: one {@code EquityPoint} per bar, after that bar's own fill if
-     * any) - never calling {@code Backtester.run(...)}, only replaying the
-     * same engine {@link Portfolio} the original run used. Every persisted
-     * equity point must equal, by exact record equality (BigDecimal
-     * {@code equals}, scale-sensitive), the point produced by this replay;
-     * every fill must be consumed by exactly one equity point along the
-     * way. {@code fills} and {@code equityCurve} are both already known
-     * strictly ascending here ({@link BacktestResult}'s own constructor),
-     * and {@code backtest_fill} carries a unique {@code (run_id, fill_date)}
-     * constraint, so at most one fill can share any one date.
-     */
     private static void replayLedger(BacktestConfig config, List<EquityPoint> equityCurve, List<Fill> fills) {
         Portfolio portfolio = new Portfolio(config.initialCapital());
         int fillIndex = 0;
@@ -607,17 +417,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- InsufficientCash cash/state verification (Phase 10 Batch 1) -----------
-
-    /**
-     * The {@code InsufficientCash} counterpart to {@link #replayLedger}:
-     * {@code availableCash} must equal the portfolio's actual cash,
-     * replayed from {@code initialCapital} through every fill executed
-     * strictly before this rejection's own execution date — the cash the
-     * engine would genuinely have had on hand at the moment this order was
-     * rejected. Independent of {@link #replayLedger}, which only walks
-     * equity points and never reads a rejection's own stored fields.
-     */
     private static void verifyInsufficientCashAvailableCash(BacktestConfig config, List<Fill> fills,
                                                               List<OrderRejection> rejections) {
         List<OrderRejection.InsufficientCash> insufficientCashRejections = new ArrayList<>();
@@ -648,20 +447,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    /**
-     * Verifies the flat/long position-state rule at every signal, in
-     * chronological signal-date order: an ENTER signal (from a BUY fill, or
-     * any rejection — both structurally guaranteed ENTER by D-21) must
-     * occur only while the replayed portfolio is flat, and an EXIT signal
-     * (from a SELL fill) only while long — mirroring exactly which
-     * condition {@code Backtester.Run} itself would have evaluated at that
-     * point (architecture.md §3, steps 6-9). A fill executed at or before
-     * this signal's own bar (including a same-bar SELL immediately followed
-     * by a new ENTER evaluation once flat again) is applied before the
-     * check; a fill still pending — this signal's own eventual outcome —
-     * is not, since {@code fill.date()} is always strictly after its own
-     * signal date.
-     */
     private static void verifyPositionStateAtSignal(BacktestConfig config, List<Fill> fills,
                                                       List<OrderRejection> rejections) {
         record SignalOccurrence(LocalDate date, SignalType type) {
@@ -695,8 +480,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- metric recomputation (D-26; exact, no tolerance) -----------------------
-
     private static void verifyMetricsMatch(PerformanceMetrics stored, PerformanceMetrics recomputed) {
         if (!recomputed.equals(stored)) {
             throw new IllegalArgumentException(
@@ -704,8 +487,6 @@ final class BacktestResultReconstructor {
                             .formatted(stored, recomputed));
         }
     }
-
-    // --- trading-cost totals (D-27; exact BigDecimal sums, now via BacktestResult) ---
 
     private static void verifyCostTotals(BacktestRun run, BacktestResult result) {
         if (!run.totalCommission().equals(result.totalCommission())) {
@@ -720,24 +501,6 @@ final class BacktestResultReconstructor {
         }
     }
 
-    // --- benchmark recomputation (D-28) -----------------------------------------
-
-    /**
-     * <strong>Boundary:</strong> only the benchmark's persisted reference
-     * point ({@code cash}/{@code quantity}/{@code costBasis}, fixed once at
-     * entry per D-28) was ever stored - its full equity curve was not. This
-     * reconstructs a synthetic curve pairing that fixed reference state with
-     * the (already fill/ledger-verified) result's own equity-curve dates and
-     * closes, and builds a real {@link BuyAndHoldBenchmark} from it: its own
-     * constructor proves {@code cash + costBasis == initialCapital} and a
-     * non-negative, non-decreasing-date curve, and {@link
-     * BuyAndHoldBenchmark#totalReturn()} recomputed from it is compared
-     * bit-exact against the stored {@code benchmarkTotalReturn}. This
-     * cannot independently prove the entry quantity/cost basis were
-     * correctly derived from the original first-bar opening price - that
-     * requires the original bars (D-28's own option-A entry rule) and is
-     * out of this verification's reach by design.
-     */
     private static void verifyBenchmark(BacktestRun run, BacktestResult result) {
         List<EquityPoint> benchmarkCurve = result.equityCurve().stream()
                 .map(point -> new EquityPoint(point.date(), run.benchmarkCash(), run.benchmarkQuantity(),

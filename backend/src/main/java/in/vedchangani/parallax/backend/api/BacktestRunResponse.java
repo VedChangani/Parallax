@@ -9,15 +9,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.OptionalDouble;
 
-/**
- * The response shape for one completed, integrity-verified backtest run
- * (D-34 Batch 3) — every {@link java.math.BigDecimal} field as a JSON
- * string via {@code toPlainString()} (the D-30 precedent, preserving the
- * service's own canonical value exactly), every {@code double} metric as a
- * JSON number, and an empty {@link OptionalDouble} as JSON {@code null}.
- * Never the JPA entity, and never a field derived independently of what
- * {@link BacktestRunDetail} already reconstructed and verified.
- */
 public record BacktestRunResponse(long id, long strategyId, int strategyVersion, String definitionHash,
                                    long datasetId, int datasetVersion, String contentHash,
                                    int engineSemanticsVersion, String initialCapital, String commissionPerFill,
@@ -42,13 +33,6 @@ public record BacktestRunResponse(long id, long strategyId, int strategyVersion,
         }
     }
 
-    /**
-     * The persisted benchmark reference state (D-34 Batch 1/2): the same
-     * {@code cash}/{@code quantity}/{@code costBasis} at every date (the
-     * benchmark never sells) plus its overall {@code totalReturn}. Not a
-     * reconstructed {@code BuyAndHoldBenchmark} — its full equity curve was
-     * never stored (see {@code /equity-curve} for the per-date view).
-     */
     public record BenchmarkResponse(String cash, long quantity, String costBasis, double totalReturn) {
     }
 

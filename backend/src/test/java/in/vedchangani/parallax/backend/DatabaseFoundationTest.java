@@ -14,14 +14,6 @@ import java.sql.ResultSet;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-29 proof: the Spring context starts against the PostgreSQL
- * Testcontainer (never a developer's local {@code PARALLAX_DB_*}
- * environment), and Flyway runs against that same {@link DataSource}
- * (C5). No application migrations exist yet — this test only proves the
- * foundation wiring: Flyway's own {@code flyway_schema_history} table
- * exists once Flyway has run.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class DatabaseFoundationTest {

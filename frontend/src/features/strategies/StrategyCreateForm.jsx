@@ -12,17 +12,6 @@ const inputClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
-/**
- * The "New strategy" form (backend: `POST /api/strategies`, D-31). Splits
- * metadata (name/description, mapped directly onto {@link
- * import('../../api/api/CreateStrategyRequest').CreateStrategyRequest}'s
- * `name`/`description`) from the strategy rules, which are built visually
- * via {@link StrategyBuilder} and serialized with {@link definitionToDto} -
- * never hand-authored as JSON.
- *
- * @param {object} props
- * @param {(strategy: import('../../api/types.js').StrategyResponse) => void} props.onCreated
- */
 export function StrategyCreateForm({ onCreated }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -140,14 +129,6 @@ export function StrategyCreateForm({ onCreated }) {
   );
 }
 
-/**
- * Maps a create-strategy `ApiError` onto the right piece of the form: a
- * 400 Bean Validation failure onto `name`/`description`, a 422 semantic
- * definition failure onto a definition-level banner (its `field` is a deep
- * dotted path into the condition tree, e.g. "definition.entryCondition.left"
- * - not any single input this form can point to directly), and everything
- * else onto a generic form-level message.
- */
 function applyServerError(error, setFieldErrors, setDefinitionError, setFormError) {
   if (error.errors?.length) {
     setFieldErrors(Object.fromEntries(error.errors.map((fieldError) => [fieldError.field, fieldError.message])));

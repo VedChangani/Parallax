@@ -4,10 +4,6 @@ import in.vedchangani.parallax.backend.strategy.StrategyVersionSummary;
 
 import java.time.Instant;
 
-/**
- * The response shape for a {@code StrategyVersion} listed without its
- * definition (D-31). Never the JPA entity itself.
- */
 public record StrategyVersionSummaryResponse(long strategyId, int versionNumber, int schemaVersion,
                                               String definitionHash, Instant createdAt) {
 

@@ -8,13 +8,7 @@ describe('WarmupNotice', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  // M-1 regression: a weekend/holiday startDate has no bar of its own, so the
-  // run's genuine first bar is the next trading day. Readiness on that very
-  // first real bar must NOT be reported as a delayed warm-up (and must never
-  // produce a nonsensical "0 of N bars" count) merely because it differs from
-  // the raw requested startDate string.
   it('shows no false warm-up notice for a weekend start followed by the next trading day (M-1)', () => {
-    // 2024-01-06 is a Saturday; the market's first real bar is Monday 2024-01-08.
     render(
       <WarmupNotice
         startDate="2024-01-06"
@@ -49,9 +43,6 @@ describe('WarmupNotice', () => {
   });
 
   it('still shows the warm-up message for a weekend start once indicators genuinely need more bars than the first one', () => {
-    // The first real bar (Monday 2024-01-08) is not itself the ready date -
-    // readiness is genuinely later, so this must still warn, just correctly
-    // measured against the real first bar rather than the weekend startDate.
     render(
       <WarmupNotice
         startDate="2024-01-06"
@@ -63,7 +54,6 @@ describe('WarmupNotice', () => {
     );
 
     expect(screen.getByText('Warm-up period')).toBeTruthy();
-    // The message still cites the originally requested startDate for context.
     expect(screen.getByText('2024-01-06')).toBeTruthy();
   });
 

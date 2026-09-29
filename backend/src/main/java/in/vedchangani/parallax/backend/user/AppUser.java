@@ -11,25 +11,10 @@ import org.hibernate.annotations.Generated;
 import java.time.Instant;
 import java.util.Objects;
 
-/**
- * JPA entity for {@code app_user} (D-31, extended by D-37/D-38). {@code
- * password_hash} is nullable: {@code null} means the account cannot
- * authenticate — the state of every account created before D-37, including
- * the seeded {@code dev} row. {@link AppUserRepository} exposes only
- * {@code findByUsername} and {@code saveAndFlush}; there is still no
- * delete or generic {@code findAll}.
- */
 @Entity
 @Table(name = "app_user")
 public class AppUser {
 
-    /**
-     * The {@code username varchar(64)} column's capacity, in characters
-     * (code points). D-43: this and non-blank are the only username rules -
-     * there is no character-set or case restriction, and uniqueness is the
-     * case-sensitive {@code uq_app_user_username} constraint, so "Ved" and
-     * "ved" are different accounts.
-     */
     public static final int USERNAME_MAX_LENGTH = 64;
 
     @Id
@@ -47,14 +32,8 @@ public class AppUser {
     private Instant createdAt;
 
     protected AppUser() {
-        // JPA
     }
 
-    /**
-     * Self-registration construction (D-38): unlike the D-37 claim flow,
-     * the hash is known and set at creation, never {@code null}. Package-
-     * private — {@code UserRegistrationService} is the only caller.
-     */
     AppUser(String username, String passwordHash) {
         this.username = Objects.requireNonNull(username, "username must not be null");
         this.passwordHash = Objects.requireNonNull(passwordHash, "passwordHash must not be null");
@@ -68,7 +47,6 @@ public class AppUser {
         return username;
     }
 
-    /** The {@code {id}encodedHash} DelegatingPasswordEncoder value, or {@code null} if this account has none (D-37). */
     public String passwordHash() {
         return passwordHash;
     }
@@ -77,13 +55,6 @@ public class AppUser {
         return createdAt;
     }
 
-    /**
-     * Sets this account's password hash (D-37). Package-private: {@code
-     * PasswordClaimRunner} is the only caller in this batch, and it never
-     * calls this when {@link #passwordHash} is already set — enforced here
-     * too, defensively, so no future caller can silently overwrite an
-     * existing credential.
-     */
     void assignPassword(String encodedHash) {
         if (this.passwordHash != null) {
             throw new IllegalStateException("app_user " + id + " already has a password_hash");
@@ -91,13 +62,6 @@ public class AppUser {
         this.passwordHash = encodedHash;
     }
 
-    /**
-     * Replaces an already-set password hash (D-40) — the counterpart to
-     * {@link #assignPassword}, which only ever fills a {@code null} one.
-     * Package-private: {@code PasswordChangeService} is the only caller,
-     * and only after it has already verified the caller's current
-     * password itself.
-     */
     void changePassword(String encodedHash) {
         this.passwordHash = Objects.requireNonNull(encodedHash, "passwordHash must not be null");
     }

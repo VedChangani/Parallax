@@ -7,12 +7,6 @@ import com.fasterxml.jackson.annotation.Nulls;
 
 import java.util.List;
 
-/**
- * The backend transport/canonical representation of the engine's sealed
- * {@code Condition} hierarchy (D-30). Discriminated by a {@code "type"}
- * property: {@code "compare"}, {@code "all"}, {@code "any"}. List order is
- * significant and preserved exactly (D-18).
- */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "type")
 @JsonSubTypes({
         @JsonSubTypes.Type(value = ConditionDto.Compare.class, name = "compare"),

@@ -21,8 +21,6 @@ class EquityPointTest {
         return new EquityPoint(DATE, cash, quantity, costBasis, realizedPnl, close);
     }
 
-    // --- derived methods -----------------------------------------------------
-
     @Test
     void derivedValuesCorrectWhenLong() {
         EquityPoint point = longPosition(new BigDecimal("8995"), 10, new BigDecimal("1005"),
@@ -41,8 +39,6 @@ class EquityPointTest {
         assertEquals(0, point.unrealizedPnl().compareTo(BigDecimal.ZERO));
         assertEquals(0, point.equity().compareTo(new BigDecimal("10190")));
     }
-
-    // --- validation ------------------------------------------------------------
 
     @Test
     void nullDateRejected() {
@@ -128,8 +124,6 @@ class EquityPointTest {
 
         assertEquals(0, point.cash().compareTo(new BigDecimal("9890")));
     }
-
-    // --- equality --------------------------------------------------------------
 
     @Test
     void equalPointsAreEqualAndHaveEqualHashCode() {

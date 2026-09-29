@@ -18,13 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-28 shape of {@link BuyAndHoldBenchmark}: an immutable record
- * of exactly {@code (BigDecimal, List<EquityPoint>)}, with no reference to
- * {@link BacktestResult}, {@link BarSeries}, {@link StrategyDefinition},
- * {@link Portfolio}, or {@link Backtester} — the benchmark is an
- * independent post-run calculation, not a wrapper around a simulation.
- */
 class BuyAndHoldBenchmarkStructureTest {
 
     private static final Set<Class<?>> FORBIDDEN =

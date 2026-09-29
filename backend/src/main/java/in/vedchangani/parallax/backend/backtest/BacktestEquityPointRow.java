@@ -6,14 +6,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * The immutable row shape for one {@code backtest_equity_point} record
- * (D-34 Batch 1). Deliberately does not carry {@code marketValue}/{@code
- * equity}/{@code unrealizedPnl}: those remain derived by the engine's own
- * {@link EquityPoint}, exactly as D-22 designed it — storing them here
- * would duplicate state that can only ever be recomputed from {@code cash},
- * {@code quantity}, {@code costBasis} and {@code close} anyway.
- */
 record BacktestEquityPointRow(LocalDate barDate, BigDecimal cash, long quantity, BigDecimal costBasis,
                                BigDecimal realizedPnl, BigDecimal close) {
 

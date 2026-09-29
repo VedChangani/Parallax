@@ -8,24 +8,6 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
-/**
- * Claims an existing, still-passwordless {@code app_user} on startup
- * (D-37) — the one path that lets a developer take over the seeded {@code
- * dev} account (or any account created before authentication existed)
- * without a registration endpoint.
- *
- * <p>Runs only when both {@code parallax.auth.claim-username} and {@code
- * parallax.auth.claim-password} (bound from {@code
- * PARALLAX_CLAIM_USERNAME}/{@code PARALLAX_CLAIM_PASSWORD}) are set;
- * otherwise it does nothing. It never creates a user, and it never
- * overwrites an existing hash — a username that already has one is left
- * untouched (logged at INFO, not an error, since re-running with the
- * variables still set is an expected steady state, not a mistake). An
- * unknown username or a password failing {@link PasswordPolicy} fails
- * startup outright rather than silently skipping, since either is more
- * likely a typo than an intentional no-op. No log message or exception
- * ever includes the password itself.
- */
 @Component
 public class PasswordClaimRunner implements ApplicationRunner {
 

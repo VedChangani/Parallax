@@ -99,44 +99,18 @@ function returnTone(value) {
   return 'text-ink';
 }
 
-/**
- * The Backtests research history/workspace (D-34 Batch 6, extended by
- * Phase 9 Batch 1 / I8): a compact, searchable table of every completed
- * run. `GET /api/backtest-runs` is a cheap, owner-scoped list - identity/
- * version references plus (I8) each run's own date range and returns, read
- * directly off its parent row - so this page never fetches an individual
- * run's equity/fill/rejection children merely to enrich a row.
- *
- * Market/strategy *names* still are not part of that list response (they
- * are mutable parent-resource labels, not part of a run's historical
- * identity), so this page resolves them from the existing `GET
- * /api/datasets`/`GET /api/strategies` list endpoints - one request per
- * resource *type*, never one per row - and falls back to the authoritative
- * `Market #id`/`Strategy #id` reference when a name is not (yet) known.
- * The true historical identity remains id + version + hash, always shown
- * in the Technical detail; a resolved name is a current, mutable label,
- * not a claim about what the run itself recorded.
- */
 export function BacktestHistoryPage() {
   const [query, setQuery] = useState('');
 
   const fetchRuns = useCallback((signal) => listBacktestRuns(signal), []);
   const { data: runs, error, loading, reload } = useApiResource(fetchRuns, []);
 
-  // Mutable resources (a dataset/strategy's own list can grow or its name
-  // can change at any time) - never cached, exactly like every other
-  // mutable list in the app (CLAUDE.md: never cache a mutable resource).
   const datasets = useApiResource(listDatasets, []);
   const strategies = useApiResource(listStrategies, []);
 
   const datasetById = useMemo(() => new Map((datasets.data ?? []).map((d) => [d.id, d])), [datasets.data]);
   const strategyById = useMemo(() => new Map((strategies.data ?? []).map((s) => [s.id, s])), [strategies.data]);
 
-  // N1: sort by the numeric run id, not a string comparison of createdAt.
-  // The backend already guarantees ascending-id order matches creation
-  // order (BacktestRunService#listRuns: an IDENTITY column, inserted once,
-  // never reordered) - a numeric id compare is exact and format-independent,
-  // where a lexicographic compare of a timestamp string is not.
   const enrichedAndSorted = useMemo(() => {
     if (!runs) return [];
     return runs

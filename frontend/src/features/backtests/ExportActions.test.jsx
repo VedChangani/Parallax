@@ -32,7 +32,6 @@ describe('ExportActions', () => {
     expect(screen.getByRole('group', { name: 'Export results' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Export equity CSV' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Export trades CSV' })).toBeTruthy();
-    // Nothing is fetched or downloaded until the user asks.
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 

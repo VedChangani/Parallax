@@ -33,14 +33,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-33 Batch 2 {@link AlphaVantageMarketDataProvider} tests: a local JDK
- * {@link HttpServer} fixture, never the real Alpha Vantage service. Focused
- * on HTTP/configuration behavior (request shape, status classification,
- * transport failures, response-size enforcement); {@link
- * AlphaVantageDailyParserTest} already covers provider-JSON parsing, so
- * success-case fixtures here are minimal single-bar bodies.
- */
 class AlphaVantageMarketDataProviderTest {
 
     private static final String API_KEY = "test-api-key-0xDEADBEEF";
@@ -111,7 +103,6 @@ class AlphaVantageMarketDataProviderTest {
         };
     }
 
-    /** Captures the raw query and echoes the requested symbol back in a minimal success body. */
     private static HttpHandler echoingHandler(AtomicReference<String> capturedQuery, String outputSizeLabel) {
         return exchange -> {
             String rawQuery = exchange.getRequestURI().getRawQuery();
@@ -131,8 +122,6 @@ class AlphaVantageMarketDataProviderTest {
         }
         return result;
     }
-
-    // --- success ------------------------------------------------------------
 
     @Test
     void successfulCompactRequestParsesResponse() {
@@ -189,8 +178,6 @@ class AlphaVantageMarketDataProviderTest {
         assertEquals(symbol, parseQuery(capturedQuery.get()).get("symbol"));
     }
 
-    // --- API key handling -----------------------------------------------------
-
     @Test
     void blankApiKeyThrowsBeforeSendingRequest() {
         AtomicInteger requestCount = new AtomicInteger();
@@ -205,8 +192,6 @@ class AlphaVantageMarketDataProviderTest {
         assertEquals(0, requestCount.get());
         assertFalse(ex.getMessage().contains(API_KEY));
     }
-
-    // --- status classification ------------------------------------------------
 
     @Test
     void http429ThrowsMarketDataUnavailable() {
@@ -241,8 +226,6 @@ class AlphaVantageMarketDataProviderTest {
                 () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
         assertFalse(ex.getMessage().contains(API_KEY));
     }
-
-    // --- transport failures -----------------------------------------------------
 
     @Test
     void connectionFailureThrowsMarketDataResponseException() throws IOException {
@@ -312,8 +295,6 @@ class AlphaVantageMarketDataProviderTest {
         assertTrue(interruptedFlag.get(), "worker thread interrupt status must be restored");
     }
 
-    // --- response size enforcement -----------------------------------------------
-
     @Test
     void responseLargerThanConfiguredMaxThrowsMarketDataResponseException() {
         String oversizedBody = "x".repeat(1000);
@@ -326,8 +307,6 @@ class AlphaVantageMarketDataProviderTest {
                 () -> provider.fetchDailyBars("IBM", HistoryDepth.COMPACT));
         assertFalse(ex.getMessage().contains(API_KEY));
     }
-
-    // --- parser classification pass-through -----------------------------------
 
     @Test
     void parserRejectionPropagatesWithItsOriginalClassification() {

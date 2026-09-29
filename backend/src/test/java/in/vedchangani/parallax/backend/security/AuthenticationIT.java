@@ -28,23 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-37 real-session proof, against a real socket (like {@code
- * DatasetUploadSizeLimitIT}) rather than {@code MockMvc}: this is what
- * actually makes the {@code JSESSIONID}/{@code XSRF-TOKEN} cookie
- * attributes (HttpOnly, SameSite) assertable at all. {@code MockMvc}
- * never emits a real {@code Set-Cookie} header for a container-managed
- * session cookie — only for a cookie an application explicitly calls
- * {@code response.addCookie(...)} for (which is exactly what {@code
- * CookieCsrfTokenRepository} does, but not what session tracking does) —
- * so it cannot prove this batch's session-cookie invariants.
- *
- * <p>This test never overrides {@link
- * in.vedchangani.parallax.backend.user.CurrentUser} and never imports
- * {@code AuthenticatedMockMvcConfig}: every request runs through the real
- * {@code SecurityConfig} filter chain, the real {@code
- * AppUserDetailsService}, and the real {@code AuthenticatedCurrentUser}.
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration.class)
 class AuthenticationIT {
@@ -61,8 +44,6 @@ class AuthenticationIT {
     private PasswordEncoder passwordEncoder;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
-
-    // --- unauthenticated access ------------------------------------------------
 
     @Test
     void unauthenticatedRequestToProtectedEndpointIsRejectedWith401() throws Exception {
@@ -92,8 +73,6 @@ class AuthenticationIT {
 
         assertEquals(200, response.statusCode());
     }
-
-    // --- login success -----------------------------------------------------------
 
     @Test
     void successfulLoginReturnsUsernameAndSetsCookiesWithTheRightAttributes() throws Exception {
@@ -150,8 +129,6 @@ class AuthenticationIT {
                 "authentication must never adopt a pre-existing/attacker-supplied session id");
     }
 
-    // --- login failure --------------------------------------------------------
-
     @Test
     void wrongPasswordUnknownUserPasswordlessDevAndOverLongPasswordAllReturnTheSameGenericFailure()
             throws Exception {
@@ -184,8 +161,6 @@ class AuthenticationIT {
         assertTrue(contentType(response).startsWith("application/problem+json"));
     }
 
-    // --- authenticated writes require CSRF ----------------------------------------
-
     @Test
     void authenticatedPostWithoutCsrfIsForbiddenAndWithCsrfSucceeds() throws Exception {
         String username = createClaimedUser("csrf-write");
@@ -210,8 +185,6 @@ class AuthenticationIT {
         assertEquals(201, withCsrf.statusCode());
     }
 
-    // --- logout ------------------------------------------------------------------
-
     @Test
     void logoutRequiresCsrfInvalidatesTheSessionAndReturns204() throws Exception {
         String username = createClaimedUser("logout");
@@ -219,7 +192,6 @@ class AuthenticationIT {
         bootstrapCsrf(cookies);
         login(username, PASSWORD, cookies);
 
-        // Without CSRF: rejected, and the session is still valid afterwards.
         HttpResponse<String> withoutCsrf = send(HttpRequest.newBuilder()
                 .uri(uri("/api/auth/logout"))
                 .header("Cookie", cookieHeader(cookies))
@@ -230,7 +202,6 @@ class AuthenticationIT {
                 cookies));
         assertEquals(200, stillIn.statusCode());
 
-        // With CSRF: succeeds, and the old session no longer authenticates.
         HttpResponse<String> logout = send(authenticated(HttpRequest.newBuilder()
                 .uri(uri("/api/auth/logout"))
                 .POST(HttpRequest.BodyPublishers.noBody()), cookies));
@@ -241,9 +212,6 @@ class AuthenticationIT {
         assertEquals(401, afterLogout.statusCode());
     }
 
-    // --- helpers -------------------------------------------------------------
-
-    /** A tiny per-test cookie jar: name -> value, updated from each response's raw {@code Set-Cookie} headers. */
     private static final class CookieJar {
         private final Map<String, String> values = new HashMap<>();
 
@@ -283,7 +251,6 @@ class AuthenticationIT {
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    /** GET /api/auth/me anonymously to obtain the bootstrap XSRF-TOKEN cookie (D-37). */
     private void bootstrapCsrf(CookieJar cookies) throws Exception {
         HttpResponse<String> response = send(HttpRequest.newBuilder().uri(uri("/api/auth/me")).GET());
         cookies.absorb(response);
@@ -311,7 +278,6 @@ class AuthenticationIT {
         return response.body();
     }
 
-    /** Attaches the accumulated cookies and the CSRF header to a request builder. */
     private HttpRequest.Builder authenticated(HttpRequest.Builder builder, CookieJar cookies) {
         builder.header("Cookie", cookieHeader(cookies));
         String csrfToken = cookies.get("XSRF-TOKEN");

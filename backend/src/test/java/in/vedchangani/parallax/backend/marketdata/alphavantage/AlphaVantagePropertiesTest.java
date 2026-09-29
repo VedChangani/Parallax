@@ -11,12 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-33 Batch 2 {@link AlphaVantageProperties} validation: plain Java, no
- * Spring context. Confirms a blank API key never fails construction (only
- * {@link AlphaVantageMarketDataProvider} rejects it, at request time) and
- * every other property is validated eagerly.
- */
 class AlphaVantagePropertiesTest {
 
     private static final String BASE_URL = "https://www.alphavantage.co/query";
@@ -89,7 +83,6 @@ class AlphaVantagePropertiesTest {
 
         assertFalse(text.contains("super-secret-key"));
         assertTrue(text.contains("REDACTED"));
-        // Every other field remains visible - only the key is sensitive.
         assertTrue(text.contains(BASE_URL));
     }
 

@@ -22,12 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * D-33 Batch 1 {@link AlphaVantageDailyParser} tests: plain Java, no Spring
- * context, no real Alpha Vantage call and no API key. Covers the success
- * shape, provider control-response classification, and every JSON
- * strictness/semantic failure category the parser is responsible for.
- */
 class AlphaVantageDailyParserTest {
 
     private static String fixture(String name) {
@@ -64,8 +58,6 @@ class AlphaVantageDailyParserTest {
         return document("IBM", "Compact", timeSeriesBody);
     }
 
-    // --- SUCCESS -----------------------------------------------------------
-
     @Test
     void parsesNormalFiveDayCompactResponseIntoAscendingBars() {
         DailyBars result = AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, fixture("success_compact.json"));
@@ -95,8 +87,6 @@ class AlphaVantageDailyParserTest {
         assertEquals(5, result.bars().size());
         assertEquals("TIME_SERIES_DAILY;outputsize=full", result.sourceDetail());
     }
-
-    // --- META VALIDATION -----------------------------------------------------
 
     @Test
     void rejectsMismatchedSymbol() {
@@ -133,8 +123,6 @@ class AlphaVantageDailyParserTest {
         assertThrows(MarketDataResponseException.class,
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, json));
     }
-
-    // --- SHAPE FAILURES ------------------------------------------------------
 
     @Test
     void rejectsMalformedJson() {
@@ -221,8 +209,6 @@ class AlphaVantageDailyParserTest {
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, json));
     }
 
-    // --- DATE FAILURES ---------------------------------------------------------
-
     @Test
     void rejectsImpossibleDate() {
         String json = singleBarDocument("{\"2024-02-30\":" + validBar() + "}");
@@ -239,16 +225,11 @@ class AlphaVantageDailyParserTest {
 
     @Test
     void rejectsNonDescendingTimeSeriesOrderAsInvalidMarketData() {
-        // Alpha Vantage documents dates newest-first; an older date before a newer
-        // one violates that documented order and is a market-data problem (D-33),
-        // not a shape problem.
         String timeSeries = "{\"2024-01-02\":" + validBar() + ",\"2024-01-08\":" + validBar() + "}";
         InvalidMarketDataException e = assertThrows(InvalidMarketDataException.class,
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, singleBarDocument(timeSeries)));
         assertEquals(LocalDate.of(2024, 1, 8), e.date().orElseThrow());
     }
-
-    // --- NUMERIC FAILURES --------------------------------------------------
 
     @Test
     void rejectsMalformedDecimal() {
@@ -308,8 +289,6 @@ class AlphaVantageDailyParserTest {
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, json));
     }
 
-    // --- SEMANTIC FAILURES (Bar is the authority) -------------------------------
-
     @Test
     void rejectsZeroPriceAsInvalidMarketData() {
         String json = singleBarDocument("{\"2024-01-02\":"
@@ -343,8 +322,6 @@ class AlphaVantageDailyParserTest {
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, json));
     }
 
-    // --- ERROR CLASSIFICATION ---------------------------------------------------
-
     @Test
     void errorMessageIsClassifiedAsRequestRejected() {
         assertThrows(MarketDataRequestRejectedException.class,
@@ -359,8 +336,6 @@ class AlphaVantageDailyParserTest {
 
     @Test
     void uppercasePremiumInformationAtFullDepthIsClassifiedAsCapability() {
-        // The approved rule is a plain case-insensitive substring match on "premium",
-        // not the narrower phrase "premium endpoint".
         String json = "{\"Information\":\"This response requires a PREMIUM subscription for full history.\"}";
         assertThrows(MarketDataCapabilityException.class,
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.FULL, json));
@@ -368,8 +343,6 @@ class AlphaVantageDailyParserTest {
 
     @Test
     void rateLimitInformationWithoutPremiumIsClassifiedAsUnavailableEvenAtFullDepth() {
-        // A rate-limit message that never mentions "premium" at all must remain
-        // Unavailable, not Capability, even when FULL was requested.
         assertThrows(MarketDataUnavailableException.class, () -> AlphaVantageDailyParser.parse(
                 "IBM", HistoryDepth.FULL, fixture("information_rate_limit.json")));
     }
@@ -385,8 +358,6 @@ class AlphaVantageDailyParserTest {
         assertThrows(MarketDataResponseException.class,
                 () -> AlphaVantageDailyParser.parse("IBM", HistoryDepth.COMPACT, "{\"Foo\":\"bar\"}"));
     }
-
-    // --- SECURITY -----------------------------------------------------------
 
     @Test
     void noFixtureContainsAnApiKeyParameter() {
@@ -408,8 +379,6 @@ class AlphaVantageDailyParserTest {
         assertFalse(unavailable.getMessage().contains("alphavantage.co"));
         assertFalse(unavailable.getMessage().contains("Thank you for using Alpha Vantage"));
     }
-
-    // --- IMMUTABILITY --------------------------------------------------------
 
     @Test
     void dailyBarsRejectsNullBars() {

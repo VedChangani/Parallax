@@ -16,16 +16,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-38: {@code parallax.auth.registration-enabled=false} disables {@code
- * POST /api/auth/register} at the application level (403, from {@code
- * UserRegistrationService}), never at the Spring Security authorization
- * layer — the endpoint stays {@code permitAll} regardless, since an
- * anonymous caller must still reach the service to get this specific 403
- * body rather than a generic 401. A separate {@code @SpringBootTest}
- * property override needs its own Spring context, hence its own test
- * class rather than a method inside {@link RegistrationIT}.
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "parallax.auth.registration-enabled=false")
 @Import(TestcontainersConfiguration.class)

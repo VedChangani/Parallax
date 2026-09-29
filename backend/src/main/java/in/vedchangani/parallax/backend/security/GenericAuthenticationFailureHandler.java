@@ -9,17 +9,6 @@ import org.springframework.security.web.authentication.AuthenticationFailureHand
 
 import java.io.IOException;
 
-/**
- * The single login-failure response (D-37): an unknown username, a wrong
- * password, and a passwordless account (e.g. the unclaimed {@code dev}
- * user) all reach here as {@code BadCredentialsException} — {@code
- * DaoAuthenticationProvider}'s {@code hideUserNotFoundExceptions} default
- * already collapses "no such user" into the same exception type as "wrong
- * password" — and this handler collapses them further into one fixed
- * body, deliberately never inspecting {@link AuthenticationException#getMessage()}.
- * No redirect: {@code formLogin()} is configured with this handler
- * instead of a {@code failureUrl}.
- */
 final class GenericAuthenticationFailureHandler implements AuthenticationFailureHandler {
 
     private final ObjectMapper objectMapper;

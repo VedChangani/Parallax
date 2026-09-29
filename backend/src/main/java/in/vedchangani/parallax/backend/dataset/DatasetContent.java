@@ -12,47 +12,6 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * The D-32 content-hash contract for a validated {@link BarSeries}: what a
- * {@link DatasetVersion} actually stores as {@code barCount}/{@code
- * firstDate}/{@code lastDate}/{@code contentHash}, and how those four
- * values are (re)computed and verified.
- *
- * <p>The hash is computed from the normalized, already-{@link Bar}-validated
- * {@code BarSeries} — never from raw CSV bytes. Byte-level differences that
- * produce the same normalized series (a leading BOM, CRLF vs. LF, an
- * optional final newline, {@code "100.0"} vs {@code "100"}) therefore never
- * change the hash. {@link #of(BarSeries)} rejects a series containing any
- * non-canonical price rather than silently normalizing it — the hash is
- * only ever defined over canonical data.
- *
- * <p>Canonical payload (UTF-8), one line per component, every line
- * (including the last bar line) ending in a single LF:
- *
- * <pre>{@code
- * PARALLAX-BARS/1
- * <symbol>
- * <date>,<open>,<high>,<low>,<close>,<volume>
- * ...
- * }</pre>
- *
- * where {@code date} is {@link LocalDate#toString()}, each price is the
- * canonical {@link BigDecimal#toPlainString()}, and {@code volume} is
- * {@link Long#toString(long)}. The hash is SHA-256 of that payload, encoded
- * as lowercase hexadecimal (64 characters).
- *
- * <p>What the hash covers: the format tag, the symbol, and every bar, in
- * order. What it excludes: dataset name, source, {@code sourceDetail},
- * {@code adjustmentBasis}, timestamps, and every database id — the hash
- * identifies market data, not upload metadata.
- *
- * <p>SHA-256 stays a private implementation detail here rather than a
- * shared utility: the only other user, D-30's {@code
- * StrategyDefinitionCodec}, hashes a completely different payload shape
- * (canonical JSON, not a bars listing), and the two share nothing but the
- * JDK {@link MessageDigest} call. Duplicating six lines is cheaper than a
- * shared package for that.
- */
 public record DatasetContent(String contentHash, int barCount, LocalDate firstDate, LocalDate lastDate) {
 
     private static final String FORMAT_TAG = "PARALLAX-BARS/1";
@@ -66,31 +25,12 @@ public record DatasetContent(String contentHash, int barCount, LocalDate firstDa
         }
     }
 
-    /**
-     * Canonicalizes a price the same way {@code BacktestConfig}/{@code
-     * CashFraction} canonicalize a {@link BigDecimal} in the engine
-     * (unmodified there; this is a backend-local copy of the same rule,
-     * not a shared helper — the engine is never touched by D-32):
-     * {@code stripTrailingZeros()}, then {@code setScale(0)} if the
-     * resulting scale is negative. The numeric value is never changed —
-     * only its representation. Applies to prices only, never dates or
-     * volume.
-     */
     public static BigDecimal canonicalPrice(BigDecimal value) {
         Objects.requireNonNull(value, "value must not be null");
         BigDecimal stripped = value.stripTrailingZeros();
         return stripped.scale() < 0 ? stripped.setScale(0) : stripped;
     }
 
-    /**
-     * Computes the content hash and derived metadata for an already-built,
-     * already-{@link Bar}-validated {@link BarSeries}.
-     *
-     * @throws IllegalArgumentException if any bar's O/H/L/C is not already
-     *                                   in canonical form (see {@link
-     *                                   #canonicalPrice(BigDecimal)}) — this
-     *                                   method never silently normalizes
-     */
     public static DatasetContent of(BarSeries series) {
         Objects.requireNonNull(series, "series must not be null");
         List<Bar> bars = series.bars();
@@ -104,18 +44,6 @@ public record DatasetContent(String contentHash, int barCount, LocalDate firstDa
         return new DatasetContent(hash, bars.size(), first, last);
     }
 
-    /**
-     * Recomputes {@link #of(BarSeries)} over {@code series} and verifies it
-     * matches every one of the previously stored values exactly. Used when
-     * reconstructing a {@link DatasetVersion}'s bars for any future
-     * consumer (D-32's own {@code getVerifiedSeries}, and every later
-     * backtest run) — a mismatch means stored data was corrupted or
-     * tampered with, and is treated as an integrity failure, never
-     * silently repaired.
-     *
-     * @throws DatasetIntegrityException on any mismatch, including a
-     *                                    non-canonical stored price
-     */
     public static void verify(BarSeries series, int expectedBarCount, LocalDate expectedFirstDate,
                                LocalDate expectedLastDate, String expectedContentHash) {
         Objects.requireNonNull(series, "series must not be null");
@@ -187,7 +115,6 @@ public record DatasetContent(String contentHash, int barCount, LocalDate firstDa
             byte[] hash = digest.digest(payload);
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException e) {
-            // SHA-256 is a mandatory JDK algorithm (JLS platform guarantee); unreachable.
             throw new IllegalStateException("SHA-256 is not available", e);
         }
     }

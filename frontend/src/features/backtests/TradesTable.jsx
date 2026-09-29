@@ -41,16 +41,6 @@ const COLUMNS = [
   },
 ];
 
-/**
- * The professional trade table (D-34 Batch 5 §12/§13/§25): every value is
- * read directly off `BacktestTradeResponse`/`BacktestFillResponse` - never
- * recalculated. An open trade never shows a fabricated exit or a
- * "realizedPnl" it does not have (D-24: an open position is not a
- * completed trade).
- *
- * @param {object} props
- * @param {import('../../api/types.js').BacktestTradeResponse[]} props.trades
- */
 export function TradesTable({ trades }) {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 

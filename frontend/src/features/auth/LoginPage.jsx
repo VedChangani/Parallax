@@ -8,38 +8,14 @@ const inputClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
-/**
- * D-37/D-39: every login failure - unknown username, wrong password, or a
- * still-unclaimed account - returns the exact same generic backend
- * message, so this page never shows anything more specific than that
- * fixed string, regardless of which one actually happened.
- */
 const GENERIC_LOGIN_FAILURE = 'Invalid username or password.';
 
-/**
- * Restricts a post-login redirect target to a same-origin, in-app path
- * (M-5): it must start with exactly one `/` — never an absolute URL
- * (`https://evil.example`, no leading `/` at all) and never a
- * protocol-relative one (`//evil.example`, which a browser resolves as
- * `https://evil.example`, or the equivalent `/\evil.example` some browsers
- * also normalize that way). Anything else falls back to `/`, exactly as an
- * absent `next` already does.
- *
- * @param {string | null} value
- * @returns {string}
- */
 function safeNextPath(value) {
   if (typeof value !== 'string' || value === '') return '/';
   if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return '/';
   return value;
 }
 
-/**
- * The login page (D-39). Redirects back to `next` (the route {@link
- * import('../../auth/RequireAuth.jsx').RequireAuth} was guarding when it
- * sent the visitor here) on success, or `/` if there was none — or if
- * `next` was not a safe in-app path ({@link safeNextPath}).
- */
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();

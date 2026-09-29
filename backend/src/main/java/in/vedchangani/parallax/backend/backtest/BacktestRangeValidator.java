@@ -7,35 +7,11 @@ import in.vedchangani.parallax.engine.result.BacktestConfig;
 import java.time.LocalDate;
 import java.util.List;
 
-/**
- * Strict raw dataset coverage validation for a {@link BacktestConfig}
- * against a verified {@link BarSeries} (D-34 Batch 2, approved design):
- *
- * <ol>
- *   <li>{@code config.startDate() >= dataset.firstDate()}</li>
- *   <li>{@code config.endDate() <= dataset.lastDate()}</li>
- *   <li>{@code startDate <= endDate} is already guaranteed by {@link
- *   BacktestConfig} itself</li>
- *   <li>at least one bar date must fall inside
- *   {@code [startDate, endDate]}</li>
- * </ol>
- *
- * <p>Deliberately does <strong>not</strong>: calculate indicator warm-up,
- * reject a range merely because the strategy's indicators never become
- * ready inside it, trim the supplied {@link BarSeries}, or inspect bars
- * beyond {@code endDate} to justify a signal. {@code Backtester}'s own
- * {@code firstEvaluableDate} and final-bar semantics remain the sole
- * authority for all of that (CLAUDE.md).
- */
 final class BacktestRangeValidator {
 
     private BacktestRangeValidator() {
     }
 
-    /**
-     * @throws BacktestRangeException if the range fails any of the three
-     *                                 checks above
-     */
     static void validate(BarSeries series, BacktestConfig config) {
         List<Bar> bars = series.bars();
         LocalDate datasetFirstDate = bars.get(0).date();

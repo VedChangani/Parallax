@@ -29,8 +29,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class BuyAndHoldBenchmarkTest {
 
-    // --- fixture helpers -------------------------------------------------
-
     private static LocalDate d(int year, int month, int day) {
         return LocalDate.of(year, month, day);
     }
@@ -70,7 +68,6 @@ class BuyAndHoldBenchmarkTest {
             new Condition.Compare(new Operand.Close(), Operator.LT, new Operand.Constant(-1000000)),
             new PositionSizing.CashFraction(new BigDecimal("0.5")));
 
-    /** Any placeholder EquityPoint whose cash/quantity/costBasis are irrelevant to the benchmark — only date/close matter. */
     private static EquityPoint point(LocalDate date, String close) {
         return new EquityPoint(date, n("10000"), 0, BigDecimal.ZERO, BigDecimal.ZERO, n(close));
     }
@@ -87,8 +84,6 @@ class BuyAndHoldBenchmarkTest {
     private static BacktestResult result(BacktestConfig cfg, List<EquityPoint> curve) {
         return result("AAPL", STRATEGY_A, cfg, curve);
     }
-
-    // --- 1. normal benchmark with commission and slippage ---------------------
 
     @Test
     void normalBenchmarkWithCommissionAndSlippage() {
@@ -113,8 +108,6 @@ class BuyAndHoldBenchmarkTest {
 
         assertEquals(0.197599, benchmark.totalReturn(), 1e-12);
     }
-
-    // --- 2. regression: the withdrawn design never invested on a rising series --
 
     @Test
     void regressionSteadilyRisingSeriesActuallyInvests() {
@@ -141,8 +134,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(0.98, benchmark.totalReturn(), 1e-12);
     }
 
-    // --- 3. gap-up into the first in-range open ------------------------------
-
     @Test
     void gapUpIntoFirstInRangeOpenStillBuysAtActualFillPrice() {
         BarSeries s = series("AAPL",
@@ -156,8 +147,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(83, benchmark.equityCurve().get(0).quantity());
         assertEquals(0, n("40").compareTo(benchmark.equityCurve().get(0).cash()));
     }
-
-    // --- 4. gap-down entry -----------------------------------------------------
 
     @Test
     void gapDownEntryUsesActualLowerOpen() {
@@ -173,8 +162,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(0, BigDecimal.ZERO.compareTo(benchmark.equityCurve().get(0).cash()));
     }
 
-    // --- 5. one in-range bar: buy at open, mark at close --------------------
-
     @Test
     void oneInRangeBarBuysAtOpenAndMarksAtClose() {
         BarSeries s = series("AAPL", bar(d(2024, 1, 1), "100", "105"));
@@ -188,8 +175,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(0, n("1050").compareTo(benchmark.equityCurve().get(0).equity()));
         assertEquals(0.05, benchmark.totalReturn(), 1e-12);
     }
-
-    // --- 6. quantity zero: capital too small ---------------------------------
 
     @Test
     void quantityZeroWhenCapitalTooSmall() {
@@ -207,8 +192,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(0.0, benchmark.totalReturn());
     }
 
-    // --- 7. commission >= capital ------------------------------------------
-
     @Test
     void commissionAtLeastCapitalGivesNoTradeAndNoChargedCommission() {
         BarSeries s = series("AAPL", flatBar(d(2024, 1, 1), "50"));
@@ -222,8 +205,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(0, n("100").compareTo(p.cash()));
         assertEquals(0.0, benchmark.totalReturn());
     }
-
-    // --- 8. zero commission and zero slippage --------------------------------
 
     @Test
     void zeroCommissionAndZeroSlippageExactValues() {
@@ -239,11 +220,8 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(0, BigDecimal.ZERO.compareTo(p.cash()));
     }
 
-    // --- 9 & 10. lookback and post-endDate bars ignored -------------------------
-
     @Test
     void lookbackBarsBeforeStartDateAreIgnored() {
-        // Lookback bar has a wildly different open (10); it must not be used as entry.
         BarSeries s = series("AAPL",
                 flatBar(d(2023, 12, 1), "10"),
                 bar(d(2024, 1, 1), "100", "105"),
@@ -253,7 +231,7 @@ class BuyAndHoldBenchmarkTest {
 
         BuyAndHoldBenchmark benchmark = BuyAndHoldBenchmark.of(s, result(cfg, curve));
 
-        assertEquals(10, benchmark.equityCurve().get(0).quantity()); // sized off open=100, not the lookback open=10
+        assertEquals(10, benchmark.equityCurve().get(0).quantity());
     }
 
     @Test
@@ -270,11 +248,8 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(2, benchmark.equityCurve().size());
     }
 
-    // --- 11 & 12. non-trading start/end dates -------------------------------
-
     @Test
     void startDateOnNonTradingDayEntersAtFirstInRangeTradingBarOpen() {
-        // config.startDate is a Saturday with no bar; the first actual bar is Monday.
         BarSeries s = series("AAPL", bar(d(2024, 1, 8), "100", "105"), flatBar(d(2024, 1, 9), "110"));
         BacktestConfig cfg = config("1000", "0", "0", d(2024, 1, 6), d(2024, 1, 9));
         List<EquityPoint> curve = List.of(point(d(2024, 1, 8), "105", "1000"), point(d(2024, 1, 9), "110", "1000"));
@@ -287,7 +262,6 @@ class BuyAndHoldBenchmarkTest {
 
     @Test
     void endDateOnNonTradingDayUsesFinalInRangeTradingClose() {
-        // config.endDate is a Sunday with no bar; the last actual bar is Friday.
         BarSeries s = series("AAPL", bar(d(2024, 1, 5), "100", "105"), flatBar(d(2024, 1, 6), "108"));
         BacktestConfig cfg = config("1000", "0", "0", d(2024, 1, 5), d(2024, 1, 7));
         List<EquityPoint> curve = List.of(point(d(2024, 1, 5), "105", "1000"), point(d(2024, 1, 6), "108", "1000"));
@@ -297,8 +271,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(2, benchmark.equityCurve().size());
         assertEquals(d(2024, 1, 6), benchmark.equityCurve().get(1).date());
     }
-
-    // --- 13. independence from strategy --------------------------------------
 
     @Test
     void independentOfStrategyDefinition() {
@@ -312,8 +284,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(a, b);
     }
 
-    // --- 14. alignment failures ------------------------------------------------
-
     @Test
     void differentSymbolThrowsIae() {
         BarSeries s = series("MSFT", flatBar(d(2024, 1, 1), "100"));
@@ -325,7 +295,6 @@ class BuyAndHoldBenchmarkTest {
 
     @Test
     void missingInRangeDateThrowsIae() {
-        // series has one in-range bar, but the result claims two equity points.
         BarSeries s = series("AAPL", flatBar(d(2024, 1, 1), "100"));
         BacktestConfig cfg = config("1000", "0", "0", d(2024, 1, 1), d(2024, 1, 2));
         List<EquityPoint> curve = List.of(point(d(2024, 1, 1), "100", "1000"), point(d(2024, 1, 2), "110", "1000"));
@@ -335,7 +304,6 @@ class BuyAndHoldBenchmarkTest {
 
     @Test
     void extraInRangeDateThrowsIae() {
-        // series has two in-range bars, but the result claims only one equity point.
         BarSeries s = series("AAPL", flatBar(d(2024, 1, 1), "100"), flatBar(d(2024, 1, 2), "110"));
         BacktestConfig cfg = config("1000", "0", "0", d(2024, 1, 1), d(2024, 1, 2));
         List<EquityPoint> curve = List.of(point(d(2024, 1, 1), "100", "1000"));
@@ -352,8 +320,6 @@ class BuyAndHoldBenchmarkTest {
         assertThrows(IllegalArgumentException.class, () -> BuyAndHoldBenchmark.of(s, result(cfg, curve)));
     }
 
-    // --- 15. null arguments ----------------------------------------------------
-
     @Test
     void nullArgumentsThrowNpe() {
         BarSeries s = series("AAPL", flatBar(d(2024, 1, 1), "100"));
@@ -364,8 +330,6 @@ class BuyAndHoldBenchmarkTest {
         assertThrows(NullPointerException.class, () -> BuyAndHoldBenchmark.of(null, r));
         assertThrows(NullPointerException.class, () -> BuyAndHoldBenchmark.of(s, null));
     }
-
-    // --- 16. constructor validation ---------------------------------------------
 
     @Test
     void emptyCurveThrowsIae() {
@@ -426,8 +390,6 @@ class BuyAndHoldBenchmarkTest {
         assertThrows(IllegalArgumentException.class, () -> new BuyAndHoldBenchmark(n("-1"), curve));
     }
 
-    // --- 17. accounting identities -------------------------------------------
-
     @Test
     void accountingIdentitiesHoldAtEveryPoint() {
         BarSeries s = series("AAPL",
@@ -444,8 +406,6 @@ class BuyAndHoldBenchmarkTest {
         }
     }
 
-    // --- 18. determinism ---------------------------------------------------
-
     @Test
     void ofIsDeterministic() {
         BarSeries s = series("AAPL", bar(d(2024, 1, 1), "100", "105"), flatBar(d(2024, 1, 2), "110"));
@@ -456,8 +416,6 @@ class BuyAndHoldBenchmarkTest {
         assertEquals(BuyAndHoldBenchmark.of(s, r), BuyAndHoldBenchmark.of(s, r));
     }
 
-    // --- test-only cross-check against Portfolio (production code stays independent) --
-
     @Test
     void crossCheckAgainstPortfolioAccounting() {
         BarSeries s = series("AAPL", bar(d(2024, 1, 1), "99", "100"), flatBar(d(2024, 1, 2), "110"));
@@ -466,7 +424,6 @@ class BuyAndHoldBenchmarkTest {
 
         BuyAndHoldBenchmark benchmark = BuyAndHoldBenchmark.of(s, result(cfg, curve));
 
-        // Independently reconstruct the same fill via Portfolio/Fill, test-only.
         IndicatorSnapshot snapshot = new IndicatorSnapshot(d(2024, 1, 1), n("100"), Map.of());
         SignalEvent enterSignal = new SignalEvent(SignalType.ENTER, snapshot);
         BigDecimal fillPrice = n("99").multiply(new BigDecimal("1.01"));

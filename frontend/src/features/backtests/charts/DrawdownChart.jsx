@@ -7,21 +7,6 @@ const HEIGHT = 160;
 const DRAWDOWN_COLOR = '#b91c1c';
 const DRAWDOWN_FILL = 'rgba(185, 28, 28, 0.14)';
 
-/**
- * A compact drawdown chart for the run's own persisted equity curve: the
- * per-point `drawdown` from `GET /api/backtest-runs/{id}/equity-curve`
- * (D-41), plotted as a negative percentage so 0% is "at a peak" and lower
- * is deeper. The percentage/negation conversion happens only in
- * {@link drawdownChartData}, purely for the canvas; the accessible summary
- * below states the original values.
- *
- * The y-range always includes 0 (a run that never drew down still gets a
- * flat line at 0%), and uPlot itself decimates to the pixel width, so long
- * runs stay readable.
- *
- * @param {object} props
- * @param {import('../../../api/types.js').BacktestEquityPointResponse[]} props.points
- */
 export function DrawdownChart({ points }) {
   const containerRef = useRef(null);
   const data = useMemo(() => drawdownChartData(points), [points]);
@@ -31,7 +16,6 @@ export function DrawdownChart({ points }) {
     if (!containerRef.current || !plottable) return undefined;
 
     const deepest = data.ys[data.deepestIndex];
-    // Always show 0 at the top with a little headroom below the deepest point.
     const yMin = deepest < 0 ? deepest * 1.1 : -1;
 
     const plot = new uPlot(

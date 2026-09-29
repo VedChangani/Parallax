@@ -14,11 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Tests for {@link Indicator#create(IndicatorSpec)}, the only mapping
- * from an {@link IndicatorSpec} definition to a runtime {@link Indicator}
- * instance (D-25).
- */
 class IndicatorTest {
 
     private static BigDecimal price(String value) {
@@ -62,7 +57,6 @@ class IndicatorTest {
 
     @Test
     void atrAndRocPeriodsArePreservedAndObservableThroughReadiness() {
-        // ATR(2): not ready until the 2nd bar.
         Indicator atr = Indicator.create(new IndicatorSpec(IndicatorType.ATR, 2));
         Bar bar = new Bar(LocalDate.of(2024, 1, 1), price("10"), price("12"), price("9"), price("11"), 0);
         atr.update(bar);
@@ -70,7 +64,6 @@ class IndicatorTest {
         atr.update(bar);
         assertTrue(atr.isReady());
 
-        // ROC(2): not ready until the 3rd close.
         Indicator roc = Indicator.create(new IndicatorSpec(IndicatorType.ROC, 2));
         roc.update(price("100"));
         roc.update(price("101"));
@@ -81,7 +74,6 @@ class IndicatorTest {
 
     @Test
     void periodIsPreservedAndObservableThroughReadiness() {
-        // SMA(3): not ready until the 3rd close.
         Indicator sma = Indicator.create(new IndicatorSpec(IndicatorType.SMA, 3));
         sma.update(price("1"));
         sma.update(price("2"));
@@ -90,14 +82,12 @@ class IndicatorTest {
         assertTrue(sma.isReady());
         assertEquals(2.0, sma.value(), 1e-9);
 
-        // EMA(2): not ready until the 2nd close.
         Indicator ema = Indicator.create(new IndicatorSpec(IndicatorType.EMA, 2));
         ema.update(price("10"));
         assertFalse(ema.isReady());
         ema.update(price("20"));
         assertTrue(ema.isReady());
 
-        // RSI(2): not ready until 3 closes (1 to seed previousClose + 2 changes).
         Indicator rsi = Indicator.create(new IndicatorSpec(IndicatorType.RSI, 2));
         rsi.update(price("100"));
         rsi.update(price("101"));
@@ -134,10 +124,6 @@ class IndicatorTest {
 
     @Test
     void switchCoversAllCurrentIndicatorTypeValues() {
-        // If a new IndicatorType is ever added without updating
-        // Indicator.create's switch, this test starts failing to compile
-        // (or, if create() were to gain a default branch, this loop would
-        // catch the omission at runtime instead).
         for (IndicatorType type : IndicatorType.values()) {
             int period = (type == IndicatorType.RSI) ? 2 : 1;
             Indicator indicator = Indicator.create(new IndicatorSpec(type, period));

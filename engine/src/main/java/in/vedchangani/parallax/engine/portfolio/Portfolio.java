@@ -7,25 +7,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * The single mutable source of truth for financial state during one
- * backtest run: cash, position quantity, total cost basis, and cumulative
- * realized P&amp;L. It is per-run, not thread-safe, and never shared
- * between runs.
- *
- * <p>V1 is long-only with a single position and no pyramiding (D-16), so
- * {@code Portfolio} enforces a strict flat/long state machine: a BUY is
- * accepted only while flat, and a SELL only for the full held quantity.
- * There is no {@code Position} object, no lots, and no FIFO/LIFO — one
- * quantity and one cost basis fully describe the position.
- *
- * <p>Average cost is deliberately not exposed here (D-13/D-22): it is a
- * display concern for a later reporting layer, and computing it would be
- * the engine's only division. {@link #apply(Fill)} is the only method
- * that mutates state, and it is all-or-nothing — every precondition is
- * checked before any field changes, so a rejected operation leaves the
- * portfolio completely unchanged. {@link #markToMarket} never mutates.
- */
 public final class Portfolio {
 
     private BigDecimal cash;
@@ -64,21 +45,6 @@ public final class Portfolio {
         return quantity == 0;
     }
 
-    /**
-     * Applies {@code fill} to this portfolio: a BUY (only while flat) or
-     * a full-position SELL (only while long, for exactly the held
-     * quantity). Every precondition is validated before any field is
-     * changed, so a thrown exception leaves the portfolio exactly as it
-     * was.
-     *
-     * @throws NullPointerException  if {@code fill} is null
-     * @throws IllegalStateException if the fill is inconsistent with the
-     *                                current position (BUY while long,
-     *                                SELL while flat or for other than
-     *                                the full held quantity), if a BUY
-     *                                costs more than available cash, or
-     *                                if a SELL would leave cash negative
-     */
     public void apply(Fill fill) {
         Objects.requireNonNull(fill, "fill must not be null");
 
@@ -105,7 +71,6 @@ public final class Portfolio {
         this.cash = cash.subtract(totalCost);
         this.quantity = fill.quantity();
         this.costBasis = totalCost;
-        // realizedPnl unchanged
     }
 
     private void applySell(Fill fill) {
@@ -135,15 +100,6 @@ public final class Portfolio {
         this.realizedPnl = newRealizedPnl;
     }
 
-    /**
-     * Returns an immutable observation of the current portfolio state
-     * marked to {@code close} on {@code date}. This does not mutate the
-     * portfolio; the current close is never stored.
-     *
-     * @throws NullPointerException     if {@code date} or {@code close}
-     *                                   is null
-     * @throws IllegalArgumentException if {@code close} is not positive
-     */
     public EquityPoint markToMarket(LocalDate date, BigDecimal close) {
         Objects.requireNonNull(date, "date must not be null");
         Objects.requireNonNull(close, "close must not be null");

@@ -10,21 +10,6 @@ import { Tabs } from '../../components/Tabs.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
 import { ExportActions } from './ExportActions.jsx';
 
-/**
- * The shared run workspace (D-34 Batch 5 §6/§9/§19): fetches the completed
- * run once - an immutable, integrity-verified historical record, cached
- * like any other completed-run resource (see immutableCache.js) - and
- * establishes the research identity in the page header, then hands it down
- * to Overview/Trades/Rejections via router Outlet context so no child tab
- * ever refetches it. The strategy/dataset name lookups here are the cheap,
- * mutable *parent* resources (`GET /api/strategies/{id}`, `GET
- * /api/datasets/{id}`) purely to label the header - never their
- * StrategyVersion/DatasetVersion (the definition tree or bars), which this
- * batch never reloads merely to render a result.
- *
- * @param {object} props
- * @param {number} props.runId
- */
 export function BacktestRunWorkspace({ runId }) {
   const fetchRun = useCallback((signal) => getBacktestRun(runId, signal), [runId]);
   const run = useApiResource(fetchRun, [runId], { cacheKey: `/api/backtest-runs/${runId}` });

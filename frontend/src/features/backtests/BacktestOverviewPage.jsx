@@ -13,21 +13,6 @@ import { PerformanceSummary } from './PerformanceSummary.jsx';
 import { ResearchInputsPanel } from './ResearchInputsPanel.jsx';
 import { WarmupNotice } from './WarmupNotice.jsx';
 
-/**
- * The run Overview tab (D-34 Batch 5 §15): a warm-up notice (C1), performance
- * summary, equity chart, benchmark comparison, assumptions disclosure (I4),
- * then research inputs, in that order. `run` comes from the parent
- * BacktestRunWorkspace via Outlet context - this page never refetches it.
- * Equity is the one child resource loaded immediately (the chart is the
- * Overview's own centerpiece, per §5's "load when Overview needs it");
- * Trades/Rejections load only when their own tab is opened.
- *
- * The dataset-version snapshot (immutable, cached under the same cache key
- * `BacktestNewPage` already uses for it) is fetched here purely to disclose
- * its `source`/`adjustmentBasis` in the Assumptions panel - `DatasetResponse`
- * (already fetched by the workspace for the market's name) carries neither.
- * This is one request per result page, never a per-row/N+1 pattern.
- */
 export function BacktestOverviewPage() {
   const { run, runId, marketName, marketSymbol, strategyName } = useOutletContext();
 
@@ -42,9 +27,6 @@ export function BacktestOverviewPage() {
     cacheKey: `/api/datasets/${run.datasetId}/versions/${run.datasetVersion}`,
   });
 
-  // C1: bar counts derived purely from the equity curve already fetched for
-  // the chart above (it spans every bar in the requested range, ready or
-  // not) - no new endpoint, no new backend arithmetic.
   const totalBarCount = equity.data ? equity.data.length : undefined;
   const inactiveBarCount = equity.data
     ? run.firstEvaluableDate

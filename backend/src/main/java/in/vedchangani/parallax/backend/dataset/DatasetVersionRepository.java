@@ -7,14 +7,6 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Owner-scoped repository access for {@link DatasetVersion} (D-32,
- * mirroring D-31's {@code StrategyVersionRepository}). There is no {@code
- * owner_id} column on {@code dataset_version} — ownership is inherited
- * through a join to {@link Dataset}, enforced here rather than by loading
- * a version and checking ownership afterward. No update or delete method
- * exists.
- */
 public interface DatasetVersionRepository extends Repository<DatasetVersion, Long> {
 
     <S extends DatasetVersion> S saveAndFlush(S version);

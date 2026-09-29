@@ -3,11 +3,6 @@ const BASE =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ' +
   'disabled:pointer-events-none disabled:opacity-50';
 
-/**
- * The Foundation's reusable button treatment. `primary` carries the
- * restrained offset-shadow/neo-brutalist accent; the others stay flat so
- * that treatment doesn't dilute across every action on the page.
- */
 const VARIANTS = {
   primary:
     'border border-ink bg-accent px-4 py-2 text-white shadow-[2px_2px_0_0_var(--color-ink)] ' +
@@ -21,15 +16,6 @@ const VARIANTS = {
     'border border-danger bg-surface px-4 py-2 text-danger hover:bg-danger hover:text-white focus-visible:ring-danger',
 };
 
-/**
- * Shared classes for anything that must look like a {@link
- * import('./Button.jsx').Button} - a `<button>` itself, or a non-button
- * element (e.g. a `react-router` `Link` used for navigation) that needs
- * the identical visual treatment.
- *
- * @param {'primary' | 'secondary' | 'subtle' | 'destructive'} [variant]
- * @param {string} [className]
- */
 export function buttonClasses(variant = 'primary', className = '') {
   return `${BASE} ${VARIANTS[variant]}${className ? ` ${className}` : ''}`;
 }

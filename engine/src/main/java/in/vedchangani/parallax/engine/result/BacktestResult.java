@@ -12,22 +12,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * The complete immutable output of one backtest run. It retains the
- * inputs needed to explain what was run ({@code symbol}, {@code strategy},
- * {@code config}) plus everything produced ({@code equityCurve},
- * {@code fills}, {@code rejections}), but never the supplied
- * {@code BarSeries} itself — dataset identity/provenance is a backend
- * concern (D-15) — and never any mutable runtime object
- * ({@code Portfolio}, a runtime {@code Indicator}, a pending
- * {@code Order}, or the {@code Backtester} that produced this result).
- *
- * <p>{@code trades()}, {@code finalPoint()}, {@code totalCommission()} and
- * {@code totalSlippageCost()} are derived, not stored: trades are parsed
- * from {@code fills} on every call, the final state is simply the last
- * equity point, and the two cost totals are exact sums over
- * {@code fills} (D-27).
- */
 public record BacktestResult(String symbol, StrategyDefinition strategy, BacktestConfig config,
                               Optional<LocalDate> firstEvaluableDate, List<EquityPoint> equityCurve,
                               List<Fill> fills, List<OrderRejection> rejections) {
@@ -94,34 +78,14 @@ public record BacktestResult(String symbol, StrategyDefinition strategy, Backtes
         }
     }
 
-    /**
-     * The trades derived from {@link #fills()}, parsed on every call via
-     * {@link Trade#fromFills(List)}. Validation in this constructor
-     * (strictly ascending dates, alternating sides starting with BUY)
-     * guarantees this can never throw for a successfully constructed
-     * result.
-     */
     public List<Trade> trades() {
         return Trade.fromFills(fills);
     }
 
-    /**
-     * The final portfolio state, equal to the last element of
-     * {@link #equityCurve()}. There is no separate stored final-state
-     * type.
-     */
     public EquityPoint finalPoint() {
         return equityCurve.getLast();
     }
 
-    /**
-     * {@code Σ fill.commission()} over every fill in {@link #fills()} —
-     * BUY and SELL, including the entry fill of a final open trade — with
-     * {@link BigDecimal#ZERO} when there are no fills (D-27). This is the
-     * commission actually paid in cash. A still-open position contributes
-     * no hypothetical exit commission (D-8). Derived on every call by
-     * exact {@code BigDecimal} addition; never stored, never rounded.
-     */
     public BigDecimal totalCommission() {
         BigDecimal total = BigDecimal.ZERO;
         for (Fill fill : fills) {
@@ -130,16 +94,6 @@ public record BacktestResult(String symbol, StrategyDefinition strategy, Backtes
         return total;
     }
 
-    /**
-     * {@code Σ fill.slippageCost()} over every fill in {@link #fills()} —
-     * BUY and SELL, including the entry fill of a final open trade — with
-     * {@link BigDecimal#ZERO} when there are no fills (D-27). This is the
-     * implicit adverse-fill cost relative to each execution bar's open.
-     * It is already reflected in the fill prices, so it is <em>not</em> an
-     * additional cash flow and must never be subtracted from cash again.
-     * Derived on every call by exact {@code BigDecimal} addition; never
-     * stored, never rounded.
-     */
     public BigDecimal totalSlippageCost() {
         BigDecimal total = BigDecimal.ZERO;
         for (Fill fill : fills) {

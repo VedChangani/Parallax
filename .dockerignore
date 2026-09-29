@@ -1,4 +1,3 @@
-# Root build context (used by backend/Dockerfile): keep it to what Maven needs.
 **/target/
 **/node_modules/
 frontend/

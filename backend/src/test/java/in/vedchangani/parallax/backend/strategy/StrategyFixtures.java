@@ -8,7 +8,6 @@ import in.vedchangani.parallax.engine.strategy.StrategyDefinition;
 
 import java.math.BigDecimal;
 
-/** A tiny, deterministic, hand-calculable {@link StrategyDefinition} fixture shared by D-31 tests. */
 final class StrategyFixtures {
 
     private StrategyFixtures() {
@@ -21,7 +20,6 @@ final class StrategyFixtures {
                 new PositionSizing.CashFraction(BigDecimal.ONE));
     }
 
-    /** A definition distinct from {@link #simple()} — a different constant threshold. */
     static StrategyDefinition alternative() {
         return new StrategyDefinition(
                 new Condition.Compare(new Operand.Close(), Operator.GT, new Operand.Constant(5)),

@@ -54,17 +54,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * D-34 Batch 3 REST-boundary proof (MockMvc, real PostgreSQL via
- * Testcontainers): the full create/read request-response contract, strict
- * D-30 request parsing through HTTP, ownership, the error-mapping table,
- * and that no read endpoint re-invokes the engine or recomputes stored
- * metrics/benchmark values. Mirrors {@code StrategyControllerIT}/{@code
- * DatasetControllerIT}'s own style. Strategy/dataset setup uses {@link
- * StrategyService}/{@link DatasetService} directly (not their own REST
- * endpoints, already covered by their own controller tests) so this file
- * stays focused on {@link BacktestRunController} itself.
- */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
@@ -96,9 +85,6 @@ class BacktestRunControllerIT {
         when(currentUser.id()).thenReturn(owner);
     }
 
-    // --- fixtures ----------------------------------------------------------------
-
-    /** Enters when SMA(1) (= close) > 102, exits when close < 98 - genuinely trades. */
     private static StrategyDefinition tradingStrategy() {
         return new StrategyDefinition(
                 new Condition.Compare(new Operand.IndicatorRef(new IndicatorSpec(IndicatorType.SMA, 1)),
@@ -107,7 +93,6 @@ class BacktestRunControllerIT {
                 new PositionSizing.CashFraction(BigDecimal.ONE));
     }
 
-    /** Always enters, never exits - used for the open-trade and zero-quantity-rejection scenarios. */
     private static StrategyDefinition alwaysEnterStrategy() {
         return new StrategyDefinition(
                 new Condition.Compare(new Operand.Close(), Operator.GT, new Operand.Constant(0)),
@@ -162,8 +147,6 @@ class BacktestRunControllerIT {
         return Long.parseLong(location.substring(location.lastIndexOf('/') + 1));
     }
 
-    // --- A: create happy path -----------------------------------------------------
-
     @Test
     void createRunHappyPath() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
@@ -190,8 +173,6 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$.benchmark.quantity").exists())
                 .andExpect(jsonPath("$.createdAt").exists());
     }
-
-    // --- B: strict request parsing -------------------------------------------------
 
     @Test
     void malformedJsonIsBadRequest() throws Exception {
@@ -232,12 +213,10 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$.field").value("config.initialCapital"));
     }
 
-    // --- defensive numeric bounds (Phase 9 Batch 2b, D-36) ---------------------
-
     @Test
     void over100CharDecimalLiteralIsBadRequest() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
-        String text = "1." + "0".repeat(99); // 101 characters
+        String text = "1." + "0".repeat(99);
         mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
                         .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, text, "0", "0",
                                 "2024-01-02", "2024-01-09")))
@@ -248,7 +227,7 @@ class BacktestRunControllerIT {
     @Test
     void over18IntegerDigitsIsUnprocessable() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
-        String text = "1" + "0".repeat(18); // 19 integer digits, still grammar-valid and positive
+        String text = "1" + "0".repeat(18);
         mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
                         .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, text, "0", "0",
                                 "2024-01-02", "2024-01-09")))
@@ -259,7 +238,7 @@ class BacktestRunControllerIT {
     @Test
     void over18FractionalDigitsIsUnprocessable() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
-        String text = "0." + "9".repeat(19); // 19 fractional digits, still < 1
+        String text = "0." + "9".repeat(19);
         mockMvc.perform(post("/api/backtest-runs").contentType(MediaType.APPLICATION_JSON)
                         .content(createRunJson(refs.strategyId(), 1, refs.datasetId(), 1, "10000", "0", text,
                                 "2024-01-02", "2024-01-09")))
@@ -307,8 +286,6 @@ class BacktestRunControllerIT {
                                 "2023-01-01", "2024-01-09")))
                 .andExpect(status().isUnprocessableEntity());
     }
-
-    // --- C: ownership ----------------------------------------------------------------
 
     @Test
     void anotherUsersStrategyIsNotFoundOnCreate() throws Exception {
@@ -375,16 +352,12 @@ class BacktestRunControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].id").value(runId))
-                // I8 (Phase 9 Batch 1): the cheap list endpoint carries the run's date
-                // range and returns, not only identity/hash fields.
                 .andExpect(jsonPath("$[0].startDate").value("2024-01-02"))
                 .andExpect(jsonPath("$[0].endDate").value("2024-01-09"))
                 .andExpect(jsonPath("$[0].totalReturn").isNumber())
                 .andExpect(jsonPath("$[0].benchmarkTotalReturn").isNumber())
                 .andReturn();
 
-        // Cross-check against the fully reconstructed detail response - same stored
-        // doubles, read through the cheap list path and the verified detail path.
         String listJson = listResult.getResponse().getContentAsString();
         MvcResult detailResult = mockMvc.perform(get("/api/backtest-runs/" + runId))
                 .andExpect(status().isOk())
@@ -405,8 +378,6 @@ class BacktestRunControllerIT {
         mockMvc.perform(get("/api/backtest-runs/99999999")).andExpect(status().isNotFound());
     }
 
-    // --- D: GET detail -----------------------------------------------------------
-
     @Test
     void getRunDetailReturnsFullyPopulatedFields() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
@@ -423,15 +394,11 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$.totalSlippageCost").value("0"))
                 .andExpect(jsonPath("$.metrics.totalReturn").isNumber())
                 .andExpect(jsonPath("$.metrics.maxDrawdown").isNumber())
-                // One closed trade, a loss: winRate is present (0.0), not empty - winRate
-                // is only empty when closedTradeCount == 0 (D-26).
                 .andExpect(jsonPath("$.metrics.winRate").value(0.0))
                 .andExpect(jsonPath("$.metrics.averageWin").doesNotExist())
                 .andExpect(jsonPath("$.metrics.averageLoss").value(-855.0))
                 .andExpect(jsonPath("$.benchmark.cash").isString());
     }
-
-    // --- E: equity curve -----------------------------------------------------------
 
     @Test
     void equityCurveHasCorrectPointsAndDerivedValues() throws Exception {
@@ -459,8 +426,6 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$[2].benchmarkEquity").exists());
     }
 
-    // --- V1.1 Batch 3: profit factor and drawdown series ---------------------------
-
     @Test
     void profitFactorIsZeroForARunWithOnlyALosingClosedTrade() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), sixBarCsv());
@@ -469,11 +434,9 @@ class BacktestRunControllerIT {
                 .andReturn();
         long runId = idFromLocation(created);
 
-        // One closed trade, -855: gross profit 0 / |gross loss| 855 = 0.0 (present, not null).
         mockMvc.perform(get("/api/backtest-runs/" + runId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.metrics.profitFactor").value(0.0))
-                // Existing metrics are unaffected by the new field.
                 .andExpect(jsonPath("$.metrics.winRate").value(0.0))
                 .andExpect(jsonPath("$.metrics.averageLoss").value(-855.0));
     }
@@ -487,7 +450,6 @@ class BacktestRunControllerIT {
                 .andReturn();
         long runId = idFromLocation(created);
 
-        // Only an open trade: no closed trade, so no losing closed trade - unavailable, never Infinity.
         String body = mockMvc.perform(get("/api/backtest-runs/" + runId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.metrics.profitFactor").doesNotExist())
@@ -507,12 +469,10 @@ class BacktestRunControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(6))
                 .andExpect(jsonPath("$[0].drawdown").value(0.0))
-                // 10285 is a new high over 10000: still exactly 0.
                 .andExpect(jsonPath("$[2].equity").value("10285"))
                 .andExpect(jsonPath("$[2].drawdown").value(0.0))
                 .andReturn().getResponse().getContentAsString();
 
-        // Independent recomputation from the response's own exact equity strings.
         java.util.List<String> equities = JsonPath.read(body, "$[*].equity");
         java.util.List<Number> drawdowns = JsonPath.read(body, "$[*].drawdown");
         assertEquals(equities.size(), drawdowns.size());
@@ -527,16 +487,12 @@ class BacktestRunControllerIT {
             assertEquals(expected, drawdowns.get(i).doubleValue(), "drawdown at index " + i);
             maxSeen = Math.max(maxSeen, drawdowns.get(i).doubleValue());
         }
-        // The losing trade must show up as a real drawdown, and the series
-        // maximum is exactly the run's own maxDrawdown metric.
         assertEquals(true, maxSeen > 0.0);
         double maxDrawdownMetric = ((Number) JsonPath.read(
                 mockMvc.perform(get("/api/backtest-runs/" + runId)).andReturn().getResponse().getContentAsString(),
                 "$.metrics.maxDrawdown")).doubleValue();
         assertEquals(maxDrawdownMetric, maxSeen);
     }
-
-    // --- V1.1 Batch 4: CSV export ----------------------------------------------------
 
     private String getCsv(String path, String expectedFilename) throws Exception {
         MvcResult result = mockMvc.perform(get(path))
@@ -560,15 +516,14 @@ class BacktestRunControllerIT {
 
         assertEquals(true, csv.endsWith("\r\n"));
         String[] lines = csv.split("\r\n", -1);
-        assertEquals(8, lines.length); // header + 6 bars + the empty tail after the final CRLF
+        assertEquals(8, lines.length);
         assertEquals("", lines[7]);
         assertEquals("date,equity,cash,quantity,close,market_value,cost_basis,realized_pnl,unrealized_pnl,"
                 + "benchmark_equity,drawdown", lines[0]);
         assertEquals(true, lines[1].startsWith("2024-01-02,10000,10000,0,100,0,0,0,0,"));
         assertEquals(true, lines[1].endsWith(",0"));
-        // Bar 3 (2024-01-04): the exact strings the JSON view returns for this point.
         assertEquals(true, lines[3].startsWith("2024-01-04,10285,25,95,108,10260,9975,0,285,"));
-        assertEquals(true, lines[3].endsWith(",0")); // 10285 is a new high over 10000
+        assertEquals(true, lines[3].endsWith(",0"));
     }
 
     @Test
@@ -595,7 +550,6 @@ class BacktestRunControllerIT {
             }
             double drawdown = ((Number) JsonPath.read(json, "$[" + row + "].drawdown")).doubleValue();
             assertEquals(drawdown, Double.parseDouble(cells[10]), "row " + row + " drawdown");
-            // Plain decimal, never scientific notation.
             assertFalse(cells[10].contains("E") || cells[10].contains("e"), cells[10]);
         }
     }
@@ -647,7 +601,7 @@ class BacktestRunControllerIT {
         assertEquals("OPEN", cells[0]);
         assertEquals("96", cells[1]);
         assertEquals("104", cells[4]);
-        for (int col = 6; col <= 10; col++) { // exit_* and realized_pnl are unavailable, not placeholders
+        for (int col = 6; col <= 10; col++) {
             assertEquals("", cells[col], "column " + col);
         }
         assertEquals("2024-01-03", cells[13]);
@@ -668,7 +622,6 @@ class BacktestRunControllerIT {
         String csv = getCsv("/api/backtest-runs/" + runId + "/trades.csv", "backtest-" + runId + "-trades.csv");
 
         assertEquals(BacktestCsv.TRADES_HEADER + "\r\n", csv);
-        // The equity curve of the same run is still exported in full.
         String equityCsv = getCsv("/api/backtest-runs/" + runId + "/equity-curve.csv",
                 "backtest-" + runId + "-equity-curve.csv");
         assertEquals(3, equityCsv.split("\r\n").length);
@@ -690,8 +643,6 @@ class BacktestRunControllerIT {
         mockMvc.perform(get("/api/backtest-runs/999999999/equity-curve.csv")).andExpect(status().isNotFound());
         mockMvc.perform(get("/api/backtest-runs/999999999/trades.csv")).andExpect(status().isNotFound());
     }
-
-    // --- F: trades -----------------------------------------------------------------
 
     @Test
     void closedTradeIsRepresentedWithEntryExitAndSignalIndicators() throws Exception {
@@ -747,8 +698,6 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$[0].unrealizedPnl").value("384"));
     }
 
-    // --- G: rejections ---------------------------------------------------------------
-
     @Test
     void zeroQuantityRejectionIsRepresentedWithNullOrderFields() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, alwaysEnterStrategy(), twoBarCsv());
@@ -771,8 +720,6 @@ class BacktestRunControllerIT {
                 .andExpect(jsonPath("$[0].signalDate").value("2024-01-02"))
                 .andExpect(jsonPath("$[0].signalClose").value("104"));
     }
-
-    // --- H: integrity ------------------------------------------------------------
 
     private Map<String, Object> goldenRunValues(long strategyId, long datasetId) {
         String strategyHash = jdbcTemplate.queryForObject(
@@ -835,7 +782,7 @@ class BacktestRunControllerIT {
     void tamperedRunTotalCommissionIsInternalServerError() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), twoBarCsv());
         Map<String, Object> values = goldenRunValues(refs.strategyId(), refs.datasetId());
-        values.put("total_commission", new BigDecimal("5")); // no fills exist, so 5 != sum(0)
+        values.put("total_commission", new BigDecimal("5"));
         long runId = insertRun(values);
         insertEquityPoint(runId, "2024-01-02", "10000", 0, "0", "0", "100");
         insertEquityPoint(runId, "2024-01-03", "10000", 0, "0", "0", "101");
@@ -853,7 +800,6 @@ class BacktestRunControllerIT {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), twoBarCsv());
         long runId = insertRun(goldenRunValues(refs.strategyId(), refs.datasetId()));
         insertEquityPoint(runId, "2024-01-02", "10000", 0, "0", "0", "100");
-        // quantity = 0 with a non-zero cost basis violates EquityPoint's own invariant.
         insertEquityPoint(runId, "2024-01-03", "9000", 0, "100", "0", "101");
 
         mockMvc.perform(get("/api/backtest-runs/" + runId)).andExpect(status().isInternalServerError());
@@ -869,15 +815,13 @@ class BacktestRunControllerIT {
     void tamperedBenchmarkCrossFieldMismatchIsInternalServerError() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), twoBarCsv());
         Map<String, Object> values = goldenRunValues(refs.strategyId(), refs.datasetId());
-        values.put("benchmark_cash", new BigDecimal("50")); // 50 + 9900 != 10000
+        values.put("benchmark_cash", new BigDecimal("50"));
         long runId = insertRun(values);
         insertEquityPoint(runId, "2024-01-02", "10000", 0, "0", "0", "100");
         insertEquityPoint(runId, "2024-01-03", "10000", 0, "0", "0", "101");
 
         mockMvc.perform(get("/api/backtest-runs/" + runId)).andExpect(status().isInternalServerError());
     }
-
-    // --- I: no recomputation on read ------------------------------------------------
 
     @Test
     void readEndpointsNeverReinvokeTheEngine() throws Exception {
@@ -893,34 +837,18 @@ class BacktestRunControllerIT {
         mockMvc.perform(get("/api/backtest-runs/" + runId + "/rejections")).andExpect(status().isOk());
         mockMvc.perform(get("/api/backtest-runs")).andExpect(status().isOk());
 
-        // Exactly the one invocation from the POST that created the run - never again
-        // for any subsequent read, no matter how many times or which endpoint.
         verify(backtester, times(1)).run(any(BarSeries.class), any(StrategyDefinition.class),
                 any(BacktestConfig.class));
     }
 
-    /**
-     * Phase 9 Batch 2c revises D-34 Batch 2's never-recompute-on-read policy:
-     * {@code getRun} now recomputes {@code PerformanceMetrics} and replays
-     * the benchmark, comparing both exactly against the stored values. This
-     * baseline is fully self-consistent under every OTHER check (ledger
-     * replay, benchmark cash+costBasis identity) - a flat, no-trade, no
-     * price-change two-point curve 517 days apart, so {@code totalReturn},
-     * {@code cagr} (present and exactly {@code 0.0}, since the span exceeds
-     * 365 days and the ratio is exactly 1), and the true benchmark return
-     * ({@code (100 + 10*100 - 10000) / 10000 = -0.89} for the reference
-     * state below) are all genuinely correct - ONLY the tampered field
-     * differs from what recomputation would produce, isolating exactly what
-     * this test means to prove.
-     */
     @Test
     void tamperedMetricIsInternalServerError() throws Exception {
         OwnedRefs refs = createOwnedStrategyAndDataset(owner, tradingStrategy(), twoBarCsv());
         Map<String, Object> values = goldenRunValues(refs.strategyId(), refs.datasetId());
         values.put("start_date", LocalDate.of(2020, 1, 1));
         values.put("end_date", LocalDate.of(2021, 6, 1));
-        values.put("cagr", 0.123456); // true recomputed value is exactly 0.0
-        values.put("benchmark_total_return", new BigDecimal("-0.89").doubleValue()); // true value - left correct
+        values.put("cagr", 0.123456);
+        values.put("benchmark_total_return", new BigDecimal("-0.89").doubleValue());
         long runId = insertRun(values);
         insertEquityPoint(runId, "2020-01-01", "10000", 0, "0", "0", "100");
         insertEquityPoint(runId, "2021-06-01", "10000", 0, "0", "0", "100");
@@ -934,8 +862,8 @@ class BacktestRunControllerIT {
         Map<String, Object> values = goldenRunValues(refs.strategyId(), refs.datasetId());
         values.put("start_date", LocalDate.of(2020, 1, 1));
         values.put("end_date", LocalDate.of(2021, 6, 1));
-        values.put("cagr", 0.0); // true recomputed value - left correct
-        values.put("benchmark_total_return", 0.777); // true value is exactly -0.89
+        values.put("cagr", 0.0);
+        values.put("benchmark_total_return", 0.777);
         long runId = insertRun(values);
         insertEquityPoint(runId, "2020-01-01", "10000", 0, "0", "0", "100");
         insertEquityPoint(runId, "2021-06-01", "10000", 0, "0", "0", "100");

@@ -28,12 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-38 self-registration, against a real socket like {@link
- * AuthenticationIT} — CSRF is a real cookie/header round trip here, not a
- * {@code MockMvc} shortcut, and {@code POST /api/auth/register} needs no
- * {@code @MockitoBean CurrentUser} at all: it never resolves an owner.
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration.class)
 class RegistrationIT {
@@ -42,8 +36,6 @@ class RegistrationIT {
     private int port;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
-
-    // --- success ---------------------------------------------------------------
 
     @Test
     void successfulRegistrationReturns201WithUsernameOnly() throws Exception {
@@ -99,8 +91,6 @@ class RegistrationIT {
         assertFalse(body.contains("password"));
         assertFalse(body.contains("hash"));
     }
-
-    // --- duplicates --------------------------------------------------------------
 
     @Test
     void duplicateUsernameReturns409() throws Exception {
@@ -161,18 +151,16 @@ class RegistrationIT {
         return send(registerRequest(username, "a-perfectly-fine-password", cookies)).statusCode();
     }
 
-    // --- username validation -----------------------------------------------------
-
     @Test
     void blankOverLongOrUnstorableUsernamesReturn400() throws Exception {
         List<String> invalid = List.of(
-                "", // empty
-                "   ", // blank after trimming
-                "\t \n", // whitespace only
-                "a".repeat(65), // over the 64-character column
-                " " + "a".repeat(65) + " ", // still 65 after trimming
-                "😀".repeat(65), // 65 code points (each is two UTF-16 units)
-                "nul\u0000inside" // PostgreSQL cannot store NUL
+                "",
+                "   ",
+                "\t \n",
+                "a".repeat(65),
+                " " + "a".repeat(65) + " ",
+                "😀".repeat(65),
+                "nul\u0000inside"
         );
 
         for (String username : invalid) {
@@ -205,14 +193,14 @@ class RegistrationIT {
     void anyNonBlankUsernameUpToSixtyFourCharactersIsAccepted() throws Exception {
         String suffix = String.valueOf(System.nanoTime());
         List<String> valid = List.of(
-                "V" + suffix, // one letter and digits, uppercase kept
-                "Ved" + suffix, // mixed case
-                "has space & symbols! #" + suffix, // spaces and punctuation
-                "ünïcödé-名前-" + suffix, // non-ASCII
-                "\"quoted\\back\"" + suffix, // JSON-special characters
-                "1", // a single character (the test database is fresh per run)
-                ("z" + suffix + "-") + "a".repeat(64 - ("z" + suffix + "-").length()), // exactly 64
-                "😀".repeat(63) + "🙂" // exactly 64 code points (128 UTF-16 units)
+                "V" + suffix,
+                "Ved" + suffix,
+                "has space & symbols! #" + suffix,
+                "ünïcödé-名前-" + suffix,
+                "\"quoted\\back\"" + suffix,
+                "1",
+                ("z" + suffix + "-") + "a".repeat(64 - ("z" + suffix + "-").length()),
+                "😀".repeat(63) + "🙂"
         );
 
         for (String username : valid) {
@@ -232,7 +220,6 @@ class RegistrationIT {
         assertEquals(200, login.statusCode());
         assertTrue(login.body().contains("\"" + username + "\""), login.body());
 
-        // The stored name is the exact one entered - a different case is a different (unknown) account.
         CookieJar otherCase = new CookieJar();
         bootstrapCsrf(otherCase);
         assertEquals(401, send(loginRequest(username.toLowerCase(), "a-perfectly-fine-password", otherCase))
@@ -254,7 +241,7 @@ class RegistrationIT {
 
         HttpResponse<String> created = register("  " + username + "\t ", "a-perfectly-fine-password");
         assertEquals(201, created.statusCode());
-        assertTrue(created.body().contains("\"" + username + "\""), created.body()); // echoed trimmed
+        assertTrue(created.body().contains("\"" + username + "\""), created.body());
 
         assertEquals(409, register(username, "a-perfectly-fine-password").statusCode());
 
@@ -274,8 +261,6 @@ class RegistrationIT {
 
         assertEquals(200, login.statusCode());
     }
-
-    // --- password validation -------------------------------------------------------
 
     @Test
     void sevenCharacterPasswordReturns400() throws Exception {
@@ -312,8 +297,6 @@ class RegistrationIT {
         assertEquals(201, response.statusCode());
     }
 
-    // --- request shape -------------------------------------------------------------
-
     @Test
     void unknownFieldIsRejectedWith400() throws Exception {
         CookieJar cookies = new CookieJar();
@@ -328,8 +311,6 @@ class RegistrationIT {
 
         assertEquals(400, response.statusCode());
     }
-
-    // --- CSRF ------------------------------------------------------------------
 
     @Test
     void missingOrInvalidCsrfReturns403() throws Exception {
@@ -352,8 +333,6 @@ class RegistrationIT {
         assertEquals(403, invalidCsrf.statusCode());
     }
 
-    // --- registering while already authenticated -----------------------------------
-
     @Test
     void registeringWhileLoggedInDoesNotChangeTheCurrentIdentity() throws Exception {
         String usernameA = uniqueUsername("register-already-a");
@@ -374,8 +353,6 @@ class RegistrationIT {
         assertTrue(me.body().contains(usernameA));
         assertFalse(me.body().contains(usernameB));
     }
-
-    // --- helpers -------------------------------------------------------------
 
     private static final class CookieJar {
         private final Map<String, String> values = new HashMap<>();
@@ -417,7 +394,6 @@ class RegistrationIT {
         return "{\"username\":\"" + jsonEscape(username) + "\",\"password\":\"" + password + "\"}";
     }
 
-    /** Minimal JSON string escaping, so tests can send usernames containing quotes, backslashes and control characters. */
     private static String jsonEscape(String value) {
         StringBuilder escaped = new StringBuilder();
         for (char c : value.toCharArray()) {
@@ -444,7 +420,6 @@ class RegistrationIT {
                         StandardCharsets.UTF_8)), cookies);
     }
 
-    /** A self-contained register call: bootstraps its own CSRF cookie, since most tests only need one attempt. */
     private HttpResponse<String> register(String username, String password) throws Exception {
         CookieJar cookies = new CookieJar();
         bootstrapCsrf(cookies);

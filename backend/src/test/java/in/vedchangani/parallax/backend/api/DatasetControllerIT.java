@@ -34,12 +34,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * D-32 REST-boundary proof (MockMvc, real PostgreSQL via Testcontainers):
- * the full request/response contract, the strict-JSON and multipart
- * contracts, ownership, and the error-mapping table (D-32 §20). Mirrors
- * D-31's {@code StrategyControllerIT}.
- */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
@@ -65,8 +59,6 @@ class DatasetControllerIT {
         owner = TestUsers.create(jdbcTemplate, "ctrl");
         when(currentUser.id()).thenReturn(owner);
     }
-
-    // --- happy path ------------------------------------------------------------
 
     @Test
     void fullCreateListGetAndVersionLifecycle() throws Exception {
@@ -123,7 +115,6 @@ class DatasetControllerIT {
                 .andExpect(jsonPath("$.bars[0].volume").value(1000))
                 .andReturn();
 
-        // Re-uploading the exact bars this endpoint returned reproduces the same hash.
         String barsJson = bars.getResponse().getContentAsString();
         String rebuiltCsv = rebuildCsvFromBarsResponse(barsJson);
         mockMvc.perform(multipart("/api/datasets/" + id + "/versions")
@@ -133,8 +124,6 @@ class DatasetControllerIT {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.contentHash").value(contentHash));
     }
-
-    // --- strict JSON / validation -----------------------------------------------
 
     @Test
     void unknownFieldInCreateRequestIsRejected() throws Exception {
@@ -161,8 +150,6 @@ class DatasetControllerIT {
                         .content(createDatasetJson(name, "MSFT")))
                 .andExpect(status().isConflict());
     }
-
-    // --- multipart contract -----------------------------------------------------
 
     @Test
     void missingFilePartIsRejected() throws Exception {
@@ -220,8 +207,6 @@ class DatasetControllerIT {
                 .andExpect(status().isUnsupportedMediaType());
     }
 
-    // --- CSV error line reporting -------------------------------------------
-
     @Test
     void malformedCsvReports400WithLine() throws Exception {
         long id = createDataset();
@@ -245,8 +230,6 @@ class DatasetControllerIT {
                 .andExpect(jsonPath("$.line").value(2));
     }
 
-    // --- ownership --------------------------------------------------------------
-
     @Test
     void crossOwnerAccessIs404ForDatasetVersionAndBars() throws Exception {
         long id = createDataset();
@@ -264,8 +247,6 @@ class DatasetControllerIT {
         mockMvc.perform(get("/api/datasets/" + id + "/versions/1/bars")).andExpect(status().isNotFound());
     }
 
-    // --- no internal details leaked ----------------------------------------
-
     @Test
     void errorBodiesNeverLeakInternalDetails() throws Exception {
         long id = createDataset();
@@ -281,8 +262,6 @@ class DatasetControllerIT {
         assertFalse(body.contains("Exception"));
         assertFalse(body.toLowerCase().contains("stacktrace"));
     }
-
-    // --- helpers ----------------------------------------------------------------
 
     private long createDataset() throws Exception {
         MvcResult created = mockMvc.perform(post("/api/datasets")

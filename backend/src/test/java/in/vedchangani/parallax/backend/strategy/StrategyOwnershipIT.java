@@ -14,13 +14,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-31 ownership proof (D-31 §10), against real PostgreSQL: every strategy
- * operation is owner-scoped, using two independent {@code app_user} rows
- * created via {@link TestUsers} — never {@code @MockitoBean CurrentUser}
- * here, since {@link StrategyService} takes an explicit {@link UserId} per
- * call rather than reading a request-scoped current user.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class StrategyOwnershipIT {
@@ -90,7 +83,6 @@ class StrategyOwnershipIT {
         assertThrows(StrategyNotFoundException.class,
                 () -> strategyService.createVersion(b, strategy.id(), StrategyFixtures.alternative()));
 
-        // No version was consumed by the rejected attempt.
         StrategySummary unchanged = strategyService.getStrategy(a, strategy.id());
         assertEquals(1, unchanged.latestVersionNumber());
     }

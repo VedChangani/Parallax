@@ -28,13 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-32 {@link DatasetService} behavior against real PostgreSQL
- * (Testcontainers): version allocation, its concurrency guarantees, and
- * upload/rollback behavior. Mirrors D-31's {@code StrategyServiceIT} —
- * every scenario commits real rows; no test relies on transaction
- * rollback for isolation.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class DatasetServiceIT {
@@ -139,8 +132,6 @@ class DatasetServiceIT {
         datasetService.createVersionFromCsv(owner, dataset.id(), DatasetFixtures.simpleCsv(), AdjustmentBasis.RAW,
                 "a.csv");
 
-        // Out-of-band: insert version_number = 2 directly, bypassing the service and its lock,
-        // so the service's own next allocation (also 2) collides with it on insert.
         jdbcTemplate.update("""
                 insert into dataset_version
                     (dataset_id, version_number, symbol, source, source_detail, adjustment_basis,
@@ -151,11 +142,10 @@ class DatasetServiceIT {
         assertThrows(DatasetVersionConflictException.class, () -> datasetService.createVersionFromCsv(owner,
                 dataset.id(), DatasetFixtures.alternativeCsv(), AdjustmentBasis.RAW, "b.csv"));
 
-        // The failed attempt's counter increment rolled back with everything else.
         assertEquals(1, datasetService.getDataset(owner, dataset.id()).latestVersionNumber());
         Integer versionRowCount = jdbcTemplate.queryForObject(
                 "select count(*) from dataset_version where dataset_id = ?", Integer.class, dataset.id());
-        assertEquals(2, versionRowCount); // the service's version 1, plus the manually inserted version 2 — no third row
+        assertEquals(2, versionRowCount);
         Long orphanBarCount = jdbcTemplate.queryForObject(
                 "select count(*) from dataset_bar b join dataset_version v on v.id = b.dataset_version_id "
                         + "where v.dataset_id = ? and v.version_number = 2", Long.class, dataset.id());

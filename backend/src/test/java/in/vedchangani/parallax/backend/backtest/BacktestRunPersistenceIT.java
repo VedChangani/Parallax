@@ -30,14 +30,6 @@ import java.util.OptionalDouble;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-34 Batch 1 persistence proof, against real PostgreSQL (Testcontainers):
- * numeric/float fidelity through both the JPA ({@code BacktestRun}) and
- * plain-JDBC (equity point/fill/rejection) paths, the persisted engine
- * semantics version, and the {@link IndicatorSnapshot} JSON round trip.
- * Builds every engine value directly (never via {@code Backtester}), then
- * persists and re-reads it exactly as a later orchestration batch would.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class BacktestRunPersistenceIT {
@@ -62,8 +54,6 @@ class BacktestRunPersistenceIT {
 
     @Autowired
     private BacktestRejectionRepository rejectionRepository;
-
-    // --- a single, fully-consistent scenario, built directly from engine types ---
 
     private static final BigDecimal INITIAL_CAPITAL = new BigDecimal("10000.01");
     private static final BigDecimal COMMISSION_PER_FILL = new BigDecimal("1.25");
@@ -133,7 +123,6 @@ class BacktestRunPersistenceIT {
         return new BuyAndHoldBenchmark(capital, curve);
     }
 
-    /** Persists the full scenario and returns the generated run id plus the owner. */
     private record Persisted(long runId, BacktestFixtures.Inputs inputs) {
     }
 
@@ -157,8 +146,6 @@ class BacktestRunPersistenceIT {
 
         return new Persisted(runId, inputs);
     }
-
-    // --- E: numeric (BigDecimal) fidelity --------------------------------------
 
     @Test
     void bigDecimalValuesPreserveExactScaleThroughJpa() {
@@ -194,8 +181,6 @@ class BacktestRunPersistenceIT {
         assertEquals(2, fill.commission().scale());
     }
 
-    // --- F: float bit fidelity --------------------------------------------------
-
     @Test
     void metricDoublesRoundTripBitExactly() {
         Persisted persisted = persistScenario("float-fidelity");
@@ -209,8 +194,6 @@ class BacktestRunPersistenceIT {
         assertTrue(fetched.cagr().isEmpty());
     }
 
-    // --- G: engine semantics ----------------------------------------------------
-
     @Test
     void persistedEngineSemanticsVersionIsAccepted() {
         assertEquals(1, Backtester.SEMANTICS_VERSION);
@@ -221,8 +204,6 @@ class BacktestRunPersistenceIT {
 
         assertEquals(Backtester.SEMANTICS_VERSION, fetched.engineSemanticsVersion());
     }
-
-    // --- H: signal snapshot JSON round trip --------------------------------------
 
     @Test
     void indicatorSnapshotJsonRoundTripsExactly() {
@@ -253,8 +234,6 @@ class BacktestRunPersistenceIT {
         assertEquals(14, entries.get(3).get("period"));
         assertEquals(Double.toString(0.1 + 0.2), entries.get(3).get("value"));
     }
-
-    // --- I: valid parent/child insert + ownership isolation ----------------------
 
     @Test
     void aFullyValidScenarioPersistsAndReadsBackConsistently() {

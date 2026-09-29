@@ -17,23 +17,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pure unit tests for {@link StrategyDefinitionCodec} (D-30): canonical
- * JSON, the SHA-256 hash, the strict request reader, and stored-data
- * decode/integrity. No Spring context, no Testcontainers.
- */
 class StrategyDefinitionCodecTest {
 
     private final StrategyDefinitionMapper mapper = new StrategyDefinitionMapper();
     private final StrategyDefinitionCodec codec = new StrategyDefinitionCodec(mapper);
 
-    // --- golden vector -----------------------------------------------------
-
-    /**
-     * Independently generated once via:
-     * {@code printf '%s' '<GOLDEN_JSON>' | sha256sum}
-     * (no trailing newline, exactly the 364-byte canonical text below).
-     */
     private static final String GOLDEN_JSON =
             "{\"schemaVersion\":1,\"entryCondition\":{\"type\":\"compare\",\"left\":{\"type\":\"indicator\","
                     + "\"indicator\":\"SMA\",\"period\":20},\"operator\":\"GT\",\"right\":{\"type\":\"constant\","
@@ -61,8 +49,6 @@ class StrategyDefinitionCodecTest {
         assertEquals(StrategyDefinitionCodec.SCHEMA_VERSION, encoded.schemaVersion());
         assertEquals(364, encoded.json().getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
     }
-
-    // --- determinism / round-trip ------------------------------------------
 
     @Test
     void encodingTwiceGivesIdenticalTextAndHash() {
@@ -95,8 +81,6 @@ class StrategyDefinitionCodecTest {
         assertEquals(encoded.json(), reEncoded.json());
         assertEquals(encoded.sha256(), reEncoded.sha256());
     }
-
-    // --- nested trees ---------------------------------------------------------
 
     @Test
     void deeplyNestedAllAnyTreeRoundTrips() {
@@ -142,8 +126,6 @@ class StrategyDefinitionCodecTest {
         assertEquals(def, codec.decode(encoded.schemaVersion(), encoded.json(), encoded.sha256()));
     }
 
-    // --- constants ---------------------------------------------------------
-
     @Test
     void constantCanonicalFormsMatchDoubleToString() {
         assertConstantCanonical(0.1, "0.1");
@@ -152,7 +134,7 @@ class StrategyDefinitionCodecTest {
         assertConstantCanonical(-12.5, "-12.5");
         assertConstantCanonical(Double.MAX_VALUE, Double.toString(Double.MAX_VALUE));
         assertConstantCanonical(Double.MIN_VALUE, "4.9E-324");
-        assertConstantCanonical(-0.0, "0.0"); // engine folds -0.0 to 0.0
+        assertConstantCanonical(-0.0, "0.0");
     }
 
     private void assertConstantCanonical(double value, String expectedToken) {
@@ -170,8 +152,6 @@ class StrategyDefinitionCodecTest {
                 new PositionSizing.CashFraction(BigDecimal.ONE));
     }
 
-    // --- fraction canonical forms ----------------------------------------------
-
     @Test
     void fractionCanonicalFormHasNoTrailingZerosOrExponent() {
         StrategyDefinition def = new StrategyDefinition(
@@ -183,8 +163,6 @@ class StrategyDefinitionCodecTest {
         assertTrue(json.contains("\"fraction\":\"0.5\""), json);
         assertTrue(json.indexOf('E') < 0 || json.indexOf('E') == json.lastIndexOf("indicator"));
     }
-
-    // --- strict request parsing ------------------------------------------------
 
     @Test
     void parseRequestAcceptsTheGoldenTransportShapeWithoutSchemaVersion() {
@@ -231,7 +209,6 @@ class StrategyDefinitionCodecTest {
     }
 
     private static String extractField(String json, String field) {
-        // Minimal helper: locate "field": and its balanced-brace value in the flat golden text.
         String marker = "\"" + field + "\":";
         int start = json.indexOf(marker) + marker.length();
         int depth = 0;
@@ -250,14 +227,6 @@ class StrategyDefinitionCodecTest {
         return json.substring(start, i);
     }
 
-    // --- shape failures (malformed) ---------------------------------------------
-
-    /**
-     * Asserts {@code json} is rejected by {@code parseRequest} with the
-     * expected field path and a codec-owned reason category in the
-     * message, and that the message never leaks a Jackson exception class
-     * name or generic "Exception" wording (D-30 corrective pass §2).
-     */
     private MalformedStrategyDefinitionException assertMalformed(String json, String expectedPath,
                                                                    String expectedCategory) {
         MalformedStrategyDefinitionException e = assertThrows(MalformedStrategyDefinitionException.class,
@@ -401,8 +370,6 @@ class StrategyDefinitionCodecTest {
         assertMalformed("null", "", "wrong JSON type");
     }
 
-    // --- semantic failure (invalid) ---------------------------------------
-
     @Test
     void emptyAllGroupIsInvalidNotMalformed() {
         String json = "{\"entryCondition\":{\"type\":\"all\",\"conditions\":[]},"
@@ -411,8 +378,6 @@ class StrategyDefinitionCodecTest {
         StrategyDefinitionDto dto = codec.parseRequest(json);
         assertThrows(InvalidStrategyDefinitionException.class, () -> mapper.toEngine(dto));
     }
-
-    // --- order sensitivity -------------------------------------------------
 
     @Test
     void reorderedConditionListGivesDifferentCanonicalOutput() {
@@ -433,8 +398,6 @@ class StrategyDefinitionCodecTest {
         assertTrue(!codec.encode(a).sha256().equals(codec.encode(b).sha256()));
     }
 
-    // --- integrity (stored data) -----------------------------------------------
-
     @Test
     void unsupportedSchemaVersionIsIntegrityFailure() {
         CanonicalStrategyDefinition encoded = codec.encode(goldenDefinition());
@@ -445,9 +408,6 @@ class StrategyDefinitionCodecTest {
     @Test
     void documentSchemaVersionMismatchIsIntegrityFailure() {
         CanonicalStrategyDefinition encoded = codec.encode(goldenDefinition());
-        // The supplied column says 1 (a supported version), but the document's own
-        // schemaVersion property says 0 — a genuine document/column disagreement,
-        // distinct from "unsupported version" (which is caught before parsing at all).
         String documentClaimingVersionZero = encoded.json().replaceFirst("\"schemaVersion\":1,", "\"schemaVersion\":0,");
 
         assertThrows(StrategyDefinitionIntegrityException.class,
@@ -505,7 +465,6 @@ class StrategyDefinitionCodecTest {
     @Test
     void jsonbStyleReformattedStoredTextStillVerifies() {
         CanonicalStrategyDefinition encoded = codec.encode(goldenDefinition());
-        // Simulate PostgreSQL jsonb's whitespace/key-reordering rendering of the same document.
         String reformatted = "{\n \"schemaVersion\" : 1,\n \"positionSizing\": "
                 + extractField(encoded.json(), "positionSizing")
                 + ",\n \"exitCondition\": " + extractField(encoded.json(), "exitCondition")
@@ -515,8 +474,6 @@ class StrategyDefinitionCodecTest {
         assertEquals(goldenDefinition(), decoded);
     }
 
-    // --- null contract ---------------------------------------------------
-
     @Test
     void nullArgumentsThrowNpe() {
         assertThrows(NullPointerException.class, () -> codec.encode(null));
@@ -524,13 +481,6 @@ class StrategyDefinitionCodecTest {
         assertThrows(NullPointerException.class, () -> codec.decode(1, null, "x"));
         assertThrows(NullPointerException.class, () -> codec.decode(1, "{}", null));
     }
-
-    // --- D-31 additive method: parseRequest(json, Class<T>) ----------------
-    //
-    // A minimal local envelope record, standing in for a real REST envelope
-    // (e.g. CreateStrategyRequest) without adding a test dependency on the
-    // api package: only the strict-parsing behavior at the D-30 boundary is
-    // under test here.
 
     private record Envelope(String name, StrategyDefinitionDto definition) {
     }

@@ -1,14 +1,5 @@
 import { useState } from 'react';
 
-/**
- * A small button that copies an exact value (a hash, an id) to the
- * clipboard - shown with monospace treatment, matching the visual
- * convention for hashes elsewhere in the app.
- *
- * @param {object} props
- * @param {string} props.value
- * @param {string} [props.label]
- */
 export function CopyButton({ value, label = 'Copy' }) {
   const [copied, setCopied] = useState(false);
 

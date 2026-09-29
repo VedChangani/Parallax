@@ -40,8 +40,6 @@ class TradeTest {
     private static final LocalDate ENTRY_DATE = LocalDate.of(2024, 1, 2);
     private static final LocalDate EXIT_DATE = LocalDate.of(2024, 1, 3);
 
-    // --- Open ----------------------------------------------------------------
-
     @Test
     void openTradeExposesEntryAndQuantity() {
         Fill entry = buy(1, ENTRY_DATE, 10, new BigDecimal("100"), new BigDecimal("5"));
@@ -70,8 +68,6 @@ class TradeTest {
         assertEquals(new Trade.Open(entry), new Trade.Open(entry));
         assertEquals(new Trade.Open(entry).hashCode(), new Trade.Open(entry).hashCode());
     }
-
-    // --- Closed ----------------------------------------------------------------
 
     @Test
     void validClosedTradeExposesEntryAndExit() {
@@ -188,8 +184,6 @@ class TradeTest {
         assertThrows(IllegalArgumentException.class, () -> new Trade.Closed(entry, exitLowerId));
     }
 
-    // --- fromFills -------------------------------------------------------------
-
     @Test
     void emptyFillsGiveEmptyTradeList() {
         assertEquals(List.of(), Trade.fromFills(List.of()));
@@ -270,7 +264,6 @@ class TradeTest {
 
     @Test
     void fromFillsDoesNotSortOrRepairInvalidSequences() {
-        // BUY, BUY should fail rather than being silently reordered/repaired.
         Fill entry1 = buy(1, LocalDate.of(2024, 1, 1), 10, new BigDecimal("100"), new BigDecimal("5"));
         Fill entry2 = buy(2, LocalDate.of(2024, 1, 2), 5, new BigDecimal("100"), new BigDecimal("5"));
 

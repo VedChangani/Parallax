@@ -66,8 +66,6 @@ class BacktestResultTest {
         return new BacktestResult("AAPL", STRATEGY, CONFIG, Optional.empty(), curve, fills, rejections);
     }
 
-    // --- valid construction ----------------------------------------------------
-
     @Test
     void validConstructionExposesFields() {
         List<EquityPoint> curve = List.of(point(LocalDate.of(2024, 1, 2), new BigDecimal("100")));
@@ -78,8 +76,6 @@ class BacktestResultTest {
         assertEquals(CONFIG, r.config());
         assertEquals(Optional.empty(), r.firstEvaluableDate());
     }
-
-    // --- symbol -----------------------------------------------------------------
 
     @Test
     void nullSymbolRejected() {
@@ -96,8 +92,6 @@ class BacktestResultTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new BacktestResult("  ", STRATEGY, CONFIG, Optional.empty(), curve, List.of(), List.of()));
     }
-
-    // --- immutability -------------------------------------------------------------
 
     @Test
     void listsAreDefensivelyCopied() {
@@ -122,8 +116,6 @@ class BacktestResultTest {
         assertThrows(UnsupportedOperationException.class,
                 () -> r.rejections().add(new OrderRejection.ZeroQuantity(ENTER)));
     }
-
-    // --- equity curve validation --------------------------------------------------
 
     @Test
     void emptyEquityCurveRejected() {
@@ -153,8 +145,6 @@ class BacktestResultTest {
 
         assertThrows(IllegalArgumentException.class, () -> result(curve, List.of(), List.of()));
     }
-
-    // --- fills validation -----------------------------------------------------------
 
     @Test
     void emptyFillsValid() {
@@ -196,8 +186,6 @@ class BacktestResultTest {
         assertThrows(IllegalArgumentException.class, () -> result(curve, fills, List.of()));
     }
 
-    // --- rejections validation -----------------------------------------------------
-
     @Test
     void emptyRejectionsValid() {
         List<EquityPoint> curve = List.of(point(LocalDate.of(2024, 1, 2), new BigDecimal("100")));
@@ -227,8 +215,6 @@ class BacktestResultTest {
 
         assertThrows(IllegalArgumentException.class, () -> result(curve, List.of(), rejections));
     }
-
-    // --- derived methods -----------------------------------------------------------
 
     @Test
     void tradesDerivedFromFills() {
@@ -272,21 +258,16 @@ class BacktestResultTest {
         assertEquals(Optional.of(evaluable), r.firstEvaluableDate());
     }
 
-    // --- trading-cost totals (D-27) -------------------------------------------------
-
     private static Fill fill(int orderId, LocalDate date, long quantity, String referenceOpen, String fillPrice,
                              String commission, SignalEvent signal) {
         return new Fill(orderId, date, quantity, new BigDecimal(referenceOpen), new BigDecimal(fillPrice),
                 new BigDecimal(commission), signal);
     }
 
-    /** BUY 10: slippage |100.5 − 100| × 10 = 5.0, commission 5. */
     private static final Fill SLIPPED_BUY =
             fill(1, LocalDate.of(2024, 1, 3), 10, "100", "100.5", "5", ENTER);
-    /** SELL 10: slippage |119.4 − 120| × 10 = 6.0, commission 5. */
     private static final Fill SLIPPED_SELL =
             fill(2, LocalDate.of(2024, 1, 5), 10, "120", "119.4", "5", EXIT);
-    /** BUY 8: slippage |110.11 − 110| × 8 = 0.88, commission 5. */
     private static final Fill SLIPPED_SECOND_BUY =
             fill(3, LocalDate.of(2024, 1, 8), 8, "110", "110.11", "5", ENTER);
 
@@ -367,8 +348,6 @@ class BacktestResultTest {
         assertEquals(r.totalCommission(), r.totalCommission());
         assertEquals(r.totalSlippageCost(), r.totalSlippageCost());
     }
-
-    // --- equality -----------------------------------------------------------------
 
     @Test
     void equalResultsAreEqual() {

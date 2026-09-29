@@ -10,14 +10,6 @@ import org.springframework.security.web.authentication.AuthenticationSuccessHand
 
 import java.util.Map;
 
-/**
- * A successful {@code POST /api/auth/login} returns {@code 200
- * {"username": "..."}} (D-37) — never a redirect. {@link
- * Authentication#getName()} on a {@code UsernamePasswordAuthenticationToken}
- * backed by a {@code UserDetails} principal returns {@code
- * UserDetails#getUsername()}, i.e. exactly the submitted username, not the
- * internal numeric id.
- */
 final class JsonAuthenticationSuccessHandler implements AuthenticationSuccessHandler {
 
     private final ObjectMapper objectMapper;

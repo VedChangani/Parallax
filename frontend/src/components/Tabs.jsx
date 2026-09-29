@@ -1,21 +1,5 @@
 import { NavLink } from 'react-router';
 
-/**
- * @typedef {object} TabItem
- * @property {string} to
- * @property {string} label
- * @property {boolean} [end]
- */
-
-/**
- * Route-driven tab navigation (e.g. a backtest run's Overview/Trades/
- * Rejections sections). Each tab is a real route via NavLink, not local
- * tab-index state, so a tab's content is deep-linkable.
- *
- * @param {object} props
- * @param {TabItem[]} props.tabs
- * @param {string} [props.label] - accessible name for the tablist
- */
 export function Tabs({ tabs, label = 'Sections' }) {
   return (
     <div role="tablist" aria-label={label} className="mb-6 flex gap-6 border-b border-border">

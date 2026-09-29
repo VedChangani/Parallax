@@ -8,26 +8,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
-/**
- * The immutable, read-only view of indicator state as of a bar's close.
- * This is the only market-derived input visible to strategy evaluation: it
- * exposes the bar's date and close plus the ready indicator values keyed by
- * {@link IndicatorSpec}, and nothing else — no {@code Bar}, no symbol, no
- * open/high/low/volume, no {@code Portfolio} state, no pending order, and
- * no runtime {@link Indicator} object.
- *
- * <p>A snapshot only ever holds ready values: the caller (the Backtester,
- * in a later batch) is responsible for building one only once every
- * referenced indicator is ready. There is no representation of "not
- * ready" inside this type.
- *
- * <p>The stored {@code values} map is defensively copied into canonical,
- * deterministic order — {@link IndicatorType} declaration order, then
- * period ascending — and exposed as unmodifiable. This makes two
- * snapshots built from equal content, in any insertion order, compare
- * equal, hash equal, and print identically, which matters for
- * reproducibility.
- */
 public record IndicatorSnapshot(LocalDate date, BigDecimal close, Map<IndicatorSpec, Double> values) {
 
     private static final Comparator<IndicatorSpec> CANONICAL_ORDER =
@@ -53,13 +33,6 @@ public record IndicatorSnapshot(LocalDate date, BigDecimal close, Map<IndicatorS
         values = Collections.unmodifiableMap(ordered);
     }
 
-    /**
-     * Looks up the value for {@code spec}.
-     *
-     * @throws NullPointerException     if {@code spec} is null
-     * @throws IllegalArgumentException if this snapshot has no value for
-     *                                  {@code spec}
-     */
     public double value(IndicatorSpec spec) {
         Objects.requireNonNull(spec, "spec must not be null");
         Double value = values.get(spec);

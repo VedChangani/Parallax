@@ -12,15 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-22 shape: {@code Portfolio}'s declared instance fields are
- * exactly {@code (BigDecimal, long, BigDecimal, BigDecimal)}, with no
- * static mutable state and no leaked {@code Order}/{@code Fill}/
- * {@code Indicator}/{@code BarSeries}/collection/{@code Position} field.
- * {@code EquityPoint}'s components are exactly {@code (LocalDate,
- * BigDecimal, long, BigDecimal, BigDecimal, BigDecimal)}, with no stored
- * derived value.
- */
 class PortfolioStructureTest {
 
     @Test

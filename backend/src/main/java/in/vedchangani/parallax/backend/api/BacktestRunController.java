@@ -29,35 +29,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 
-/**
- * The D-34 Batch 3 Backtest Run REST API. This controller only parses and
- * validates the HTTP request and delegates to {@link BacktestRunService}
- * for every domain decision: it never invokes {@code Backtester}, never
- * computes {@code PerformanceMetrics}/{@code BuyAndHoldBenchmark}, never
- * derives {@code Trade}s independently of {@link BacktestRunDetail#trades()}
- * (itself a thin {@code Trade.fromFills} delegate), never touches a
- * repository or entity directly, and performs no ownership check of its
- * own — {@code BacktestRunService} is owner-scoped and authoritative for
- * all of that, exactly like {@code StrategyController}/{@code
- * DatasetController}.
- *
- * <p>The request body is read exactly once, by the same strict D-30 {@code
- * JsonMapper} every other envelope uses ({@code
- * StrategyDefinitionCodec#parseRequest(String, Class)}) — never Spring's
- * lenient global JSON binding — so unknown properties (including an
- * attempted client-supplied {@code ownerId}, hash, or {@code
- * engineSemanticsVersion}), missing/null fields, and a JSON number where a
- * decimal string is required all fail before Bean Validation ever runs.
- *
- * <p>Every read endpoint ({@code GET .../{id}}, {@code .../equity-curve},
- * {@code .../trades}, {@code .../rejections}) calls the exact same {@link
- * BacktestRunService#getRun} — the only place full structural and
- * cross-field integrity verification happens — and only then maps
- * different fields of the returned, already-verified {@link
- * BacktestRunDetail} to each endpoint's own response shape. {@link
- * BacktestRunService#listRuns} is deliberately cheap: it never loads or
- * verifies a child row (see {@code BacktestRunService}'s own Javadoc).
- */
 @RestController
 @RequestMapping("/api/backtest-runs")
 public class BacktestRunController {
@@ -87,8 +58,6 @@ public class BacktestRunController {
                 new StrategyVersionRef(request.strategyId(), request.strategyVersion()),
                 new DatasetVersionRef(request.datasetId(), request.datasetVersion()), config);
 
-        // The just-persisted run is read back through the exact same owner-scoped,
-        // fully-verifying path any later GET uses - never trusted as-written.
         BacktestRunDetail detail = backtestRunService.getRun(currentUser.id(), created.id());
 
         return ResponseEntity.created(URI.create("/api/backtest-runs/" + created.id()))
@@ -113,19 +82,12 @@ public class BacktestRunController {
         return BacktestEquityPointResponse.listOf(detail);
     }
 
-    /**
-     * The run's equity curve as CSV (D-42), from the same verified {@link
-     * BacktestRunDetail} as the JSON view. The content type is set on the
-     * response rather than via {@code produces}, so an error (404/500) is
-     * still a normal ProblemDetail instead of a content-negotiation failure.
-     */
     @GetMapping("/{id}/equity-curve.csv")
     public ResponseEntity<String> exportEquityCurve(@PathVariable long id) {
         BacktestRunDetail detail = backtestRunService.getRun(currentUser.id(), id);
         return csv(BacktestCsv.equityCurve(detail), "backtest-" + id + "-equity-curve.csv");
     }
 
-    /** The run's trades as CSV, one row per trade (D-42). */
     @GetMapping("/{id}/trades.csv")
     public ResponseEntity<String> exportTrades(@PathVariable long id) {
         BacktestRunDetail detail = backtestRunService.getRun(currentUser.id(), id);
@@ -154,12 +116,6 @@ public class BacktestRunController {
         return BacktestRejectionResponse.listOf(detail.rejections());
     }
 
-    /**
-     * Explicit Bean Validation of an envelope record already produced by
-     * the strict D-30 reader (mirroring {@code StrategyController}/{@code
-     * DatasetController}). {@code @Valid} cannot be applied to a raw
-     * {@code String} request-body parameter, so this substitutes for it.
-     */
     private <T> void validate(T request) {
         Set<ConstraintViolation<T>> violations = validator.validate(request);
         if (!violations.isEmpty()) {

@@ -30,15 +30,11 @@ class OrderRejectionTest {
     private static final SignalEvent ENTER_SIGNAL = new SignalEvent(SignalType.ENTER, snapshot());
     private static final SignalEvent EXIT_SIGNAL = new SignalEvent(SignalType.EXIT, snapshot());
 
-    // --- RejectionReason ---------------------------------------------------
-
     @Test
     void rejectionReasonValuesIsExactlyZeroQuantityAndInsufficientCash() {
         assertArrayEquals(new RejectionReason[] {RejectionReason.ZERO_QUANTITY, RejectionReason.INSUFFICIENT_CASH},
                 RejectionReason.values());
     }
-
-    // --- ZeroQuantity --------------------------------------------------------
 
     @Test
     void zeroQuantityValidConstructionWithEnterSignal() {
@@ -80,8 +76,6 @@ class OrderRejectionTest {
         assertEquals(a, b);
         assertEquals(a.hashCode(), b.hashCode());
     }
-
-    // --- InsufficientCash ----------------------------------------------------
 
     private static OrderRejection.InsufficientCash insufficientCash(BigDecimal requiredCash,
                                                                      BigDecimal availableCash) {

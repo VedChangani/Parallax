@@ -10,20 +10,6 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Plain-JDBC access to {@code backtest_equity_point} (D-34 Batch 1,
- * mirroring D-32's {@code DatasetBarRepository}). Deliberately not a JPA
- * entity/repository: a natural composite key with no surrogate id and
- * thousands of rows per run gain nothing from an individually managed
- * entity per row. Insert-only, matching the table's own immutability
- * triggers — no update or delete method exists.
- *
- * <p>Package-private: only code inside {@code backend.backtest} may reach
- * this class. {@code @Component}, not {@code @Repository} — mirroring
- * D-32's own reasoning exactly, so no exception-translation interceptor
- * masks a semantically invalid stored row before a future integrity check
- * ever sees it.
- */
 @Component
 class BacktestEquityPointRepository {
 

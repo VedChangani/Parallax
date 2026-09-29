@@ -9,14 +9,6 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 
 import java.io.IOException;
 
-/**
- * The 403 boundary (D-37): a missing/invalid CSRF token on a
- * state-changing request, or an authenticated request to a {@code
- * denyAll} path, both reach here as an {@link AccessDeniedException} and
- * both get the same fixed {@link org.springframework.http.ProblemDetail}
- * body. Deliberately generic — it never distinguishes "bad CSRF token"
- * from "not permitted here" in the response body.
- */
 final class ProblemDetailAccessDeniedHandler implements AccessDeniedHandler {
 
     private final ObjectMapper objectMapper;

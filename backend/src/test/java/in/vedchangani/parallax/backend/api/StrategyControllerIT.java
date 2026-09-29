@@ -27,13 +27,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * D-31 REST-boundary proof (MockMvc, real PostgreSQL via Testcontainers):
- * the full request/response contract, the D-30 strict-parsing rules
- * enforced through HTTP, ownership, and the error-mapping table (D-31
- * §11). {@link CurrentUser} is overridden with {@code @MockitoBean} so each
- * test controls exactly which owner is making the request.
- */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
@@ -62,8 +55,6 @@ class StrategyControllerIT {
         owner = TestUsers.create(jdbcTemplate, "ctrl");
         when(currentUser.id()).thenReturn(owner);
     }
-
-    // --- ATR / ROC -----------------------------------------------------------
 
     @Test
     void atrAndRocDefinitionsCreateAndReadBackUnchanged() throws Exception {
@@ -102,8 +93,6 @@ class StrategyControllerIT {
                         .content(createRequestJson(uniqueName(), "bad", definition)))
                 .andExpect(status().isUnprocessableEntity());
     }
-
-    // --- happy path ----------------------------------------------------------
 
     @Test
     void fullCreateListGetPatchAndVersionLifecycle() throws Exception {
@@ -155,7 +144,6 @@ class StrategyControllerIT {
                 .andExpect(jsonPath("$.versionNumber").value(1))
                 .andExpect(jsonPath("$.definition.positionSizing.fraction").value("1"));
 
-        // No response body ever mentions an exception/package/internal type name.
         assertFalse(versionCreated.getResponse().getContentAsString().contains("Exception"));
     }
 
@@ -203,8 +191,6 @@ class StrategyControllerIT {
         int start = body.indexOf(marker) + marker.length();
         return body.substring(start, body.indexOf('"', start));
     }
-
-    // --- 400: malformed --------------------------------------------------
 
     @Test
     void unknownDefinitionFieldIsBadRequest() throws Exception {
@@ -291,8 +277,6 @@ class StrategyControllerIT {
                 .andExpect(status().isBadRequest());
     }
 
-    // --- 422: semantically invalid -----------------------------------------
-
     @Test
     void invalidIndicatorPeriodIsUnprocessable() throws Exception {
         String bad = SIMPLE_DEFINITION.replace(
@@ -316,11 +300,9 @@ class StrategyControllerIT {
                 .andExpect(jsonPath("$.field").value("definition.positionSizing"));
     }
 
-    // --- defensive numeric bounds (Phase 9 Batch 2b, D-36) --------------------
-
     @Test
     void over100CharCashFractionLiteralIsBadRequest() throws Exception {
-        String text = "0.5" + "0".repeat(98); // 101 characters
+        String text = "0.5" + "0".repeat(98);
         String bad = SIMPLE_DEFINITION.replace("\"fraction\":\"1\"", "\"fraction\":\"" + text + "\"");
 
         mockMvc.perform(post("/api/strategies")
@@ -332,7 +314,7 @@ class StrategyControllerIT {
 
     @Test
     void over18FractionalDigitCashFractionIsUnprocessable() throws Exception {
-        String text = "0." + "9".repeat(19); // still < 1 - isolates precision from the range check
+        String text = "0." + "9".repeat(19);
         String bad = SIMPLE_DEFINITION.replace("\"fraction\":\"1\"", "\"fraction\":\"" + text + "\"");
 
         mockMvc.perform(post("/api/strategies")
@@ -352,8 +334,6 @@ class StrategyControllerIT {
                         .content(createRequestJson(uniqueName(), "", bad)))
                 .andExpect(status().isUnprocessableEntity());
     }
-
-    // --- 409: conflicts ------------------------------------------------------
 
     @Test
     void duplicateStrategyNameOnCreateIsConflict() throws Exception {
@@ -388,8 +368,6 @@ class StrategyControllerIT {
                         .content("{\"name\":\"" + nameA + "\",\"description\":\"\"}"))
                 .andExpect(status().isConflict());
     }
-
-    // --- 404: missing / cross-owner ----------------------------------------
 
     @Test
     void missingStrategyIsNotFound() throws Exception {
@@ -431,13 +409,8 @@ class StrategyControllerIT {
                 .andExpect(status().isNotFound());
     }
 
-    // --- 500: integrity failure ----------------------------------------------
-
     @Test
     void aStoredVersionWithAWrongHashIsAGenericInternalError() throws Exception {
-        // strategy_version is immutable (no UPDATE reaches it, D-31 §12), so the failure
-        // is simulated with a fresh out-of-band row carrying a deliberately wrong hash —
-        // not by mutating the version the create call produced.
         MvcResult created = mockMvc.perform(post("/api/strategies")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createRequestJson(uniqueName(), "")))
@@ -457,8 +430,6 @@ class StrategyControllerIT {
         assertFalse(body.contains("Exception"));
         assertFalse(body.contains("in.vedchangani"));
     }
-
-    // --- helpers -----------------------------------------------------------
 
     private static String createRequestJson(String name, String description) {
         return createRequestJson(name, description, SIMPLE_DEFINITION);

@@ -49,7 +49,6 @@ describe('StrategyCreateForm', () => {
     render(<StrategyCreateForm onCreated={onCreated} />);
     fillMetadata({ name: 'Momentum Cross', description: 'SMA trend' });
 
-    // Entry: convert the default Compare (SMA(20) > SMA(50)) to an ALL group, then add RSI(14) < 70.
     fireEvent.click(within(entrySection()).getByRole('button', { name: 'ALL' }));
     fireEvent.click(within(entrySection()).getByRole('button', { name: '+ Add condition' }));
 
@@ -98,19 +97,16 @@ describe('StrategyCreateForm', () => {
     const options = Array.from(within(entrySection()).getByLabelText('Left operand indicator').querySelectorAll('option')).map((o) => o.value);
     expect(options).toEqual(['SMA', 'EMA', 'RSI', 'ATR', 'ROC']);
 
-    // Entry: ATR(14) > 2 (left indicator ATR, right operand a constant).
     fireEvent.change(within(entrySection()).getByLabelText('Left operand indicator'), { target: { value: 'ATR' } });
     fireEvent.change(within(entrySection()).getByLabelText('Left operand period'), { target: { value: '14' } });
     fireEvent.change(within(entrySection()).getByLabelText('Right operand type'), { target: { value: 'constant' } });
     fireEvent.change(within(entrySection()).getByLabelText('Right operand value'), { target: { value: '2' } });
 
-    // Exit: ROC(1) < -5 - period 1 is valid for ROC (unlike RSI).
     const exitSection = screen.getByText('Exit condition').closest('section');
     fireEvent.change(within(exitSection).getByLabelText('Left operand indicator'), { target: { value: 'ROC' } });
     fireEvent.change(within(exitSection).getByLabelText('Left operand period'), { target: { value: '1' } });
     fireEvent.change(within(exitSection).getByLabelText('Right operand value'), { target: { value: '-5' } });
 
-    // The live preview renders the same text as the saved-version pages.
     expect(screen.getByText('ATR(14) > 2')).toBeTruthy();
     expect(screen.getByText('ROC(1) < -5')).toBeTruthy();
 

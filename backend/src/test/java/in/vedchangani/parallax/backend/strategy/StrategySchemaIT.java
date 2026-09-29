@@ -15,21 +15,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * D-31 schema-level proof, against real PostgreSQL (Testcontainers, D-29):
- * successful context startup already proves Flyway ran and Hibernate {@code
- * validate} passed against it. This class additionally proves: {@code
- * strategy_version}'s database-layer immutability trigger rejects
- * UPDATE/DELETE/TRUNCATE, its CHECK constraints reject malformed rows, and
- * D-30 {@code decode} tolerates PostgreSQL's own jsonb reformatting of a
- * stored document.
- *
- * <p>Uses {@link TestUsers}, never the real {@code CurrentUser} bean
- * (D-37: since {@code AuthenticatedCurrentUser} resolves an owner only
- * from an authenticated request, there is no request here to resolve one
- * from — exactly {@code StrategyOwnershipIT}'s existing pattern for the
- * same reason).
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class StrategySchemaIT {
@@ -94,8 +79,6 @@ class StrategySchemaIT {
         CanonicalStrategyDefinition canonical = codec.encode(definition);
         StrategySummary strategy = strategyService.createStrategy(owner, uniqueName(), "", definition);
 
-        // A deliberately reformatted (whitespace + reordered keys) rendering of the
-        // exact same document, inserted directly, bypassing the entity/codec write path.
         String reformatted = "{\n  \"positionSizing\": " + extractField(canonical.json(), "positionSizing")
                 + ",\n  \"exitCondition\": " + extractField(canonical.json(), "exitCondition")
                 + ",\n  \"entryCondition\": " + extractField(canonical.json(), "entryCondition")
@@ -108,9 +91,6 @@ class StrategySchemaIT {
 
         StrategyVersion stored = versionRepository.findOwned(strategy.id(), owner.value(), 999).orElseThrow();
 
-        // PostgreSQL's own jsonb rendering differs (at minimum, whitespace and possibly
-        // key order) from what was inserted — proving decode never relies on
-        // byte-identical storage, only on re-encoding and re-hashing.
         StrategyDefinition decoded = codec.decode(stored.definitionSchemaVersion(), stored.definitionJson(),
                 stored.definitionHash());
         assertEquals(definition, decoded);

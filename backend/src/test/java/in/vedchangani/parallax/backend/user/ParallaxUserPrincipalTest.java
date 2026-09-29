@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-/** D-37: {@link ParallaxUserPrincipal} carries the id and erases its hash on demand. */
 class ParallaxUserPrincipalTest {
 
     @Test

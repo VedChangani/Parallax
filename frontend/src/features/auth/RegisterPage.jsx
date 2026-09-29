@@ -9,18 +9,9 @@ const inputClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
-// D-43: the only username rules are non-blank (after trimming) and at most 64
-// characters (code points, as the backend's varchar(64) counts them); the only
-// password rule checked here is the 8-character minimum. The backend stays
-// authoritative for everything else (72-byte password maximum, duplicates).
 const USERNAME_MAX_LENGTH = 64;
 const PASSWORD_MIN_LENGTH = 8;
 
-/**
- * @param {string} username
- * @param {string} password
- * @returns {{username?: string, password?: string}}
- */
 function validateRegistration(username, password) {
   const errors = {};
   const trimmed = username.trim();
@@ -35,12 +26,6 @@ function validateRegistration(username, password) {
   return errors;
 }
 
-/**
- * The registration page (D-38/D-39). A successful registration does not
- * log the visitor in - it never calls `AuthProvider`'s `login` - so it
- * sends them to `/login` to sign in with the account they just created,
- * matching the backend's own "register never logs in" contract.
- */
 export function RegisterPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
@@ -132,13 +117,6 @@ export function RegisterPage() {
   );
 }
 
-/**
- * Maps a register `ApiError` onto the form (mirrors {@code
- * StrategyCreateForm}'s `applyServerError`): a 400 Bean Validation failure
- * (bad username) or the D-38 password-policy 400 (`field: "password"`)
- * lands on the matching input; a 409 (duplicate username) or 403
- * (registration disabled) lands as a form-level message.
- */
 function applyServerError(error, setFieldErrors, setFormError) {
   if (error.errors?.length) {
     setFieldErrors(Object.fromEntries(error.errors.map((fieldError) => [fieldError.field, fieldError.message])));

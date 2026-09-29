@@ -7,11 +7,6 @@ import java.lang.reflect.RecordComponent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/**
- * Pins the D-20 shape: {@code SignalEvent}'s components are exactly a
- * {@code SignalType} and an {@code IndicatorSnapshot} — no separately
- * stored date, price, or runtime state.
- */
 class SignalEventStructureTest {
 
     @Test

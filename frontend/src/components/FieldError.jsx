@@ -1,8 +1,3 @@
-/**
- * @param {object} props
- * @param {string} [props.message]
- * @param {string} [props.id] - pair with the field's `aria-describedby`
- */
 export function FieldError({ message, id }) {
   if (!message) return null;
   return (

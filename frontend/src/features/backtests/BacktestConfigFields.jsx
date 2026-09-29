@@ -1,35 +1,6 @@
 import { FieldError } from '../../components/FieldError.jsx';
 import { inputClasses } from '../strategies/formStyles.js';
 
-/**
- * The "Configuration" section of the New Backtest form (D-34 Batch 4):
- * initialCapital/commissionPerFill/slippageRate/startDate/endDate, the exact
- * `BacktestConfig` fields. Every monetary/rate value stays a raw string the
- * whole way from input to transport (see backtestConfigValidation.js) -
- * this component never parses or formats them as numbers. `coverage` is
- * purely informational (the selected snapshot's own date range) and is
- * never used to clamp or silently rewrite an entered date - CLAUDE.md
- * ("do not silently change entered dates").
- *
- * @param {object} props
- * @param {string} props.initialCapital
- * @param {(value: string) => void} props.onInitialCapitalChange
- * @param {string} props.commissionPerFill
- * @param {(value: string) => void} props.onCommissionPerFillChange
- * @param {string} props.slippagePercent
- * @param {(value: string) => void} props.onSlippagePercentChange
- * @param {string} props.startDate
- * @param {(value: string) => void} props.onStartDateChange
- * @param {string} props.endDate
- * @param {(value: string) => void} props.onEndDateChange
- * @param {{initialCapital?: string, commissionPerFill?: string, slippage?: string, startDate?: string, endDate?: string}} props.fieldErrors
- * @param {{firstDate: string, lastDate: string} | undefined} props.coverage
- * @param {number} [props.requiredLookbackBars] - the selected strategy's own
- *   largest indicator warm-up requirement (I-3, Phase 10 Batch 4), from
- *   {@link import('../strategies/definitionMapping.js').requiredLookbackBars}.
- *   `0`/`undefined` when no strategy is selected or it references no
- *   indicator.
- */
 export function BacktestConfigFields({
   initialCapital,
   onInitialCapitalChange,
@@ -45,11 +16,6 @@ export function BacktestConfigFields({
   coverage,
   requiredLookbackBars,
 }) {
-  // I-3: the exact trading-day calendar isn't loaded on this page (only the
-  // market's first/last date) - so when the current start date leaves no
-  // lookback at all, this warns rather than guessing a "corrected" date from
-  // calendar-day arithmetic, which could land on a non-trading day or
-  // silently invent a value (CLAUDE.md: never invent a financial assumption).
   const hasNoLookback = Boolean(coverage) && startDate === coverage.firstDate;
   const showLookbackWarning = Boolean(requiredLookbackBars) && requiredLookbackBars > 0 && hasNoLookback;
   return (
@@ -114,10 +80,6 @@ export function BacktestConfigFields({
         />
       </div>
 
-      {/* C1 (Phase 9 Batch 1): a factual note only - this never changes the
-          engine's start/lookback semantics (D-6) or silently rewrites either
-          date; it just explains why a run's evaluable range can start later
-          than the date entered above. */}
       <p className="text-xs text-ink-muted">
         Indicators may need bars before the start date to warm up. Those lookback bars never produce trades, equity,
         or signals - the strategy only becomes evaluable once every indicator is ready, which can be later than the

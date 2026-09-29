@@ -13,36 +13,14 @@ import { StrategySelectionFields } from '../../features/backtests/StrategySelect
 import { requiredLookbackBars } from '../../features/strategies/definitionMapping.js';
 import { useApiResource } from '../../hooks/useApiResource.js';
 
-/**
- * The "New Backtest" workspace (D-34 Batch 4): choose a market snapshot and
- * a strategy version, enter execution assumptions, then run the backtest.
- * Execution is synchronous - `POST /api/backtest-runs` does not return until
- * the run is fully persisted, so there is no job id, no status endpoint, and
- * no polling; the page simply waits, then navigates straight to
- * `/backtests/{runId}`.
- *
- * Market/strategy lists are mutable resources and are never cached; a
- * selected snapshot/strategy-version detail is immutable and is cached via
- * `useApiResource`'s `cacheKey` (CLAUDE.md: never cache a mutable resource).
- */
 export function BacktestNewPage() {
   const navigate = useNavigate();
-  // Arriving from a market's or strategy's own page (e.g. "Create backtest")
-  // carries that resource's id as router state, so the form opens already
-  // scoped to it instead of always defaulting to the first list entry.
   const location = useLocation();
   const preselectedMarketId = location.state?.marketId;
   const preselectedStrategyId = location.state?.strategyId;
 
-  // --- market / snapshot ---------------------------------------------------
-
   const markets = useApiResource(listDatasets, []);
   const [explicitMarketId, setExplicitMarketId] = useState(undefined);
-  // Falls back to the incoming preselected market, then the first loaded
-  // market, whenever nothing has been explicitly chosen - a plain derived
-  // value, recomputed fresh every render, rather than state "seeded" from a
-  // fetch: there is nothing to reset when the market list itself never
-  // changes shape after mount.
   const marketId =
     explicitMarketId ??
     markets.data?.find((market) => market.id === preselectedMarketId)?.id ??
@@ -54,11 +32,6 @@ export function BacktestNewPage() {
   );
   const versions = useApiResource(fetchVersions, [marketId]);
 
-  // `explicitSnapshot` only applies while it was picked for the *current*
-  // market - the moment the market changes, this expression falls straight
-  // back to computing the latest version from `versions.data` (whatever the
-  // current, correctly-scoped fetch for `marketId` says), so a stale
-  // snapshot reference from a previous market can never be submitted.
   const [explicitSnapshot, setExplicitSnapshot] = useState(undefined);
   const latestSnapshotVersion =
     versions.data && versions.data.length > 0 ? Math.max(...versions.data.map((version) => version.versionNumber)) : undefined;
@@ -79,8 +52,6 @@ export function BacktestNewPage() {
   const snapshotDetail = useApiResource(fetchSnapshotDetail, [marketId, snapshotVersion], {
     cacheKey: marketId !== undefined && snapshotVersion !== undefined ? `/api/datasets/${marketId}/versions/${snapshotVersion}` : undefined,
   });
-
-  // --- strategy / version ---------------------------------------------------
 
   const strategies = useApiResource(listStrategies, []);
   const [explicitStrategyId, setExplicitStrategyId] = useState(undefined);
@@ -121,8 +92,6 @@ export function BacktestNewPage() {
     cacheKey: strategyId !== undefined && strategyVersion !== undefined ? `/api/strategies/${strategyId}/versions/${strategyVersion}` : undefined,
   });
 
-  // --- configuration ---------------------------------------------------------
-
   const [initialCapital, setInitialCapital] = useState('');
   const [commissionPerFill, setCommissionPerFill] = useState('');
   const [slippagePercent, setSlippagePercent] = useState('');
@@ -131,10 +100,6 @@ export function BacktestNewPage() {
   const [datesTouched, setDatesTouched] = useState(false);
   const [datesPrefilledFrom, setDatesPrefilledFrom] = useState(undefined);
 
-  // Prefills the date range from the selected snapshot's own coverage purely
-  // as a starting point, exactly once per snapshot arrival - never overwrites
-  // a date the user already entered (CLAUDE.md: "do not silently change
-  // entered dates").
   if (!datesTouched && snapshotDetail.data && datesPrefilledFrom !== snapshotDetail.data) {
     setDatesPrefilledFrom(snapshotDetail.data);
     setStartDate(snapshotDetail.data.firstDate);
@@ -160,9 +125,6 @@ export function BacktestNewPage() {
   const selectedMarket = markets.data?.find((market) => market.id === marketId);
   const selectedStrategy = strategies.data?.find((strategy) => strategy.id === strategyId);
 
-  // I-3: the selected strategy's own largest indicator warm-up requirement,
-  // purely for BacktestConfigFields' own lookback warning below - never sent
-  // to the backend, never used to compute or rewrite a date itself.
   const lookbackBars = strategyVersionDetail.data ? requiredLookbackBars(strategyVersionDetail.data.definition) : 0;
 
   const canSubmit =

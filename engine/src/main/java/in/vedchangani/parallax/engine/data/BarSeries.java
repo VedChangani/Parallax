@@ -3,15 +3,6 @@ package in.vedchangani.parallax.engine.data;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * A symbol and its chronologically ordered, validated bars.
- *
- * <p>{@code BarSeries} knows nothing about {@code BacktestConfig}, start/end
- * date semantics, strategies, indicators, execution, or data providers. It
- * may contain lookback bars before a requested start date and bars after a
- * requested end date; date-range semantics belong to the backtesting engine,
- * not to this type.
- */
 public final class BarSeries {
 
     private final String symbol;
@@ -46,10 +37,6 @@ public final class BarSeries {
         return symbol;
     }
 
-    /**
-     * Returns the bars in chronological order. The returned list is
-     * unmodifiable and is not a copy of the internally stored list.
-     */
     public List<Bar> bars() {
         return bars;
     }

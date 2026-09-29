@@ -302,7 +302,6 @@ describe('requiredLookbackBars (I-3)', () => {
       },
       { type: 'compare', left: indicatorRef('EMA', 200), operator: 'LT', right: { type: 'close' } },
     );
-    // max(20, 50, 15) from entry, 200 from exit -> 200 overall.
     expect(requiredLookbackBars(definition)).toBe(200);
   });
 

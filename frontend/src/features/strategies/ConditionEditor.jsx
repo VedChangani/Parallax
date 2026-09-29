@@ -8,15 +8,6 @@ const GROUP_HELP = {
 
 const TYPE_LABELS = { compare: 'Compare', all: 'ALL', any: 'ANY' };
 
-/**
- * Converts `node` to `newType`, preserving the user's existing work rather
- * than discarding it: switching a Compare to a group wraps the existing
- * comparison as that group's first child; switching between ALL and ANY
- * keeps the same children.
- *
- * @param {object} node
- * @param {'compare' | 'all' | 'any'} newType
- */
 function changeConditionType(node, newType) {
   if (newType === node.type) return node;
   if (newType === 'compare') return newCompareCondition();
@@ -27,16 +18,6 @@ function changeConditionType(node, newType) {
   return { ...node, type: newType };
 }
 
-/**
- * A three-way segmented control for a condition node's type. Native
- * `<button>`s with `aria-pressed`, so the current selection is announced
- * and every option is keyboard/tab reachable.
- *
- * @param {object} props
- * @param {'compare' | 'all' | 'any'} props.value
- * @param {(type: 'compare' | 'all' | 'any') => void} props.onChange
- * @param {string} props.label
- */
 function TypeToggle({ value, onChange, label }) {
   return (
     <div role="group" aria-label={label} className="inline-flex overflow-hidden rounded border border-border">
@@ -89,20 +70,6 @@ function OperatorSelect({ id, value, onChange }) {
   );
 }
 
-/**
- * The recursive Strategy Builder condition editor (D-31 §1: Compare, All,
- * Any - the exact supported grammar, no more). Renders a leaf Compare row,
- * or a bordered/indented ALL/ANY group whose children are themselves
- * `ConditionEditor`s, so nesting is visually obvious through indentation
- * and border hierarchy rather than a node-graph canvas.
- *
- * @param {object} props
- * @param {object} props.condition - a builder condition node (see definitionMapping.js)
- * @param {(next: object) => void} props.onChange
- * @param {(() => void) | undefined} [props.onRemove] - omitted at the root
- *   (the entry/exit condition itself can never be removed, only edited)
- * @param {number} [props.depth]
- */
 export function ConditionEditor({ condition, onChange, onRemove, depth = 0 }) {
   function setType(newType) {
     onChange(changeConditionType(condition, newType));
@@ -145,7 +112,7 @@ export function ConditionEditor({ condition, onChange, onRemove, depth = 0 }) {
   }
 
   function removeChild(index) {
-    if (condition.conditions.length <= 1) return; // an empty ALL/ANY is rejected by the engine (D-31 §8)
+    if (condition.conditions.length <= 1) return;
     onChange({ ...condition, conditions: condition.conditions.filter((_, i) => i !== index) });
   }
 

@@ -28,11 +28,6 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-40 password change, against a real socket like {@link AuthenticationIT}
- * / {@link RegistrationIT} — real cookies/session, real CSRF, no {@code
- * MockMvc} shortcuts.
- */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration.class)
 class PasswordChangeIT {
@@ -51,8 +46,6 @@ class PasswordChangeIT {
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
-    // --- happy path ----------------------------------------------------------
-
     @Test
     void successfulChangeInvalidatesOldPasswordAndAcceptsNewPassword() throws Exception {
         String username = createClaimedUser("change-ok");
@@ -64,13 +57,11 @@ class PasswordChangeIT {
         assertEquals(204, response.statusCode());
         assertTrue(response.body() == null || response.body().isEmpty());
 
-        // The old password no longer authenticates.
         CookieJar freshCookies = new CookieJar();
         bootstrapCsrf(freshCookies);
         HttpResponse<String> oldPasswordAttempt = send(loginRequest(username, CURRENT_PASSWORD, freshCookies));
         assertEquals(401, oldPasswordAttempt.statusCode());
 
-        // The new password does.
         HttpResponse<String> newPasswordAttempt = send(loginRequest(username, NEW_PASSWORD, freshCookies));
         assertEquals(200, newPasswordAttempt.statusCode());
     }
@@ -93,14 +84,12 @@ class PasswordChangeIT {
         assertNotEquals(oldSessionId, newSessionId);
         cookies.absorb(response);
 
-        // The old session id no longer authenticates.
         CookieJar oldSessionCookies = new CookieJar();
         oldSessionCookies.put("JSESSIONID", oldSessionId);
         HttpResponse<String> meWithOldSession = send(
                 authenticated(HttpRequest.newBuilder().uri(uri("/api/auth/me")).GET(), oldSessionCookies));
         assertEquals(401, meWithOldSession.statusCode());
 
-        // The new (rotated) session stays authenticated - no re-login needed.
         HttpResponse<String> meWithNewSession = send(
                 authenticated(HttpRequest.newBuilder().uri(uri("/api/auth/me")).GET(), cookies));
         assertEquals(200, meWithNewSession.statusCode());
@@ -120,8 +109,6 @@ class PasswordChangeIT {
         assertTrue(response.body() == null || response.body().isEmpty());
     }
 
-    // --- failure: wrong current password --------------------------------------
-
     @Test
     void wrongCurrentPasswordFailsAndLeavesThePasswordUnchanged() throws Exception {
         String username = createClaimedUser("change-wrong-current");
@@ -135,14 +122,11 @@ class PasswordChangeIT {
         assertTrue(contentType(response).startsWith("application/problem+json"));
         assertFalse(response.body().toLowerCase().contains("hash"));
 
-        // The original password still works; the "new" one was never applied.
         CookieJar freshCookies = new CookieJar();
         bootstrapCsrf(freshCookies);
         HttpResponse<String> stillWorks = send(loginRequest(username, CURRENT_PASSWORD, freshCookies));
         assertEquals(200, stillWorks.statusCode());
     }
-
-    // --- failure: weak new password --------------------------------------------
 
     @Test
     void weakNewPasswordFailsWith400AndLeavesThePasswordUnchanged() throws Exception {
@@ -160,8 +144,6 @@ class PasswordChangeIT {
         HttpResponse<String> stillWorks = send(loginRequest(username, CURRENT_PASSWORD, freshCookies));
         assertEquals(200, stillWorks.statusCode());
     }
-
-    // --- CSRF --------------------------------------------------------------------
 
     @Test
     void changingPasswordWithoutCsrfIsRejectedWith403() throws Exception {
@@ -198,8 +180,6 @@ class PasswordChangeIT {
 
         assertEquals(401, response.statusCode());
     }
-
-    // --- helpers -------------------------------------------------------------
 
     private static final class CookieJar {
         private final Map<String, String> values = new HashMap<>();

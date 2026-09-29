@@ -32,8 +32,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PerformanceMetricsTest {
 
-    // --- fixture helpers ---------------------------------------------------
-
     private static final StrategyDefinition STRATEGY = new StrategyDefinition(
             new Condition.Compare(new Operand.Close(), Operator.GT, new Operand.Constant(0)),
             new Condition.Compare(new Operand.Close(), Operator.LT, new Operand.Constant(0)),
@@ -59,7 +57,6 @@ class PerformanceMetricsTest {
         return new EquityPoint(date, e, 0, BigDecimal.ZERO, BigDecimal.ZERO, e);
     }
 
-    /** A legal {@link EquityPoint} whose equity is exactly zero (cash=0, flat, any positive close). */
     private static EquityPoint zeroEquityPoint(LocalDate date) {
         return new EquityPoint(date, BigDecimal.ZERO, 0, BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("100"));
     }
@@ -90,8 +87,6 @@ class PerformanceMetricsTest {
         return PerformanceMetrics.of(result(cfg, curve, fills));
     }
 
-    // --- total return --------------------------------------------------------
-
     @Test
     void totalReturnTenPercentGain() {
         PerformanceMetrics m = metricsOf(List.of(point(d(2024, 1, 1), "10000"), point(d(2024, 1, 2), "11000")));
@@ -109,8 +104,6 @@ class PerformanceMetricsTest {
         PerformanceMetrics m = metricsOf(List.of(point(d(2024, 1, 1), "10000"), point(d(2024, 1, 2), "10000")));
         assertEquals(0.0, m.totalReturn());
     }
-
-    // --- CAGR ------------------------------------------------------------
 
     @Test
     void cagrExactlyOneYear() {
@@ -144,8 +137,6 @@ class PerformanceMetricsTest {
         PerformanceMetrics m = metricsOf(List.of(point(d(2024, 1, 1), "10000")));
         assertTrue(m.cagr().isEmpty());
     }
-
-    // --- volatility / Sharpe -----------------------------------------------
 
     @Test
     void volatilityAndSharpeGainThenFlat() {
@@ -200,8 +191,6 @@ class PerformanceMetricsTest {
         assertTrue(m.sharpeRatio().isEmpty());
     }
 
-    // --- drawdown ----------------------------------------------------------
-
     @Test
     void risingEquityGivesZeroDrawdown() {
         PerformanceMetrics m = metricsOf(List.of(
@@ -236,8 +225,6 @@ class PerformanceMetricsTest {
         PerformanceMetrics m = metricsOf(List.of(point(d(2024, 1, 1), "10000")));
         assertEquals(0.0, m.maxDrawdown());
     }
-
-    // --- trade statistics ----------------------------------------------------
 
     @Test
     void noFillsGivesEmptyTradeStatistics() {
@@ -287,10 +274,10 @@ class PerformanceMetricsTest {
     @Test
     void mixedWinsLossesAndBreakeven() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
-                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"), // +300
-                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5"));  // 0
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
+                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"),
+                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5"));
         PerformanceMetrics m = metricsOfTrades(fills);
         assertEquals(4, m.closedTradeCount());
         assertEquals(0.5, m.winRate().getAsDouble(), 1e-15);
@@ -301,11 +288,11 @@ class PerformanceMetricsTest {
     @Test
     void trailingOpenTradeDoesNotAffectClosedStatistics() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
-                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"), // +300
-                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5"), // 0
-                buy(9, d(2024, 1, 9), "100", "0")); // trailing open BUY
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
+                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"),
+                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5"),
+                buy(9, d(2024, 1, 9), "100", "0"));
         PerformanceMetrics m = metricsOfTrades(fills);
         assertEquals(4, m.closedTradeCount());
         assertEquals(0.5, m.winRate().getAsDouble(), 1e-15);
@@ -323,23 +310,21 @@ class PerformanceMetricsTest {
         assertTrue(m.averageLoss().isEmpty());
     }
 
-    // --- profit factor -------------------------------------------------------
-
     @Test
     void profitFactorIsGrossProfitOverAbsoluteGrossLoss() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
-                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0")); // +300
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
+                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"));
         PerformanceMetrics m = metricsOfTrades(fills);
-        assertEquals(8.0, m.profitFactor().getAsDouble(), 1e-15); // 400 / 50
+        assertEquals(8.0, m.profitFactor().getAsDouble(), 1e-15);
     }
 
     @Test
     void profitFactorBelowOneWhenLossesOutweighWins() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "105", "0"), // +50
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "90", "0"));  // -100
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "105", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "90", "0"));
         PerformanceMetrics m = metricsOfTrades(fills);
         assertEquals(0.5, m.profitFactor().getAsDouble(), 1e-15);
     }
@@ -356,8 +341,8 @@ class PerformanceMetricsTest {
     @Test
     void onlyLosingTradesGiveAProfitFactorOfExactlyZero() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "95", "0"),  // -50
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "97", "0"));  // -30
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "95", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "97", "0"));
         PerformanceMetrics m = metricsOfTrades(fills);
         assertTrue(m.profitFactor().isPresent());
         assertEquals(0.0, m.profitFactor().getAsDouble());
@@ -366,12 +351,12 @@ class PerformanceMetricsTest {
     @Test
     void breakevenTradesContributeToNeitherSideOfProfitFactor() {
         List<Fill> withoutBreakeven = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"));  // -50
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"));
         List<Fill> withBreakeven = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
-                buy(5, d(2024, 1, 5), "100", "5"), sell(6, d(2024, 1, 6), "101", "5")); // 0
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
+                buy(5, d(2024, 1, 5), "100", "5"), sell(6, d(2024, 1, 6), "101", "5"));
         assertEquals(2.0, metricsOfTrades(withoutBreakeven).profitFactor().getAsDouble(), 1e-15);
         assertEquals(2.0, metricsOfTrades(withBreakeven).profitFactor().getAsDouble(), 1e-15);
     }
@@ -389,12 +374,12 @@ class PerformanceMetricsTest {
     @Test
     void openTradeIsIgnoredByProfitFactor() {
         List<Fill> closedOnly = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"));  // -50
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"));
         List<Fill> withOpen = List.of(
                 buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
                 buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
-                buy(5, d(2024, 1, 5), "100", "0")); // trailing open BUY
+                buy(5, d(2024, 1, 5), "100", "0"));
         assertEquals(metricsOfTrades(closedOnly).profitFactor(), metricsOfTrades(withOpen).profitFactor());
         assertEquals(2.0, metricsOfTrades(withOpen).profitFactor().getAsDouble(), 1e-15);
     }
@@ -405,15 +390,12 @@ class PerformanceMetricsTest {
         assertTrue(metricsOfTrades(List.of(buy(1, d(2024, 1, 1), "100", "0"))).profitFactor().isEmpty());
     }
 
-    // Gross profit/loss are summed exactly in BigDecimal: +0.10 + 0.20 is
-    // exactly 0.30 (a double running sum would be 0.30000000000000004), so a
-    // 0.30 loss gives a profit factor of exactly 1.0.
     @Test
     void profitFactorSumsAreExactNotFloatingPoint() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100.00", "0"), sell(2, d(2024, 1, 2), "100.01", "0"), // +0.10
-                buy(3, d(2024, 1, 3), "100.00", "0"), sell(4, d(2024, 1, 4), "100.02", "0"), // +0.20
-                buy(5, d(2024, 1, 5), "100.00", "0"), sell(6, d(2024, 1, 6), "99.97", "0"));  // -0.30
+                buy(1, d(2024, 1, 1), "100.00", "0"), sell(2, d(2024, 1, 2), "100.01", "0"),
+                buy(3, d(2024, 1, 3), "100.00", "0"), sell(4, d(2024, 1, 4), "100.02", "0"),
+                buy(5, d(2024, 1, 5), "100.00", "0"), sell(6, d(2024, 1, 6), "99.97", "0"));
         PerformanceMetrics m = metricsOfTrades(fills);
         assertEquals(1.0, m.profitFactor().getAsDouble());
     }
@@ -421,10 +403,10 @@ class PerformanceMetricsTest {
     @Test
     void profitFactorDoesNotChangeAnyOtherTradeMetric() {
         List<Fill> fills = List.of(
-                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"), // +100
-                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),  // -50
-                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"), // +300
-                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5")); // 0
+                buy(1, d(2024, 1, 1), "100", "0"), sell(2, d(2024, 1, 2), "110", "0"),
+                buy(3, d(2024, 1, 3), "100", "0"), sell(4, d(2024, 1, 4), "95", "0"),
+                buy(5, d(2024, 1, 5), "100", "0"), sell(6, d(2024, 1, 6), "130", "0"),
+                buy(7, d(2024, 1, 7), "100", "5"), sell(8, d(2024, 1, 8), "101", "5"));
         PerformanceMetrics m = metricsOfTrades(fills);
         assertEquals(4, m.closedTradeCount());
         assertEquals(0.5, m.winRate().getAsDouble(), 1e-15);
@@ -456,8 +438,6 @@ class PerformanceMetricsTest {
                 OptionalDouble.empty(), OptionalDouble.of(-1.0), OptionalDouble.empty()));
     }
 
-    // --- drawdown series -----------------------------------------------------
-
     @Test
     void drawdownSeriesIsAlignedWithTheCurveAndUsesTheRunningPeak() {
         List<EquityPoint> curve = List.of(
@@ -466,11 +446,11 @@ class PerformanceMetricsTest {
         double[] series = PerformanceMetrics.drawdownSeries(curve);
 
         assertEquals(curve.size(), series.length);
-        assertEquals(0.0, series[0]); // first point defines the initial peak
-        assertEquals(0.0, series[1]); // new high
-        assertEquals(0.25, series[2], 1e-15); // (12000 - 9000) / 12000
-        assertEquals(0.20, series[3], 1e-15); // (12000 - 9600) / 12000
-        assertEquals(0.0, series[4]); // new high again
+        assertEquals(0.0, series[0]);
+        assertEquals(0.0, series[1]);
+        assertEquals(0.25, series[2], 1e-15);
+        assertEquals(0.20, series[3], 1e-15);
+        assertEquals(0.0, series[4]);
     }
 
     @Test
@@ -482,7 +462,7 @@ class PerformanceMetricsTest {
         for (double dd : PerformanceMetrics.drawdownSeries(curve)) {
             max = Math.max(max, dd);
         }
-        assertEquals(metricsOf(curve).maxDrawdown(), max); // bit-exact, no tolerance
+        assertEquals(metricsOf(curve).maxDrawdown(), max);
     }
 
     @Test
@@ -501,8 +481,6 @@ class PerformanceMetricsTest {
         assertThrows(IllegalArgumentException.class, () -> PerformanceMetrics.drawdownSeries(List.of()));
     }
 
-    // --- preconditions -------------------------------------------------------
-
     @Test
     void nullResultThrowsNpe() {
         assertThrows(NullPointerException.class, () -> PerformanceMetrics.of(null));
@@ -517,15 +495,10 @@ class PerformanceMetricsTest {
 
     @Test
     void zeroEquityPointThrowsIae() {
-        // cash=0, flat (quantity=0, costBasis=0) is a legal EquityPoint whose own
-        // equity() is exactly zero, even though close is positive — this is exactly
-        // the case PerformanceMetrics' second precondition must reject.
         BacktestConfig cfg = config("10000", d(2024, 1, 1), d(2024, 1, 2));
         List<EquityPoint> curve = List.of(point(d(2024, 1, 1), "10000"), zeroEquityPoint(d(2024, 1, 2)));
         assertThrows(IllegalArgumentException.class, () -> PerformanceMetrics.of(result(cfg, curve, List.of())));
     }
-
-    // --- record validation ---------------------------------------------------
 
     @Test
     void maxDrawdownBoundaryZeroIsValid() {
@@ -656,8 +629,6 @@ class PerformanceMetricsTest {
         assertEquals(maxDrawdown, m.maxDrawdown());
     }
 
-    // --- numerical safety / documented emptiness ----------------------------
-
     @Test
     void noNaNOrInfinityInAnyMetric() {
         PerformanceMetrics m = metricsOf(List.of(
@@ -669,8 +640,6 @@ class PerformanceMetricsTest {
         m.sharpeRatio().ifPresent(v -> assertFalse(Double.isNaN(v) || Double.isInfinite(v)));
     }
 
-    // --- determinism -----------------------------------------------------
-
     @Test
     void ofIsDeterministicOnTheSameResult() {
         BacktestResult r = result(config("10000", d(2024, 1, 1), d(2024, 1, 3)),
@@ -680,23 +649,11 @@ class PerformanceMetricsTest {
         assertEquals(PerformanceMetrics.of(r), PerformanceMetrics.of(r));
     }
 
-    // --- consistency via a real Backtester run --------------------------
-
     private static Bar flatBar(int day, String price) {
         BigDecimal p = new BigDecimal(price);
         return new Bar(d(2024, 1, day), p, p, p, p, 0);
     }
 
-    /**
-     * A churning always-enter/always-exit strategy over six bars, sized at
-     * whole cash fraction 1 with zero commission/slippage: two round trips
-     * (day1->day2 entry filled day2 open, exit filled day3 open; day3->day4
-     * entry filled day4 open, exit filled day5 open) and one trailing open
-     * position from the day5 entry filled at day6's open (day6 is the last
-     * in-range bar, so it is never evaluated and the position stays open).
-     * Each entry's next-bar open is at or below its own sizing close, so
-     * every BUY stays affordable.
-     */
     private static BacktestResult multiTradeResult() {
         BarSeries series = new BarSeries("TEST", List.of(
                 flatBar(1, "100"), flatBar(2, "90"), flatBar(3, "110"),

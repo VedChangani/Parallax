@@ -39,14 +39,13 @@ class BacktestCsvTest {
         assertEquals("1", BacktestCsv.plainDecimal(1.0));
         assertEquals("0.25", BacktestCsv.plainDecimal(0.25));
         assertEquals("0.081", BacktestCsv.plainDecimal(0.081));
-        // Double.toString gives "1.0E-4" and "1.234E-7"; the CSV must not.
         assertEquals("0.0001", BacktestCsv.plainDecimal(1.0E-4));
         assertEquals("0.0000001234", BacktestCsv.plainDecimal(1.234E-7));
     }
 
     @Test
     void plainDecimalRoundTripsTheExactDouble() {
-        double value = 0.1 + 0.2; // 0.30000000000000004
+        double value = 0.1 + 0.2;
         assertEquals(value, Double.parseDouble(BacktestCsv.plainDecimal(value)));
     }
 }
