@@ -3,9 +3,8 @@ package in.vedchangani.parallax.backend.user;
 import java.nio.charset.StandardCharsets;
 
 /**
- * The V1 password strength policy (D-37): at least 15 characters (NIST SP
- * 800-63B's minimum length for a single-factor memorized secret) and at
- * most 72 UTF-8 bytes (bcrypt silently truncates anything beyond this, so
+ * The V1 password strength policy (D-37, minimum revised by D-43): at least
+ * 8 characters and at most 72 UTF-8 bytes (bcrypt silently truncates anything beyond this, so
  * a longer password would be accepted while its effective secret is
  * shorter than the user believes, with no indication). No composition
  * rules (uppercase/digit/symbol) beyond length — composition requirements
@@ -13,13 +12,13 @@ import java.nio.charset.StandardCharsets;
  * than stronger passwords, without this codebase needing to relitigate
  * that.
  *
- * <p>Used by {@code PasswordClaimRunner} in this batch. A later
- * registration batch reuses it unchanged, which is the only reason it is
- * factored out now rather than inlined.
+ * <p>The single source of the rule for every place a password is set:
+ * {@code PasswordClaimRunner}, {@code UserRegistrationService} and {@code
+ * PasswordChangeService}.
  */
 public final class PasswordPolicy {
 
-    private static final int MIN_LENGTH = 15;
+    private static final int MIN_LENGTH = 8;
     private static final int MAX_UTF8_BYTES = 72;
 
     private PasswordPolicy() {

@@ -72,11 +72,11 @@ class PasswordClaimRunnerTest {
         AppUserRepository repository = mock(AppUserRepository.class);
         AppUser user = newUser(1L, "dev", null);
         when(repository.findByUsername("dev")).thenReturn(Optional.of(user));
-        PasswordClaimRunner runner = new PasswordClaimRunner(repository, passwordEncoder, "dev", "too-short");
+        PasswordClaimRunner runner = new PasswordClaimRunner(repository, passwordEncoder, "dev", "short-7");
 
         IllegalStateException exception = assertThrows(IllegalStateException.class, () -> runner.run(null));
 
-        assertFalse(exception.getMessage().contains("too-short"));
+        assertFalse(exception.getMessage().contains("short-7"));
         verify(repository, never()).saveAndFlush(any());
     }
 

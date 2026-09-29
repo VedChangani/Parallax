@@ -18,6 +18,61 @@ development machine but not in a fresh clone.
 - Docker (only needed to run the backend's integration tests, which use
   Testcontainers)
 
+## Docker Quick Start
+
+Runs the whole application (PostgreSQL, the Spring Boot backend and the
+production React build behind nginx) from a fresh clone. Only Docker with
+Compose is required — no Java, Node or PostgreSQL install.
+
+```bash
+docker compose up --build
+```
+
+The first build downloads dependencies and takes a few minutes. When it
+finishes, open <http://localhost:3000>.
+
+**Getting an account.** Authentication is always on. A fresh database has
+no usable account, so either:
+
+- click **Register** in the web app (self-registration is on by default), or
+- claim a password for the seeded `dev` account on first start. Set these in
+  your shell, or in a git-ignored `.env` file next to `compose.yaml` (start
+  from [`.env.example`](.env.example)), then log in as `dev`:
+
+  ```bash
+  PARALLAX_CLAIM_USERNAME=dev PARALLAX_CLAIM_PASSWORD='<at least 8 characters>' docker compose up --build
+  ```
+
+  This only sets a password on an existing, still-passwordless account and
+  never overwrites one. Once you have logged in, start again without
+  `PARALLAX_CLAIM_PASSWORD` so it does not linger in your environment.
+
+**What runs.** Three services — `postgres`, `backend`, `frontend` — with one
+browser origin: nginx serves the app and proxies `/api/*` to the backend.
+Only the frontend port is published; PostgreSQL and the backend are
+reachable only inside the Compose network. Data lives in the named volume
+`parallax_postgres-data`.
+
+```bash
+docker compose down        # stop; your data is kept
+docker compose down -v     # stop AND delete the database volume (start fresh)
+```
+
+**Optional settings** (shell environment or `.env`; see `.env.example`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PARALLAX_PORT` | `3000` | Host port for the web app |
+| `PARALLAX_CLAIM_USERNAME` / `PARALLAX_CLAIM_PASSWORD` | unset | One-time password claim (above) |
+| `ALPHA_VANTAGE_API_KEY` | unset | Enables Alpha Vantage imports; disabled while blank |
+| `PARALLAX_DB_PASSWORD` | `parallax` | Database password — used only when the volume is first created, so run `docker compose down -v` before changing it |
+| `PARALLAX_COOKIE_SECURE` | `false` | Set to `true` only if you put HTTPS in front of it |
+| `PARALLAX_REGISTRATION_ENABLED` | `true` | Set to `false` to disable self-registration |
+
+The Compose setup is for local use over plain `http://localhost`. The
+default database password is a local-development convenience and is never
+exposed to the host; set your own before running it anywhere shared.
+
 ## Running the backend locally
 
 1. Start a local PostgreSQL and create the database/role the backend
@@ -52,7 +107,7 @@ development machine but not in a fresh clone.
 
    ```
    PARALLAX_CLAIM_USERNAME=dev
-   PARALLAX_CLAIM_PASSWORD=<a password at least 15 characters long>
+   PARALLAX_CLAIM_PASSWORD=<a password at least 8 characters long>
    ```
 
    This only ever sets a password on an *existing, still-passwordless*

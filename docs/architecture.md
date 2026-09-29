@@ -2221,8 +2221,8 @@ is the only way, in this batch, to set a password on a pre-existing,
 passwordless account — in particular the seeded `dev` row, which owns
 every strategy/dataset/run created before authentication existed. It
 never creates a user and never overwrites an existing hash.
-`PasswordPolicy` (≥15 characters, ≤72 UTF-8 bytes) is factored out for a
-later self-registration batch to reuse unchanged.
+`PasswordPolicy` (≥8 characters since D-43, originally 15; ≤72 UTF-8 bytes)
+is the single password rule shared by claim, registration and password change.
 
 **Test infrastructure:** `AuthenticatedMockMvcConfig` (test-only) makes
 every `MockMvc` request in an importing test authenticated and
@@ -2244,10 +2244,11 @@ row. `RegisterRequest(username, password)` is read by the same generic
 strict-envelope overload every other request body uses
 (`StrategyDefinitionCodec.parseRequest`), so an unknown property (e.g. an
 attempted `id`, `passwordHash`, or `ownerId`) is rejected before Bean
-Validation runs. Username is validated as `AppUser.USERNAME_PATTERN`
-(`@Pattern` on the envelope, → 400 via the existing
-`ConstraintViolationException` path); password is validated by D-37's
-`PasswordPolicy`, reused unchanged.
+Validation runs. Username is trimmed, then must be non-blank and at most 64
+characters (D-43: no character-set or case restriction; `@NotBlank` /
+`@CodePointLength` on the envelope, → 400 via the existing
+`ConstraintViolationException` path); password is validated by
+`PasswordPolicy` (≥8 characters, D-43), reused unchanged.
 
 `UserRegistrationService` is the sole write path: it encodes the password,
 then a single `AppUserRepository.saveAndFlush` (added alongside D-37's

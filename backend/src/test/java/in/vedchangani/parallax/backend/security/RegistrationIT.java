@@ -164,27 +164,129 @@ class RegistrationIT {
     // --- username validation -----------------------------------------------------
 
     @Test
-    void invalidUsernamesReturn400() throws Exception {
+    void blankOverLongOrUnstorableUsernamesReturn400() throws Exception {
         List<String> invalid = List.of(
-                "ab", // too short (< 3 chars)
-                "Uppercase1", // uppercase not allowed
-                "a".repeat(65), // too long (> 64 chars)
-                "has space", // invalid character
-                "_leadingunderscore" // must start with [a-z0-9]
+                "", // empty
+                "   ", // blank after trimming
+                "\t \n", // whitespace only
+                "a".repeat(65), // over the 64-character column
+                " " + "a".repeat(65) + " ", // still 65 after trimming
+                "😀".repeat(65), // 65 code points (each is two UTF-16 units)
+                "nul\u0000inside" // PostgreSQL cannot store NUL
         );
 
         for (String username : invalid) {
             HttpResponse<String> response = register(username, "a-perfectly-fine-password");
-            assertEquals(400, response.statusCode(), "expected 400 for username: " + username);
+            assertEquals(400, response.statusCode(), "expected 400 for username: " + username.replace("\u0000", "<NUL>"));
         }
+    }
+
+    @Test
+    void nullOrMissingUsernameReturns400() throws Exception {
+        CookieJar cookies = new CookieJar();
+        bootstrapCsrf(cookies);
+        HttpResponse<String> missing = send(authenticated(HttpRequest.newBuilder()
+                .uri(uri("/api/auth/register"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"password\":\"a-perfectly-fine-password\"}",
+                        StandardCharsets.UTF_8)), cookies));
+        HttpResponse<String> nullName = send(authenticated(HttpRequest.newBuilder()
+                .uri(uri("/api/auth/register"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        "{\"username\":null,\"password\":\"a-perfectly-fine-password\"}",
+                        StandardCharsets.UTF_8)), cookies));
+
+        assertEquals(400, missing.statusCode());
+        assertEquals(400, nullName.statusCode());
+    }
+
+    @Test
+    void anyNonBlankUsernameUpToSixtyFourCharactersIsAccepted() throws Exception {
+        String suffix = String.valueOf(System.nanoTime());
+        List<String> valid = List.of(
+                "V" + suffix, // one letter and digits, uppercase kept
+                "Ved" + suffix, // mixed case
+                "has space & symbols! #" + suffix, // spaces and punctuation
+                "ünïcödé-名前-" + suffix, // non-ASCII
+                "\"quoted\\back\"" + suffix, // JSON-special characters
+                "1", // a single character (the test database is fresh per run)
+                ("z" + suffix + "-") + "a".repeat(64 - ("z" + suffix + "-").length()), // exactly 64
+                "😀".repeat(63) + "🙂" // exactly 64 code points (128 UTF-16 units)
+        );
+
+        for (String username : valid) {
+            HttpResponse<String> response = register(username, "a-perfectly-fine-password");
+            assertEquals(201, response.statusCode(), "expected 201 for username: " + username);
+        }
+    }
+
+    @Test
+    void usernameCaseIsPreservedExactlyAndLoginUsesThatExactCase() throws Exception {
+        String username = "MixedCase-" + System.nanoTime();
+        assertEquals(201, register(username, "a-perfectly-fine-password").statusCode());
+
+        CookieJar cookies = new CookieJar();
+        bootstrapCsrf(cookies);
+        HttpResponse<String> login = send(loginRequest(username, "a-perfectly-fine-password", cookies));
+        assertEquals(200, login.statusCode());
+        assertTrue(login.body().contains("\"" + username + "\""), login.body());
+
+        // The stored name is the exact one entered - a different case is a different (unknown) account.
+        CookieJar otherCase = new CookieJar();
+        bootstrapCsrf(otherCase);
+        assertEquals(401, send(loginRequest(username.toLowerCase(), "a-perfectly-fine-password", otherCase))
+                .statusCode());
+    }
+
+    @Test
+    void usernamesDifferingOnlyByCaseAreDistinctAccountsButExactDuplicatesConflict() throws Exception {
+        String base = "CaseTwin-" + System.nanoTime();
+
+        assertEquals(201, register(base, "a-perfectly-fine-password").statusCode());
+        assertEquals(201, register(base.toLowerCase(), "a-perfectly-fine-password").statusCode());
+        assertEquals(409, register(base, "a-perfectly-fine-password").statusCode());
+    }
+
+    @Test
+    void surroundingWhitespaceIsTrimmedBeforeStoringAndCountsAsTheSameUsername() throws Exception {
+        String username = "Padded Name " + System.nanoTime();
+
+        HttpResponse<String> created = register("  " + username + "\t ", "a-perfectly-fine-password");
+        assertEquals(201, created.statusCode());
+        assertTrue(created.body().contains("\"" + username + "\""), created.body()); // echoed trimmed
+
+        assertEquals(409, register(username, "a-perfectly-fine-password").statusCode());
+
+        CookieJar cookies = new CookieJar();
+        bootstrapCsrf(cookies);
+        assertEquals(200, send(loginRequest(username, "a-perfectly-fine-password", cookies)).statusCode());
+    }
+
+    @Test
+    void usernameWithSpacesAndSymbolsCanLogIn() throws Exception {
+        String username = "Ved K. <test> & co " + System.nanoTime();
+        assertEquals(201, register(username, "a-perfectly-fine-password").statusCode());
+
+        CookieJar cookies = new CookieJar();
+        bootstrapCsrf(cookies);
+        HttpResponse<String> login = send(loginRequest(username, "a-perfectly-fine-password", cookies));
+
+        assertEquals(200, login.statusCode());
     }
 
     // --- password validation -------------------------------------------------------
 
     @Test
-    void fourteenCharacterPasswordReturns400() throws Exception {
-        HttpResponse<String> response = register(uniqueUsername("register-short-pw"), "x".repeat(14));
+    void sevenCharacterPasswordReturns400() throws Exception {
+        HttpResponse<String> response = register(uniqueUsername("register-short-pw"), "x".repeat(7));
         assertEquals(400, response.statusCode());
+        assertTrue(response.body().contains("password must be at least 8 characters"), response.body());
+    }
+
+    @Test
+    void emptyPasswordReturns400() throws Exception {
+        assertEquals(400, register(uniqueUsername("register-empty-pw"), "").statusCode());
     }
 
     @Test
@@ -194,9 +296,14 @@ class RegistrationIT {
     }
 
     @Test
-    void exactlyFifteenCharacterPasswordIsAccepted() throws Exception {
-        HttpResponse<String> response = register(uniqueUsername("register-min-pw"), "x".repeat(15));
+    void exactlyEightCharacterPasswordIsAcceptedAndCanLogIn() throws Exception {
+        String username = uniqueUsername("register-min-pw");
+        HttpResponse<String> response = register(username, "x".repeat(8));
         assertEquals(201, response.statusCode());
+
+        CookieJar cookies = new CookieJar();
+        bootstrapCsrf(cookies);
+        assertEquals(200, send(loginRequest(username, "x".repeat(8), cookies)).statusCode());
     }
 
     @Test
@@ -307,7 +414,26 @@ class RegistrationIT {
     }
 
     private static String registrationBody(String username, String password) {
-        return "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}";
+        return "{\"username\":\"" + jsonEscape(username) + "\",\"password\":\"" + password + "\"}";
+    }
+
+    /** Minimal JSON string escaping, so tests can send usernames containing quotes, backslashes and control characters. */
+    private static String jsonEscape(String value) {
+        StringBuilder escaped = new StringBuilder();
+        for (char c : value.toCharArray()) {
+            switch (c) {
+                case '"' -> escaped.append("\\\"");
+                case '\\' -> escaped.append("\\\\");
+                default -> {
+                    if (c < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        escaped.append(c);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
     }
 
     private HttpRequest.Builder registerRequest(String username, String password, CookieJar cookies) {

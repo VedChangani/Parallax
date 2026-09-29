@@ -1800,7 +1800,7 @@ unchanged, exactly as D-31 anticipated.
   claimed is left untouched, logged at INFO); an unknown username or a
   password failing `PasswordPolicy` fails startup outright, with no
   message ever including the password itself. `PasswordPolicy` (≥15
-  characters, ≤72 UTF-8 bytes, no composition rules) is factored out now
+  characters — *minimum revised to 8 by D-43* — ≤72 UTF-8 bytes, no composition rules) is factored out now
   purely because the not-yet-implemented registration batch will reuse it
   unchanged.
 - **Test infrastructure:** `AuthenticatedMockMvcConfig` (test-only,
@@ -1858,14 +1858,15 @@ Registration is on by default, matching a public application.
   An unknown property (`id`, `passwordHash`, `ownerId`, ...) fails before
   Bean Validation ever runs, which is what rules out mass assignment; the
   response echoes only `{"username": ...}`.
-- **Username:** `AppUser.USERNAME_PATTERN =
+- **Username** (*revised by D-43: the pattern below no longer exists*):
+  `AppUser.USERNAME_PATTERN =
   "^[a-z0-9][a-z0-9._-]{2,63}$"` — lowercase-only (so the case-sensitive
   `uq_app_user_username` constraint also behaves as case-insensitive
   uniqueness), 3–64 characters, matching the `username varchar(64)`
   column exactly at the upper bound. Enforced as a `@Pattern` on the
   envelope record → `ConstraintViolationException` → 400, the same path
   every other envelope constraint already uses.
-- **Password:** `PasswordPolicy` (D-37: ≥15 characters, ≤72 UTF-8 bytes,
+- **Password:** `PasswordPolicy` (D-37: ≥15 characters — *now ≥8, D-43* — ≤72 UTF-8 bytes,
   no composition rules), reused byte-for-byte, not reimplemented — the
   only reason it was factored out of `PasswordClaimRunner` in D-37. A
   violation throws `WeakPasswordException` → 400 (a shape failure, not a
@@ -2149,6 +2150,30 @@ migration or persisted state.
   header) fetches the file on click and saves it unchanged through a
   temporary object URL. The endpoints set `text/csv` on the response instead
   of `produces`, so a 404/500 stays an ordinary ProblemDetail.
+
+## D-43 Relaxed username and password rules (revises parts of D-37/D-38/D-40)
+
+**Decision:** the username format restriction is removed and the minimum
+password length is lowered to 8.
+
+- **Username:** the only rules are non-blank after trimming and at most 64
+  characters (code points, matching `username varchar(64)`). No character-set
+  or case restriction, no minimum length beyond non-blank. Surrounding
+  whitespace is trimmed with `String.trim()` — the same trim Spring
+  Security's login filter applies to the submitted username, so a stored name
+  can always be sent back at login — and the trimmed value is what is stored
+  and echoed. Case and all other characters are kept exactly as entered.
+  NUL is rejected because PostgreSQL cannot store it (otherwise a 500).
+- **Uniqueness is unchanged and case-sensitive** (`uq_app_user_username`):
+  "Ved" and "ved" are distinct accounts. D-38's lowercase-only pattern
+  existed to make that constraint behave case-insensitively; lookalike
+  usernames that differ only by case are now possible. No schema change.
+- **Password:** `PasswordPolicy` minimum is 8 characters (was 15); the
+  72-UTF-8-byte maximum, the absence of composition rules and all hashing
+  (`DelegatingPasswordEncoder`, bcrypt) are unchanged. `PasswordPolicy` is
+  the one source of the rule, so the change applies uniformly to
+  registration, the D-37 claim mechanism and the D-40 password change.
+- No migration, no change to login/session/CSRF or ownership behavior.
 
 ## Open questions
 

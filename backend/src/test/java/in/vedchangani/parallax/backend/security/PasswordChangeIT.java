@@ -151,7 +151,7 @@ class PasswordChangeIT {
         bootstrapCsrf(cookies);
         login(username, CURRENT_PASSWORD, cookies);
 
-        HttpResponse<String> response = send(changePasswordRequest(CURRENT_PASSWORD, "too-short", cookies));
+        HttpResponse<String> response = send(changePasswordRequest(CURRENT_PASSWORD, "short-7", cookies));
 
         assertEquals(400, response.statusCode());
 
