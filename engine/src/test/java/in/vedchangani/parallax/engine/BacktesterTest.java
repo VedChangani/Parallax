@@ -197,6 +197,49 @@ class BacktesterTest {
     }
 
     @Test
+    void atrWarmUpAndFirstEvaluableDate() {
+        IndicatorSpec atr2 = new IndicatorSpec(IndicatorType.ATR, 2);
+        BarSeries s = series(flatBar(1, "100"), flatBar(2, "101"), flatBar(3, "102"));
+        BacktestConfig cfg = config("1000", "5", "0", date(1), date(3));
+        StrategyDefinition strat = strategy(indicatorAbove(atr2, 1e9), indicatorAbove(atr2, 1e9));
+
+        BacktestResult result = new Backtester().run(s, strat, cfg);
+
+        assertEquals(date(2), result.firstEvaluableDate().orElseThrow());
+    }
+
+    @Test
+    void rocWarmUpAndFirstEvaluableDate() {
+        IndicatorSpec roc2 = new IndicatorSpec(IndicatorType.ROC, 2);
+        BarSeries s = series(flatBar(1, "100"), flatBar(2, "101"), flatBar(3, "102"), flatBar(4, "103"));
+        BacktestConfig cfg = config("1000", "5", "0", date(1), date(4));
+        StrategyDefinition strat = strategy(indicatorAbove(roc2, 1e9), indicatorAbove(roc2, 1e9));
+
+        BacktestResult result = new Backtester().run(s, strat, cfg);
+
+        assertEquals(date(3), result.firstEvaluableDate().orElseThrow());
+    }
+
+    // ATR must receive each bar's high/low (not just the close): ATR(1) is
+    // the true range, 3 on day 1 and 5 on day 2 (gap up from close 11 to
+    // high 16), so ATR(1) > 4 first holds on day 2 and fills at day 3's open.
+    @Test
+    void atrStrategyReceivesHighAndLowFromBacktester() {
+        IndicatorSpec atr1 = new IndicatorSpec(IndicatorType.ATR, 1);
+        BarSeries s = series(
+                bar(1, "10", "12", "9", "11"),
+                bar(2, "15", "16", "14", "15"),
+                bar(3, "15", "16", "14", "15"));
+        BacktestConfig cfg = config("1000", "0", "0", date(1), date(3));
+        StrategyDefinition strat = strategy(indicatorAbove(atr1, 4), indicatorAbove(atr1, 1e9));
+
+        BacktestResult result = new Backtester().run(s, strat, cfg);
+
+        assertEquals(1, result.fills().size());
+        assertEquals(date(3), result.fills().get(0).date());
+    }
+
+    @Test
     void neverReadyGivesEmptyFirstEvaluableDate() {
         IndicatorSpec sma5 = new IndicatorSpec(IndicatorType.SMA, 5);
         BarSeries s = series(flatBar(1, "10"), flatBar(2, "20"), flatBar(3, "30"));

@@ -97,3 +97,16 @@ export function averageLossExplanation(metrics) {
   if (metrics.averageLoss !== null) return undefined;
   return metrics.closedTradeCount === 0 ? 'No trades were closed in this run.' : 'No losing trades in this run.';
 }
+
+/**
+ * Profit factor (D-41) is empty exactly when no closed trade lost money
+ * (no closed trades, or only winning/breakeven ones): its denominator, the
+ * absolute gross loss, would be zero. Never shown as infinity.
+ *
+ * @param {import('../../api/types.js').PerformanceMetricsResponse} metrics
+ * @returns {string | undefined}
+ */
+export function profitFactorExplanation(metrics) {
+  if (metrics.profitFactor !== null) return undefined;
+  return 'Needs at least one losing closed trade.';
+}

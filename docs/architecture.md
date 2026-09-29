@@ -1074,7 +1074,8 @@ public record PerformanceMetrics(
     int closedTradeCount,
     OptionalDouble winRate,
     OptionalDouble averageWin,
-    OptionalDouble averageLoss
+    OptionalDouble averageLoss,
+    OptionalDouble profitFactor
 )
 ```
 
@@ -1121,8 +1122,11 @@ Never `NaN`/`Infinity`.
 
 **Maximum drawdown:** the largest close-to-close fall from a running peak
 equity, as a fraction of that peak (`0.25` = 25%). Always present, `0.0`
-for a single point or monotonically rising equity. No absolute monetary
-amount, drawdown series, duration, or peak/trough dates are stored.
+for a single point or monotonically rising equity. It is the maximum of
+`PerformanceMetrics.drawdownSeries(curve)` (D-41), the per-point
+`(runningPeak - equity) / runningPeak`. The record stores no absolute
+monetary amount, drawdown series, duration, or peak/trough dates; the
+series is derived on demand from the equity curve.
 
 **Trade statistics:** derived only from `result.trades()`, using
 `Trade.Closed.realizedPnl()` directly — never recomputed. Only closed
@@ -1132,6 +1136,11 @@ breakeven — a breakeven trade is in the win-rate denominator but excluded
 from both averages. `winRate` is empty iff `closedTradeCount == 0`.
 `averageWin`/`averageLoss` are empty when there are no wins/losses
 respectively; `averageLoss` is reported as a negative number.
+`profitFactor` (D-41) is gross profit of winning closed trades divided by
+the absolute gross loss of losing closed trades (sums exact in
+`BigDecimal`, one `double` division); breakeven and open trades contribute
+to neither side. It is empty iff there is no losing closed trade (never
+`Infinity`), and `0.0` when there are losses but no wins.
 
 **Numerical policy:** every metric is a `double` (D-14). Monetary
 differences and sums are performed exactly in `BigDecimal`; conversion to
@@ -1399,7 +1408,7 @@ Small hand-calculable fixtures, not only external market data.
   multi-trade `Backtester.run(...)` result (closed count matches
   `trades()`, closed + open counts sum to `trades().size()`, Σ closed
   `realizedPnl()` equals `finalPoint().realizedPnl()`). A structural test
-  pins the record's nine components in order and confirms no component
+  pins the record's ten components in order and confirms no component
   holds a `BacktestResult`, `Portfolio`, `BarSeries`, runtime `Indicator`,
   or `Backtester`.
 - **Trading-cost totals** (implemented; `BacktestResult`, D-27): exact
@@ -2128,7 +2137,11 @@ unmodified by `BacktestConfigMapper`, parsed directly into `BigDecimal`,
 never through a `double`. Response DTOs
 render every `BigDecimal` as `toPlainString()`, every metric `double` as a
 JSON number, an empty `OptionalDouble` as JSON `null`, and never a JPA
-entity. `MalformedBacktestConfigException` → 400,
+entity. `GET /{id}/equity-curve` carries a per-point `drawdown` (a
+non-negative fraction, D-41) beside `equity`, from the same verified curve;
+`profitFactor` is a `metrics` field and, having no column, is recomputed
+from the verified fills on every read (D-41). `GET /{id}/equity-curve.csv`
+and `GET /{id}/trades.csv` export the same verified views as CSV (D-42). `MalformedBacktestConfigException` → 400,
 `InvalidBacktestConfigException`/`BacktestRangeException` → 422,
 `BacktestRunNotFoundException` → 404, `BacktestResultIntegrityException` →
 500 (logged server-side, generic body — never a stack trace, SQL detail, or
@@ -2208,8 +2221,8 @@ is the only way, in this batch, to set a password on a pre-existing,
 passwordless account — in particular the seeded `dev` row, which owns
 every strategy/dataset/run created before authentication existed. It
 never creates a user and never overwrites an existing hash.
-`PasswordPolicy` (≥15 characters, ≤72 UTF-8 bytes) is factored out for a
-later self-registration batch to reuse unchanged.
+`PasswordPolicy` (≥8 characters since D-43, originally 15; ≤72 UTF-8 bytes)
+is the single password rule shared by claim, registration and password change.
 
 **Test infrastructure:** `AuthenticatedMockMvcConfig` (test-only) makes
 every `MockMvc` request in an importing test authenticated and
@@ -2231,10 +2244,11 @@ row. `RegisterRequest(username, password)` is read by the same generic
 strict-envelope overload every other request body uses
 (`StrategyDefinitionCodec.parseRequest`), so an unknown property (e.g. an
 attempted `id`, `passwordHash`, or `ownerId`) is rejected before Bean
-Validation runs. Username is validated as `AppUser.USERNAME_PATTERN`
-(`@Pattern` on the envelope, → 400 via the existing
-`ConstraintViolationException` path); password is validated by D-37's
-`PasswordPolicy`, reused unchanged.
+Validation runs. Username is trimmed, then must be non-blank and at most 64
+characters (D-43: no character-set or case restriction; `@NotBlank` /
+`@CodePointLength` on the envelope, → 400 via the existing
+`ConstraintViolationException` path); password is validated by
+`PasswordPolicy` (≥8 characters, D-43), reused unchanged.
 
 `UserRegistrationService` is the sole write path: it encodes the password,
 then a single `AppUserRepository.saveAndFlush` (added alongside D-37's

@@ -1800,7 +1800,7 @@ unchanged, exactly as D-31 anticipated.
   claimed is left untouched, logged at INFO); an unknown username or a
   password failing `PasswordPolicy` fails startup outright, with no
   message ever including the password itself. `PasswordPolicy` (≥15
-  characters, ≤72 UTF-8 bytes, no composition rules) is factored out now
+  characters — *minimum revised to 8 by D-43* — ≤72 UTF-8 bytes, no composition rules) is factored out now
   purely because the not-yet-implemented registration batch will reuse it
   unchanged.
 - **Test infrastructure:** `AuthenticatedMockMvcConfig` (test-only,
@@ -1858,14 +1858,15 @@ Registration is on by default, matching a public application.
   An unknown property (`id`, `passwordHash`, `ownerId`, ...) fails before
   Bean Validation ever runs, which is what rules out mass assignment; the
   response echoes only `{"username": ...}`.
-- **Username:** `AppUser.USERNAME_PATTERN =
+- **Username** (*revised by D-43: the pattern below no longer exists*):
+  `AppUser.USERNAME_PATTERN =
   "^[a-z0-9][a-z0-9._-]{2,63}$"` — lowercase-only (so the case-sensitive
   `uq_app_user_username` constraint also behaves as case-insensitive
   uniqueness), 3–64 characters, matching the `username varchar(64)`
   column exactly at the upper bound. Enforced as a `@Pattern` on the
   envelope record → `ConstraintViolationException` → 400, the same path
   every other envelope constraint already uses.
-- **Password:** `PasswordPolicy` (D-37: ≥15 characters, ≤72 UTF-8 bytes,
+- **Password:** `PasswordPolicy` (D-37: ≥15 characters — *now ≥8, D-43* — ≤72 UTF-8 bytes,
   no composition rules), reused byte-for-byte, not reimplemented — the
   only reason it was factored out of `PasswordClaimRunner` in D-37. A
   violation throws `WeakPasswordException` → 400 (a shape failure, not a
@@ -2083,6 +2084,96 @@ creating).
 self-registration, D-39 frontend identity lifecycle, D-40 password
 change) is complete. No frontend UI calls this endpoint yet — that is
 deferred, not scheduled as a numbered batch.
+
+## D-41 Profit factor and the per-point drawdown series (V1.1 Batch 3)
+
+**Decision:** `PerformanceMetrics` gains a tenth component, `OptionalDouble
+profitFactor` (revising D-26's "nine components"; the structural test now
+pins ten), and a public static `drawdownSeries(List<EquityPoint>)`.
+
+- **Profit factor** = gross profit of winning closed trades / absolute
+  gross loss of losing closed trades. Closed trades only; win = P&L > 0,
+  loss = P&L < 0; breakeven and open trades contribute to neither.
+  Empty iff no losing closed trade (never `Infinity`); exactly `0.0` when
+  there are losses and no wins. Sums are exact `BigDecimal`; the single
+  division is in `double` (D-14). Invariant: present iff `averageLoss` is
+  present.
+- **Drawdown series** = `(runningPeak - equity) / runningPeak` per equity
+  point, a fraction `>= 0` (`0.0` at a new high), index-aligned with the
+  curve. `maxDrawdown` is now computed as the maximum of this series, with
+  identical arithmetic (bit-identical result). The frontend plots it
+  negated so zero is "no drawdown" and negative is drawdown.
+- **No migration, no new persisted column.** `profitFactor` is a pure
+  function of the closed trades, which the ledger replay already verifies,
+  so `BacktestResultReconstructor` uses the recomputed value (nothing
+  stored to compare) while every other metric is still compared exactly
+  against its persisted column (D-35). The drawdown series is derived on
+  read from the verified equity curve and exposed as a `drawdown` number on
+  each `GET /{id}/equity-curve` point, so dates align by construction.
+  Runs persisted before this batch therefore gain both, retroactively.
+- No change to `SEMANTICS_VERSION`: no simulation, execution or existing
+  metric semantics changed.
+
+## D-42 CSV export of a completed run (V1.1 Batch 4)
+
+**Decision:** two read-only endpoints on the run, `GET
+/api/backtest-runs/{id}/equity-curve.csv` and `.../trades.csv`, each behind
+the same owner-scoped, integrity-verifying `getRun` as every other read.
+`BacktestCsv` only formats the exact response records the JSON endpoints
+return, so a cell is character-for-character the JSON value; nothing is
+recomputed or reparsed, no backtest is re-run, and there is no new table,
+migration or persisted state.
+
+- **Format (RFC 4180):** UTF-8 without BOM; comma separator; `CRLF` after
+  every record including the last; one header row; a field is quoted only if
+  it contains a comma, quote, CR or LF (quotes doubled). ISO-8601 dates,
+  the backend's exact decimal strings for money, an empty field where a
+  value does not apply (never a placeholder). Deterministic: output is a
+  pure function of the run.
+- **Equity CSV** columns: `date, equity, cash, quantity, close,
+  market_value, cost_basis, realized_pnl, unrealized_pnl,
+  benchmark_equity, drawdown` (one row per equity point). `drawdown` is the
+  D-41 fraction `>= 0`, as a plain decimal without exponent or trailing
+  zeros (`0`, `0.25`, `0.0001`).
+- **Trades CSV** is a separate file, one row per trade, so the equity file
+  never repeats a trade across rows: `status, quantity, entry_order_id,
+  entry_date, entry_price, entry_commission, exit_order_id, exit_date,
+  exit_price, exit_commission, realized_pnl, total_commission,
+  total_slippage_cost, mark_date, mark_close, market_value,
+  unrealized_pnl`. An open trade leaves `exit_*` and `realized_pnl` empty and
+  fills `mark_*`/`market_value`/`unrealized_pnl`; a closed trade leaves
+  those four empty. Per-trade signal indicators are omitted (nested,
+  variable-length data does not fit a flat schema).
+- **Cells are never free text** (only numbers, dates, enum names), so there
+  is no spreadsheet formula-injection surface.
+- **Frontend:** `ExportActions` (two low-emphasis buttons in the run page
+  header) fetches the file on click and saves it unchanged through a
+  temporary object URL. The endpoints set `text/csv` on the response instead
+  of `produces`, so a 404/500 stays an ordinary ProblemDetail.
+
+## D-43 Relaxed username and password rules (revises parts of D-37/D-38/D-40)
+
+**Decision:** the username format restriction is removed and the minimum
+password length is lowered to 8.
+
+- **Username:** the only rules are non-blank after trimming and at most 64
+  characters (code points, matching `username varchar(64)`). No character-set
+  or case restriction, no minimum length beyond non-blank. Surrounding
+  whitespace is trimmed with `String.trim()` — the same trim Spring
+  Security's login filter applies to the submitted username, so a stored name
+  can always be sent back at login — and the trimmed value is what is stored
+  and echoed. Case and all other characters are kept exactly as entered.
+  NUL is rejected because PostgreSQL cannot store it (otherwise a 500).
+- **Uniqueness is unchanged and case-sensitive** (`uq_app_user_username`):
+  "Ved" and "ved" are distinct accounts. D-38's lowercase-only pattern
+  existed to make that constraint behave case-insensitively; lookalike
+  usernames that differ only by case are now possible. No schema change.
+- **Password:** `PasswordPolicy` minimum is 8 characters (was 15); the
+  72-UTF-8-byte maximum, the absence of composition rules and all hashing
+  (`DelegatingPasswordEncoder`, bcrypt) are unchanged. `PasswordPolicy` is
+  the one source of the rule, so the change applies uniformly to
+  registration, the D-37 claim mechanism and the D-40 password change.
+- No migration, no change to login/session/CSRF or ownership behavior.
 
 ## Open questions
 

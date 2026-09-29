@@ -1,0 +1,88 @@
+# Runs the complete Parallax application locally: PostgreSQL + Spring Boot
+# backend + nginx-served React frontend, one browser origin.
+#
+#   docker compose up --build        then open http://localhost:3000
+#
+# Only the frontend port is published to the host. PostgreSQL and the backend
+# are reachable only from inside the Compose network. See README "Docker Quick
+# Start" for accounts, configuration and resetting the database.
+name: parallax
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: parallax
+      POSTGRES_USER: parallax
+      # Local-development default (the same one application.properties uses);
+      # the database is not published to the host. Applied only when the data
+      # volume is first created - see the README to change it afterwards.
+      POSTGRES_PASSWORD: ${PARALLAX_DB_PASSWORD:-parallax}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PARALLAX_DB_URL: jdbc:postgresql://postgres:5432/parallax
+      PARALLAX_DB_USERNAME: parallax
+      PARALLAX_DB_PASSWORD: ${PARALLAX_DB_PASSWORD:-parallax}
+      # The Compose setup is plain http://localhost, so the session cookie
+      # cannot be Secure. Set PARALLAX_COOKIE_SECURE=true if you put HTTPS in
+      # front of it.
+      PARALLAX_COOKIE_SECURE: ${PARALLAX_COOKIE_SECURE:-false}
+      # Authentication stays on. These claim a password for the seeded,
+      # passwordless `dev` account on first start (or register in the UI).
+      PARALLAX_CLAIM_USERNAME: ${PARALLAX_CLAIM_USERNAME:-}
+      PARALLAX_CLAIM_PASSWORD: ${PARALLAX_CLAIM_PASSWORD:-}
+      PARALLAX_REGISTRATION_ENABLED: ${PARALLAX_REGISTRATION_ENABLED:-true}
+      # Alpha Vantage stays disabled (blank) unless you supply a key.
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+    healthcheck:
+      # The JRE image has no curl/wget; probe the anonymous actuator health
+      # endpoint with bash's built-in TCP redirection.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          && printf 'GET /actuator/health HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3
+          && grep -q '"status":"UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${PARALLAX_PORT:-3000}:8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

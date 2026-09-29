@@ -13,6 +13,8 @@ import in.vedchangani.parallax.engine.result.BacktestConfig;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Validator;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 
@@ -108,6 +111,33 @@ public class BacktestRunController {
     public List<BacktestEquityPointResponse> getEquityCurve(@PathVariable long id) {
         BacktestRunDetail detail = backtestRunService.getRun(currentUser.id(), id);
         return BacktestEquityPointResponse.listOf(detail);
+    }
+
+    /**
+     * The run's equity curve as CSV (D-42), from the same verified {@link
+     * BacktestRunDetail} as the JSON view. The content type is set on the
+     * response rather than via {@code produces}, so an error (404/500) is
+     * still a normal ProblemDetail instead of a content-negotiation failure.
+     */
+    @GetMapping("/{id}/equity-curve.csv")
+    public ResponseEntity<String> exportEquityCurve(@PathVariable long id) {
+        BacktestRunDetail detail = backtestRunService.getRun(currentUser.id(), id);
+        return csv(BacktestCsv.equityCurve(detail), "backtest-" + id + "-equity-curve.csv");
+    }
+
+    /** The run's trades as CSV, one row per trade (D-42). */
+    @GetMapping("/{id}/trades.csv")
+    public ResponseEntity<String> exportTrades(@PathVariable long id) {
+        BacktestRunDetail detail = backtestRunService.getRun(currentUser.id(), id);
+        return csv(BacktestCsv.trades(detail), "backtest-" + id + "-trades.csv");
+    }
+
+    private static ResponseEntity<String> csv(String body, String filename) {
+        return ResponseEntity.ok()
+                .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(filename).build().toString())
+                .body(body);
     }
 
     @GetMapping("/{id}/trades")

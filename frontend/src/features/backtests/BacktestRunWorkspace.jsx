@@ -8,6 +8,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { Skeleton } from '../../components/Skeleton.jsx';
 import { Tabs } from '../../components/Tabs.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
+import { ExportActions } from './ExportActions.jsx';
 
 /**
  * The shared run workspace (D-34 Batch 5 §6/§9/§19): fetches the completed
@@ -69,6 +70,7 @@ export function BacktestRunWorkspace({ runId }) {
       <PageHeader
         title={`Backtest #${runId}`}
         description={`${strategyName(strategy, detail)} · ${marketLabel(dataset, detail)} · Snapshot v${detail.datasetVersion} · Strategy v${detail.strategyVersion} · ${detail.startDate} → ${detail.endDate}`}
+        actions={<ExportActions runId={runId} />}
       />
 
       <Tabs tabs={tabs} label="Backtest run sections" />

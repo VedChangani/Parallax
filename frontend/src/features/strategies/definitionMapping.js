@@ -306,20 +306,21 @@ export function percentTextToFraction(percentText) {
 // --- indicator warm-up lookback (Phase 10 Batch 4, I-3) ---------------------
 //
 // A presentation-only mirror of the engine's own warm-up rule (D-8;
-// architecture.md §8: SMA(n)/EMA(n) ready after n closes, RSI(n) after n+1).
+// architecture.md §8: SMA(n)/EMA(n)/ATR(n) ready after n bars, RSI(n)/ROC(n) after n+1).
 // Used only to warn the New Backtest form when a strategy's own indicators
 // would have no lookback bars to warm up on - never to compute an actual
 // date, never sent to the backend, and never a substitute for the engine's
 // own firstEvaluableDate.
 
-const RSI_EXTRA_WARMUP_CLOSE = 1;
+const EXTRA_WARMUP_CLOSE = 1;
+const EXTRA_WARMUP_INDICATORS = new Set(['RSI', 'ROC']);
 
 /** @param {object} operand - an OperandDto or builder node @returns {number} */
 function operandLookbackBars(operand) {
   if (operand.type !== 'indicator') return 0;
   const period = Number(operand.period);
   if (!Number.isFinite(period) || period < 1) return 0;
-  return operand.indicator === 'RSI' ? period + RSI_EXTRA_WARMUP_CLOSE : period;
+  return EXTRA_WARMUP_INDICATORS.has(operand.indicator) ? period + EXTRA_WARMUP_CLOSE : period;
 }
 
 /** @param {object} condition - a ConditionDto or builder node @returns {number} */

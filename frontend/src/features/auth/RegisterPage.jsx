@@ -9,6 +9,32 @@ const inputClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
+// D-43: the only username rules are non-blank (after trimming) and at most 64
+// characters (code points, as the backend's varchar(64) counts them); the only
+// password rule checked here is the 8-character minimum. The backend stays
+// authoritative for everything else (72-byte password maximum, duplicates).
+const USERNAME_MAX_LENGTH = 64;
+const PASSWORD_MIN_LENGTH = 8;
+
+/**
+ * @param {string} username
+ * @param {string} password
+ * @returns {{username?: string, password?: string}}
+ */
+function validateRegistration(username, password) {
+  const errors = {};
+  const trimmed = username.trim();
+  if (trimmed.length === 0) {
+    errors.username = 'Username is required.';
+  } else if ([...trimmed].length > USERNAME_MAX_LENGTH) {
+    errors.username = `Username must be at most ${USERNAME_MAX_LENGTH} characters.`;
+  }
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    errors.password = `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
+  }
+  return errors;
+}
+
 /**
  * The registration page (D-38/D-39). A successful registration does not
  * log the visitor in - it never calls `AuthProvider`'s `login` - so it
@@ -26,11 +52,16 @@ export function RegisterPage() {
   async function handleSubmit(event) {
     event.preventDefault();
     if (submitting) return;
-    setFieldErrors({});
     setFormError('');
+    const invalid = validateRegistration(username, password);
+    if (Object.keys(invalid).length > 0) {
+      setFieldErrors(invalid);
+      return;
+    }
+    setFieldErrors({});
     setSubmitting(true);
     try {
-      await register(username, password);
+      await register(username.trim(), password);
       navigate('/login', { replace: true });
     } catch (error) {
       applyServerError(error, setFieldErrors, setFormError);

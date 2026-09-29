@@ -3,6 +3,7 @@ import {
   averageLossExplanation,
   averageWinExplanation,
   cagrExplanation,
+  profitFactorExplanation,
   sharpeExplanation,
   volatilityExplanation,
   winRateExplanation,
@@ -49,13 +50,12 @@ export function PerformanceSummary({ metrics, totalCommission, totalSlippageCost
         <Metric label="Max drawdown" value={formatPercent(metrics.maxDrawdown)} tone={metrics.maxDrawdown > 0 ? 'danger' : undefined} />
       </dl>
 
-      <p className="mt-3 text-xs text-ink-muted">Drawdown series is not currently exposed by the engine — maximum drawdown is shown as a single metric.</p>
-
-      <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-6 sm:grid-cols-3 lg:grid-cols-6">
+      <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         <Metric label="Closed trades" value={String(metrics.closedTradeCount)} compact />
         <Metric label="Win rate" value={formatPercent(metrics.winRate)} compact note={winRateExplanation(metrics)} />
         <Metric label="Average win" value={formatStatMoney(metrics.averageWin)} compact note={averageWinExplanation(metrics)} />
         <Metric label="Average loss" value={formatStatMoney(metrics.averageLoss)} compact note={averageLossExplanation(metrics)} />
+        <Metric label="Profit factor" value={formatRatio(metrics.profitFactor)} compact note={profitFactorExplanation(metrics)} />
         <Metric label="Total commission" value={formatMoney(totalCommission)} compact />
         <Metric label="Total slippage" value={formatMoney(totalSlippageCost)} compact />
       </dl>

@@ -28,13 +28,13 @@ public record BacktestRunResponse(long id, long strategyId, int strategyVersion,
 
     public record PerformanceMetricsResponse(double totalReturn, Double cagr, Double volatility, Double sharpeRatio,
                                               double maxDrawdown, int closedTradeCount, Double winRate,
-                                              Double averageWin, Double averageLoss) {
+                                              Double averageWin, Double averageLoss, Double profitFactor) {
 
         static PerformanceMetricsResponse of(PerformanceMetrics metrics) {
             return new PerformanceMetricsResponse(metrics.totalReturn(), orNull(metrics.cagr()),
                     orNull(metrics.volatility()), orNull(metrics.sharpeRatio()), metrics.maxDrawdown(),
                     metrics.closedTradeCount(), orNull(metrics.winRate()), orNull(metrics.averageWin()),
-                    orNull(metrics.averageLoss()));
+                    orNull(metrics.averageLoss()), orNull(metrics.profitFactor()));
         }
 
         private static Double orNull(OptionalDouble value) {

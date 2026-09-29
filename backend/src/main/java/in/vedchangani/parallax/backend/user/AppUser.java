@@ -24,12 +24,13 @@ import java.util.Objects;
 public class AppUser {
 
     /**
-     * D-38: lowercase-only (so the case-sensitive {@code
-     * uq_app_user_username} constraint also behaves as case-insensitive
-     * uniqueness), 3–64 characters, matching the {@code username
-     * varchar(64)} column exactly at the upper bound.
+     * The {@code username varchar(64)} column's capacity, in characters
+     * (code points). D-43: this and non-blank are the only username rules -
+     * there is no character-set or case restriction, and uniqueness is the
+     * case-sensitive {@code uq_app_user_username} constraint, so "Ved" and
+     * "ved" are different accounts.
      */
-    public static final String USERNAME_PATTERN = "^[a-z0-9][a-z0-9._-]{2,63}$";
+    public static final int USERNAME_MAX_LENGTH = 64;
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

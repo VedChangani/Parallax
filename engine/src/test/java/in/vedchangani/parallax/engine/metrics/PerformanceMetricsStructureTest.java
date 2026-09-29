@@ -21,7 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pins the D-26 shape of {@link PerformanceMetrics}: a plain immutable
- * record with exactly the nine approved components, no reference to
+ * record with exactly the ten approved components (the nine D-26 originals
+ * plus {@code profitFactor}, D-41), no reference to
  * {@link BacktestResult} or any other mutable runtime object, and exactly
  * the two approved public constants.
  */
@@ -36,10 +37,10 @@ class PerformanceMetricsStructureTest {
     }
 
     @Test
-    void componentsAreExactlyTheNineApprovedFieldsInOrder() {
+    void componentsAreExactlyTheTenApprovedFieldsInOrder() {
         RecordComponent[] components = PerformanceMetrics.class.getRecordComponents();
 
-        assertEquals(9, components.length);
+        assertEquals(10, components.length);
         assertEquals("totalReturn", components[0].getName());
         assertEquals(double.class, components[0].getType());
         assertEquals("cagr", components[1].getName());
@@ -58,6 +59,8 @@ class PerformanceMetricsStructureTest {
         assertEquals(OptionalDouble.class, components[7].getType());
         assertEquals("averageLoss", components[8].getName());
         assertEquals(OptionalDouble.class, components[8].getType());
+        assertEquals("profitFactor", components[9].getName());
+        assertEquals(OptionalDouble.class, components[9].getType());
     }
 
     @Test

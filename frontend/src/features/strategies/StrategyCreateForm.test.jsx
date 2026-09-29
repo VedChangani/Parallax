@@ -87,6 +87,67 @@ describe('StrategyCreateForm', () => {
     expect(body.definition.positionSizing).toEqual({ type: 'cashFraction', fraction: '1' });
   });
 
+  it('offers ATR and ROC, previews them, and posts them in the DTO tree', async () => {
+    const created = { id: 10, name: 'Volatility Momentum', description: '', latestVersionNumber: 1, createdAt: '2024-01-01T00:00:00Z' };
+    globalThis.fetch.mockResolvedValue(jsonResponse(created, 201));
+    const onCreated = vi.fn();
+
+    render(<StrategyCreateForm onCreated={onCreated} />);
+    fillMetadata({ name: 'Volatility Momentum' });
+
+    const options = Array.from(within(entrySection()).getByLabelText('Left operand indicator').querySelectorAll('option')).map((o) => o.value);
+    expect(options).toEqual(['SMA', 'EMA', 'RSI', 'ATR', 'ROC']);
+
+    // Entry: ATR(14) > 2 (left indicator ATR, right operand a constant).
+    fireEvent.change(within(entrySection()).getByLabelText('Left operand indicator'), { target: { value: 'ATR' } });
+    fireEvent.change(within(entrySection()).getByLabelText('Left operand period'), { target: { value: '14' } });
+    fireEvent.change(within(entrySection()).getByLabelText('Right operand type'), { target: { value: 'constant' } });
+    fireEvent.change(within(entrySection()).getByLabelText('Right operand value'), { target: { value: '2' } });
+
+    // Exit: ROC(1) < -5 - period 1 is valid for ROC (unlike RSI).
+    const exitSection = screen.getByText('Exit condition').closest('section');
+    fireEvent.change(within(exitSection).getByLabelText('Left operand indicator'), { target: { value: 'ROC' } });
+    fireEvent.change(within(exitSection).getByLabelText('Left operand period'), { target: { value: '1' } });
+    fireEvent.change(within(exitSection).getByLabelText('Right operand value'), { target: { value: '-5' } });
+
+    // The live preview renders the same text as the saved-version pages.
+    expect(screen.getByText('ATR(14) > 2')).toBeTruthy();
+    expect(screen.getByText('ROC(1) < -5')).toBeTruthy();
+
+    submit();
+
+    await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
+
+    const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(body.definition.entryCondition).toEqual({
+      type: 'compare',
+      left: { type: 'indicator', indicator: 'ATR', period: 14 },
+      operator: 'GT',
+      right: { type: 'constant', value: '2' },
+    });
+    expect(body.definition.exitCondition).toEqual({
+      type: 'compare',
+      left: { type: 'indicator', indicator: 'ROC', period: 1 },
+      operator: 'LT',
+      right: { type: 'constant', value: '-5' },
+    });
+  });
+
+  it('applies the shared period rule to ATR/ROC (min 1) and keeps the RSI minimum of 2', () => {
+    render(<StrategyCreateForm onCreated={vi.fn()} />);
+    fillMetadata({ name: 'X' });
+
+    fireEvent.change(within(entrySection()).getByLabelText('Left operand indicator'), { target: { value: 'ATR' } });
+    fireEvent.change(within(entrySection()).getByLabelText('Left operand period'), { target: { value: '0' } });
+    expect(screen.getByText('Period must be at least 1.')).toBeTruthy();
+
+    fireEvent.change(within(entrySection()).getByLabelText('Left operand period'), { target: { value: '1' } });
+    expect(screen.queryByText('Period must be at least 1.')).toBeNull();
+
+    fireEvent.change(within(entrySection()).getByLabelText('Left operand indicator'), { target: { value: 'RSI' } });
+    expect(screen.getByText('RSI period must be at least 2.')).toBeTruthy();
+  });
+
   it('blocks submission and shows a message when the builder has an invalid field', () => {
     render(<StrategyCreateForm onCreated={vi.fn()} />);
     fillMetadata({ name: 'Momentum Cross' });

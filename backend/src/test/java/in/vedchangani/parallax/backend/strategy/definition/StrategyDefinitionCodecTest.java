@@ -123,6 +123,25 @@ class StrategyDefinitionCodecTest {
         assertEquals(encoded.sha256(), codec.encode(decoded).sha256());
     }
 
+    @Test
+    void atrAndRocRoundTripThroughTheCanonicalForm() {
+        StrategyDefinition def = new StrategyDefinition(
+                new Condition.Compare(
+                        new Operand.IndicatorRef(new IndicatorSpec(IndicatorType.ATR, 14)),
+                        Operator.GT, new Operand.Constant(2)),
+                new Condition.Compare(
+                        new Operand.IndicatorRef(new IndicatorSpec(IndicatorType.ROC, 12)),
+                        Operator.LT, new Operand.Constant(-5)),
+                new PositionSizing.CashFraction(BigDecimal.ONE));
+
+        CanonicalStrategyDefinition encoded = codec.encode(def);
+
+        assertTrue(encoded.json().contains("\"indicator\":\"ATR\",\"period\":14"));
+        assertTrue(encoded.json().contains("\"indicator\":\"ROC\",\"period\":12"));
+        assertEquals(StrategyDefinitionCodec.SCHEMA_VERSION, encoded.schemaVersion());
+        assertEquals(def, codec.decode(encoded.schemaVersion(), encoded.json(), encoded.sha256()));
+    }
+
     // --- constants ---------------------------------------------------------
 
     @Test

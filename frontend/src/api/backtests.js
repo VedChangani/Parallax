@@ -47,6 +47,29 @@ export function getBacktestEquity(id, signal) {
 }
 
 /**
+ * The run's equity curve as CSV text (D-42), byte-for-byte as the backend
+ * produced it - the export never parses or reformats a value.
+ *
+ * @param {number} id
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<string>}
+ */
+export function getBacktestEquityCsv(id, signal) {
+  return request(`/api/backtest-runs/${id}/equity-curve.csv`, { signal, responseType: 'text' });
+}
+
+/**
+ * The run's trades as CSV text, one row per trade (D-42).
+ *
+ * @param {number} id
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<string>}
+ */
+export function getBacktestTradesCsv(id, signal) {
+  return request(`/api/backtest-runs/${id}/trades.csv`, { signal, responseType: 'text' });
+}
+
+/**
  * @param {number} id
  * @param {AbortSignal} [signal]
  * @returns {Promise<import('./types.js').BacktestTradeResponse[]>}

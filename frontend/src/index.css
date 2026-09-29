@@ -35,13 +35,15 @@ body {
 
 /* Equity chart (uPlot) - restrained integration with the Parallax type
    system; uPlot itself owns the canvas rendering and default class names. */
-.parallax-equity-chart .u-legend {
+.parallax-equity-chart .u-legend,
+.parallax-drawdown-chart .u-legend {
   font-family: var(--font-sans);
   font-size: 0.75rem;
   color: var(--color-ink-secondary);
 }
 
-.parallax-equity-chart .u-legend th {
+.parallax-equity-chart .u-legend th,
+.parallax-drawdown-chart .u-legend th {
   font-weight: 600;
   color: var(--color-ink);
 }

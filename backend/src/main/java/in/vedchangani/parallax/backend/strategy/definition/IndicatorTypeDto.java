@@ -8,5 +8,7 @@ package in.vedchangani.parallax.backend.strategy.definition;
 public enum IndicatorTypeDto {
     SMA,
     EMA,
-    RSI
+    RSI,
+    ATR,
+    ROC
 }
