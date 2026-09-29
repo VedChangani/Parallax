@@ -1,168 +1,262 @@
 # Parallax
 
-A systematic investment research and historical backtesting platform: a
-framework-independent Java backtesting engine (`engine/`), a Spring Boot
-research application built around it (`backend/`), and a React frontend
-(`frontend/`). See [`docs/architecture.md`](docs/architecture.md) for the
-full design and [`docs/decisions.md`](docs/decisions.md) for the
-architectural decision register. Project rules and V1 scope are in
-`CLAUDE.md` at the repository root — a local development file that is
-intentionally excluded from git (see `.gitignore`), so it exists on a
-development machine but not in a fresh clone.
+**Parallax** is a systematic investment research and historical backtesting platform.
 
-## Prerequisites
+It allows users to load historical market data, define rule-based trading strategies, run deterministic historical simulations, and analyze portfolio performance, risk, trades, and benchmark results.
 
-- Java 21
-- Node.js (for the frontend)
-- PostgreSQL (for running the backend locally)
-- Docker (only needed to run the backend's integration tests, which use
-  Testcontainers)
+Parallax combines a **framework-independent Java backtesting engine** with a **Spring Boot backend** and **React frontend**.
 
-## Docker Quick Start
+## What Parallax Can Do
 
-Runs the whole application (PostgreSQL, the Spring Boot backend and the
-production React build behind nginx) from a fresh clone. Only Docker with
-Compose is required — no Java, Node or PostgreSQL install.
+### Market Data
+
+Users can create markets and import historical OHLCV data through:
+
+- CSV uploads for custom or long historical datasets
+- Alpha Vantage for market-data acquisition
+
+Imported data is stored as **immutable market-data snapshots**, so a backtest can always refer to the exact historical data used for the experiment.
+
+### Strategy Building
+
+Users can create rule-based trading strategies using technical indicators and logical conditions.
+
+Currently supported indicators:
+
+- **SMA** — Simple Moving Average
+- **EMA** — Exponential Moving Average
+- **RSI** — Relative Strength Index
+- **ATR** — Average True Range
+- **ROC** — Rate of Change
+
+Strategies define:
+
+- Entry conditions
+- Exit conditions
+- Position sizing
+
+Example:
+
+```text
+Entry: SMA(20) > SMA(50)
+Exit:  SMA(20) < SMA(50)
+```
+
+### Historical Backtesting
+
+Users can run a strategy against a selected market snapshot and historical date range.
+
+The engine processes market data chronologically and:
+
+- Generates trading signals
+- Schedules orders for future execution
+- Executes orders on the next bar's open
+- Applies commission and slippage
+- Manages cash and holdings
+- Records trades and portfolio value
+- Handles orders that cannot be executed
+
+The engine is designed to avoid **look-ahead bias** and produce deterministic results for the same inputs.
+
+### Portfolio & Trade Analysis
+
+Each backtest records the simulated portfolio throughout the testing period.
+
+Users can inspect:
+
+- Cash and holdings
+- Equity over time
+- Individual trades
+- Open and closed trades
+- Realized and unrealized P&L
+- Commission and slippage
+- Order rejections
+
+### Performance Analysis
+
+Parallax calculates key performance and risk measures including:
+
+- Total Return
+- CAGR
+- Volatility
+- Sharpe Ratio
+- Maximum Drawdown
+- Win Rate
+- Average Win / Loss
+- Profit Factor
+- Trading Costs
+
+Results are presented through:
+
+- Equity curve
+- Drawdown chart
+- Trade analysis
+- Performance summary
+
+### Benchmark Comparison
+
+Every backtest includes a **buy-and-hold benchmark** for the same market and period.
+
+This allows users to compare the historical strategy result with simply buying and holding the underlying security.
+
+### Reproducible Research
+
+Strategies, market-data snapshots, and backtest results are versioned and immutable.
+
+A backtest records the specific:
+
+- Strategy version and hash
+- Market-data snapshot and hash
+- Backtest configuration
+- Engine semantics version
+
+Persisted results are verified when they are read back, helping detect inconsistent or corrupted research data.
+
+### Result Export
+
+Users can export backtest results as CSV for further analysis outside the application.
+
+Available exports include:
+
+- Equity curve
+- Trade history
+
+## Tech Stack
+
+**Engine:** Java 21  
+**Backend:** Spring Boot, PostgreSQL  
+**Frontend:** React, Vite  
+**Testing:** JUnit, Testcontainers, Vitest
+
+## Architecture
+
+```text
+React Frontend
+      ↓
+Spring Boot Backend
+      ↓
+Java Backtesting Engine
+      ↓
+PostgreSQL
+```
+
+The backtesting engine is framework-independent and does not depend on Spring, JPA, or PostgreSQL.
+
+For the detailed architecture and design decisions:
+
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/decisions.md`](docs/decisions.md)
+
+## Running Locally
+
+### Option 1 — Docker
+
+The complete application can be started using Docker Compose.
+
+From the repository root:
 
 ```bash
 docker compose up --build
 ```
 
-The first build downloads dependencies and takes a few minutes. When it
-finishes, open <http://localhost:3000>.
+Then open:
 
-**Getting an account.** Authentication is always on. A fresh database has
-no usable account, so either:
+```text
+http://localhost:3000
+```
 
-- click **Register** in the web app (self-registration is on by default), or
-- claim a password for the seeded `dev` account on first start. Set these in
-  your shell, or in a git-ignored `.env` file next to `compose.yaml` (start
-  from [`.env.example`](.env.example)), then log in as `dev`:
-
-  ```bash
-  PARALLAX_CLAIM_USERNAME=dev PARALLAX_CLAIM_PASSWORD='<at least 8 characters>' docker compose up --build
-  ```
-
-  This only sets a password on an existing, still-passwordless account and
-  never overwrites one. Once you have logged in, start again without
-  `PARALLAX_CLAIM_PASSWORD` so it does not linger in your environment.
-
-**What runs.** Three services — `postgres`, `backend`, `frontend` — with one
-browser origin: nginx serves the app and proxies `/api/*` to the backend.
-Only the frontend port is published; PostgreSQL and the backend are
-reachable only inside the Compose network. Data lives in the named volume
-`parallax_postgres-data`.
+Stop the application with:
 
 ```bash
-docker compose down        # stop; your data is kept
-docker compose down -v     # stop AND delete the database volume (start fresh)
+docker compose down
 ```
 
-**Optional settings** (shell environment or `.env`; see `.env.example`):
+PostgreSQL data is persisted using the Docker volume defined by the Compose setup.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PARALLAX_PORT` | `3000` | Host port for the web app |
-| `PARALLAX_CLAIM_USERNAME` / `PARALLAX_CLAIM_PASSWORD` | unset | One-time password claim (above) |
-| `ALPHA_VANTAGE_API_KEY` | unset | Enables Alpha Vantage imports; disabled while blank |
-| `PARALLAX_DB_PASSWORD` | `parallax` | Database password — used only when the volume is first created, so run `docker compose down -v` before changing it |
-| `PARALLAX_COOKIE_SECURE` | `false` | Set to `true` only if you put HTTPS in front of it |
-| `PARALLAX_REGISTRATION_ENABLED` | `true` | Set to `false` to disable self-registration |
+### Option 2 — Run Manually
 
-The Compose setup is for local use over plain `http://localhost`. The
-default database password is a local-development convenience and is never
-exposed to the host; set your own before running it anywhere shared.
+#### Prerequisites
 
-## Running the backend locally
+- Java 21
+- Node.js
+- PostgreSQL
 
-1. Start a local PostgreSQL and create the database/role the backend
-   expects by default (or point it at your own via the environment
-   variables below):
+#### Backend
 
-   ```sql
-   CREATE ROLE parallax WITH LOGIN PASSWORD 'parallax';
-   CREATE DATABASE parallax OWNER parallax;
-   ```
+Create the local PostgreSQL database:
 
-2. Build once, then start the backend, both from the repository root.
-   `engine` must already be installed to your local Maven repository
-   before `spring-boot:run` is invoked on `backend` alone — Maven's
-   plugin-prefix resolution for `spring-boot:run` does not work together
-   with `-am` in this multi-module layout, so `-pl backend -am
-   spring-boot:run` fails with "No plugin found for prefix 'spring-boot'":
-
-   ```
-   ./mvnw install -DskipTests
-   ./mvnw -pl backend spring-boot:run
-   ```
-
-   Flyway migrates the schema automatically on startup.
-
-3. **Authentication is always on** — there is no way to skip it, even
-   locally. Every account created before Phase 9 (in particular the
-   seeded `dev` account, and any account your database already has) has
-   no password and cannot log in until you claim it: set both of these
-   environment variables the first time you start the backend, then log
-   in as `dev` with that password from the frontend:
-
-   ```
-   PARALLAX_CLAIM_USERNAME=dev
-   PARALLAX_CLAIM_PASSWORD=<a password at least 8 characters long>
-   ```
-
-   This only ever sets a password on an *existing, still-passwordless*
-   account — it never creates a user and never overwrites an existing
-   password. Unset `PARALLAX_CLAIM_PASSWORD` again afterward. Alternatively,
-   self-registration (`POST /api/auth/register`, or the frontend's
-   "Register" page) is enabled by default, so a fresh install can also
-   just be used by registering a new account instead of claiming `dev`.
-
-### Environment variables
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PARALLAX_DB_URL` | `jdbc:postgresql://localhost:5432/parallax` | Datasource URL |
-| `PARALLAX_DB_USERNAME` | `parallax` | Datasource username |
-| `PARALLAX_DB_PASSWORD` | `parallax` | Datasource password |
-| `PARALLAX_CLAIM_USERNAME` / `PARALLAX_CLAIM_PASSWORD` | unset | One-time password claim for an existing passwordless account (see above) |
-| `PARALLAX_REGISTRATION_ENABLED` | `true` | Set to `false` to disable `POST /api/auth/register` |
-| `PARALLAX_COOKIE_SECURE` | `true` | Set to `false` only for local `http://localhost` development without HTTPS |
-| `ALPHA_VANTAGE_API_KEY` | unset (blank) | Enables Alpha Vantage dataset imports; a blank key never fails startup, only an import request |
-
-These are ordinary process environment variables. Spring Boot does not
-read a `.env` file, so a repository-root `.env` (the frontend tooling's
-own convention, if you use one) has no effect on the backend — export a
-variable in your shell before starting it instead (`export
-ALPHA_VANTAGE_API_KEY=...` on macOS/Linux/Git Bash, `$env:ALPHA_VANTAGE_API_KEY
-= "..."` in PowerShell), or set it in your IDE's run configuration.
-
-None of these need to be set to start the backend against the database in
-step 1 — only the claim variables are needed once, to log in as `dev`.
-One exception: `PARALLAX_COOKIE_SECURE` defaults to `true`, and Safari
-(unlike Chrome/Firefox, which treat `http://localhost` as a secure
-context) will silently drop a `Secure` cookie over plain `http://`, so a
-Safari-based local session needs `PARALLAX_COOKIE_SECURE=false` to
-actually stay logged in.
-
-## Running the frontend locally
-
+```sql
+CREATE ROLE parallax WITH LOGIN PASSWORD 'parallax';
+CREATE DATABASE parallax OWNER parallax;
 ```
+
+Then, from the repository root:
+
+```bash
+./mvnw install -DskipTests
+./mvnw -pl backend spring-boot:run
+```
+
+#### Frontend
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-The Vite dev server proxies `/api/*` requests to the backend on
-`localhost:8080` (see `frontend/vite.config.js`), so both must be running
-for the app to work end to end.
+The frontend proxies `/api` requests to the backend.
 
-## Running the tests
+### Authentication
 
+Authentication is enabled locally.
+
+For a fresh environment, either register a new account through the application's **Register** page or claim the existing `dev` account by providing:
+
+```text
+PARALLAX_CLAIM_USERNAME=dev
+PARALLAX_CLAIM_PASSWORD=<15+ characters>
 ```
-./mvnw verify            # engine + backend, from the repository root
-cd frontend && npm test  # frontend
+
+The claim password is only used to set the password for an existing passwordless account.
+
+### Alpha Vantage
+
+To enable Alpha Vantage imports, provide:
+
+```text
+ALPHA_VANTAGE_API_KEY=<your-key>
 ```
 
-The backend's integration tests (`*IT.java`) run against a real
-PostgreSQL container via Testcontainers and require Docker; the engine
-and other backend unit tests (`*Test.java`) do not.
+The application can still run without an Alpha Vantage key; only Alpha Vantage imports require it.
+
+## Testing
+
+### Backend
+
+```bash
+./mvnw verify
+```
+
+Backend integration tests use **Testcontainers** and require Docker.
+
+### Frontend
+
+```bash
+cd frontend
+npm test
+npm run lint
+npm run build
+```
+
+## Project Structure
+
+```text
+parallax/
+├── engine/       # Framework-independent backtesting engine
+├── backend/      # Spring Boot application and REST API
+├── frontend/     # React research interface
+├── docs/         # Architecture and design decisions
+├── compose.yaml  # Docker Compose setup
+└── pom.xml       # Maven multi-module build
+```
