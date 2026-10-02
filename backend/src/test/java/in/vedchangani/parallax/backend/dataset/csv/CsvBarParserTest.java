@@ -12,13 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-32 {@link CsvBarParser} tests: plain Java, no Spring context. Covers
- * the exact V1 CSV contract (encoding, line structure, header, field
- * grammar, numeric parsing, canonicalization, and date ordering) and its
- * split between {@link MalformedCsvException} (syntax, 400) and {@link
- * InvalidCsvDataException} (semantics/ordering, 422).
- */
 class CsvBarParserTest {
 
     private static final byte[] UTF8_BOM = {(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
@@ -35,8 +28,6 @@ class CsvBarParserTest {
         System.arraycopy(body, 0, result, UTF8_BOM.length, body.length);
         return result;
     }
-
-    // --- valid input -----------------------------------------------------------
 
     @Test
     void parsesAMinimalOneRowFile() {
@@ -113,19 +104,14 @@ class CsvBarParserTest {
         assertEquals(1, CsvBarParser.parse(bytes(csv)).size());
     }
 
-    // --- EOF / CR line-ending edge cases -----------------------------------------
-
     @Test
     void validFinalUnterminatedLineWithNoCrIsAccepted() {
-        // No trailing '\n' and no trailing '\r' on the final line.
         String csv = HEADER + "\n2024-01-02,100,105,99,104,1000";
         assertEquals(1, CsvBarParser.parse(bytes(csv)).size());
     }
 
     @Test
     void aFinalLoneCrWithNoFollowingLfIsRejected() {
-        // The final line ends in '\r' with no following '\n' — not a CRLF terminator,
-        // so the '\r' must remain in the data and fail field grammar.
         String csv = HEADER + "\n2024-01-02,100,105,99,104,1000\r";
         assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(bytes(csv)));
     }
@@ -138,8 +124,6 @@ class CsvBarParserTest {
 
     @Test
     void loneCrInAFieldStillFailsGrammarAfterTheEofFix() {
-        // Regression guard: a lone CR embedded mid-line (not at EOF) must still fail,
-        // exactly as loneCrInAFieldFailsGrammar already asserts elsewhere.
         String csv = HEADER + "\n2024-01-02,100\r,105,99,104,1000\n";
         assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(bytes(csv)));
     }
@@ -156,8 +140,6 @@ class CsvBarParserTest {
         MalformedCsvException e = assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(csv));
         assertEquals(2, e.line());
     }
-
-    // --- malformed: encoding -----------------------------------------------------
 
     @Test
     void aBomNotAtTheStartIsRejectedAsNonAscii() {
@@ -176,8 +158,6 @@ class CsvBarParserTest {
         assertEquals(2, e.line());
     }
 
-    // --- malformed: empty input ----------------------------------------------
-
     @Test
     void zeroByteInputIsMalformedMissingHeader() {
         MalformedCsvException e = assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(new byte[0]));
@@ -188,8 +168,6 @@ class CsvBarParserTest {
     void bomOnlyInputIsMalformedMissingHeader() {
         assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(UTF8_BOM.clone()));
     }
-
-    // --- malformed: header -----------------------------------------------------
 
     @Test
     void wrongCaseHeaderIsMalformed() {
@@ -221,8 +199,6 @@ class CsvBarParserTest {
                 assertThrows(InvalidCsvDataException.class, () -> CsvBarParser.parse(bytes(HEADER + "\n")));
         assertEquals(1, e.line());
     }
-
-    // --- malformed: row shape ----------------------------------------------
 
     @Test
     void tooFewFieldsIsMalformed() {
@@ -267,8 +243,6 @@ class CsvBarParserTest {
         assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(bytes(csv)));
     }
 
-    // --- malformed: dates --------------------------------------------------------
-
     @Test
     void impossibleCalendarDateIsMalformed() {
         assertThrows(MalformedCsvException.class,
@@ -280,8 +254,6 @@ class CsvBarParserTest {
         assertThrows(MalformedCsvException.class,
                 () -> CsvBarParser.parse(bytes(HEADER + "\n2024-1-2,100,105,99,104,1000\n")));
     }
-
-    // --- malformed: decimal grammar -----------------------------------------
 
     @Test
     void exponentNotationIsMalformed() {
@@ -320,8 +292,6 @@ class CsvBarParserTest {
                 bytes(HEADER + "\n2024-01-02," + bigInteger + ",105,99,104,1000\n")));
     }
 
-    // --- malformed: volume grammar ------------------------------------------
-
     @Test
     void decimalVolumeIsMalformed() {
         assertThrows(MalformedCsvException.class,
@@ -340,8 +310,6 @@ class CsvBarParserTest {
         assertThrows(MalformedCsvException.class, () -> CsvBarParser.parse(
                 bytes(HEADER + "\n2024-01-02,100,105,99,104," + hugeVolume + "\n")));
     }
-
-    // --- invalid: semantics (Bar authority) ----------------------------------
 
     @Test
     void nonPositivePriceIsInvalidWithLine() {
@@ -374,8 +342,6 @@ class CsvBarParserTest {
                 bytes(HEADER + "\n2024-01-02,100,105,99,104,-5\n")));
     }
 
-    // --- invalid: ordering ---------------------------------------------------
-
     @Test
     void duplicateDateIsInvalidAndNamesBothLines() {
         InvalidCsvDataException e = assertThrows(InvalidCsvDataException.class, () -> CsvBarParser.parse(bytes(
@@ -391,8 +357,6 @@ class CsvBarParserTest {
                 HEADER + "\n2024-01-03,100,105,99,104,1000\n2024-01-02,104,110,103,108,2000\n")));
         assertEquals(3, e.line());
     }
-
-    // --- line numbering -------------------------------------------------------
 
     @Test
     void headerIsLineOneAndFirstDataRowIsLineTwo() {

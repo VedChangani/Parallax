@@ -31,7 +31,6 @@ class PasswordPolicyTest {
     void theSeventyTwoByteMaximumIsUnchanged() {
         assertNull(PasswordPolicy.violation("x".repeat(72)));
         assertEquals("password must be at most 72 bytes", PasswordPolicy.violation("x".repeat(73)));
-        // 8 characters but 96 UTF-8 bytes (4 bytes each): still rejected by the byte limit.
         assertEquals("password must be at most 72 bytes", PasswordPolicy.violation("\uD83D\uDE00".repeat(24)));
     }
 

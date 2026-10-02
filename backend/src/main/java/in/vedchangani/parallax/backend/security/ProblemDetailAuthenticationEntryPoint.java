@@ -9,13 +9,6 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 
 import java.io.IOException;
 
-/**
- * The 401 boundary for every unauthenticated request to a protected path
- * (D-37): a fixed {@link org.springframework.http.ProblemDetail} body,
- * never a redirect, a {@code WWW-Authenticate} challenge, or a generated
- * HTML page — this backend is a pure JSON API with no browser-facing login
- * page for Spring Security to send a client to.
- */
 final class ProblemDetailAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     private final ObjectMapper objectMapper;

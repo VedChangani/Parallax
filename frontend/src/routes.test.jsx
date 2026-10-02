@@ -18,12 +18,10 @@ function jsonResponse(body) {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
-/** D-39: every protected route now needs GET /api/auth/me to resolve before it renders. */
 function authenticatedMeResponse(url) {
   return /\/api\/auth\/me$/.test(url) ? Promise.resolve(jsonResponse({ username: 'test-user' })) : undefined;
 }
 
-/** For a test that fetches nothing else - resolves identity, everything else returns an empty list. */
 function stubAuthenticatedOnlyFetch() {
   globalThis.fetch = vi.fn((url) => authenticatedMeResponse(url) ?? Promise.resolve(jsonResponse([])));
 }
@@ -44,7 +42,6 @@ const SAMPLE_DEFINITION = {
   positionSizing: { type: 'cashFraction', fraction: '1' },
 };
 
-/** Routes to real Strategy endpoint shapes so /strategies/* pages resolve deterministically. */
 function stubStrategyFetch() {
   globalThis.fetch = vi.fn((url) => {
     const me = authenticatedMeResponse(url);
@@ -77,7 +74,6 @@ function stubStrategyFetch() {
   });
 }
 
-/** Routes to real Dataset endpoint shapes so /datasets/* pages resolve deterministically. */
 function stubDatasetFetch() {
   globalThis.fetch = vi.fn((url) => {
     const me = authenticatedMeResponse(url);
@@ -123,7 +119,6 @@ const SAMPLE_METRICS = {
   averageLoss: null,
 };
 
-/** Routes to real backtest-run endpoint shapes so /backtests/7/* pages resolve deterministically. */
 function stubBacktestRunFetch() {
   globalThis.fetch = vi.fn((url) => {
     const me = authenticatedMeResponse(url);

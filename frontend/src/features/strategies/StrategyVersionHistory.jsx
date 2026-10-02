@@ -3,15 +3,6 @@ import { CopyButton } from '../../components/CopyButton.jsx';
 import { DataTable } from '../../components/DataTable.jsx';
 import { formatInstantDate } from '../../lib/format.js';
 
-/**
- * The version history table for a strategy - every {@link
- * import('../../api/types.js').StrategyVersionSummaryResponse} field shown
- * directly, nothing recomputed.
- *
- * @param {object} props
- * @param {number} props.strategyId
- * @param {import('../../api/types.js').StrategyVersionSummaryResponse[]} props.versions
- */
 export function StrategyVersionHistory({ strategyId, versions }) {
   const sorted = [...versions].sort((a, b) => b.versionNumber - a.versionNumber);
 

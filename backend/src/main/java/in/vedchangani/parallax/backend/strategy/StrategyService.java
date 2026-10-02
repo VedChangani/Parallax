@@ -15,29 +15,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * The only write path to {@link Strategy}/{@link StrategyVersion} (D-31).
- * Every operation is owner-scoped: the owner always comes from the caller's
- * {@link UserId}, never from a request body, and every repository access
- * used here takes that owner id (D-31 §10).
- *
- * <p><strong>Transactions.</strong> {@link #createStrategy} and {@link
- * #createVersion} use an explicit {@link TransactionTemplate} rather than
- * {@code @Transactional}, so the D-30 {@link StrategyDefinitionCodec#encode}
- * call — which does real work (canonicalization, hashing) but touches no
- * database state — visibly happens <em>before</em> the transaction opens
- * (D-31 §4). Every other method uses {@code @Transactional} directly. The
- * isolation level is pinned to {@code READ COMMITTED} — PostgreSQL's own
- * default — because {@link #createVersion}'s locking algorithm depends on a
- * {@code SELECT ... FOR UPDATE} re-reading the latest committed row after
- * waiting on the lock; raising it to {@code REPEATABLE READ} or {@code
- * SERIALIZABLE} would change that.
- *
- * <p><strong>Every write to a {@link Strategy} row goes through {@link
- * StrategyRepository#lockByIdAndOwnerId}</strong> — including a metadata
- * PATCH — never only {@link StrategyRepository#findByIdAndOwnerId}, per
- * D-31 §4.
- */
 @Service
 public class StrategyService {
 
@@ -55,12 +32,6 @@ public class StrategyService {
         this.transactionTemplate.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
-    /**
-     * Creates a brand-new {@link Strategy} at version 1, atomically. No lock
-     * is required: the new row is invisible to any other transaction until
-     * commit, so there is nothing to race except the {@code (owner, name)}
-     * uniqueness constraint, which the database itself decides (D-31 §4).
-     */
     public StrategySummary createStrategy(UserId owner, String name, String description,
                                            StrategyDefinition definition) {
         Objects.requireNonNull(owner, "owner must not be null");
@@ -68,7 +39,6 @@ public class StrategyService {
         Objects.requireNonNull(description, "description must not be null");
         Objects.requireNonNull(definition, "definition must not be null");
 
-        // D-30 canonicalization/hashing happens before any transaction opens.
         CanonicalStrategyDefinition canonical = codec.encode(definition);
 
         Strategy strategy = transactionTemplate.execute(status -> {
@@ -96,11 +66,6 @@ public class StrategyService {
         return StrategySummary.of(loadOwned(owner, strategyId));
     }
 
-    /**
-     * Metadata only — {@code name}/{@code description} — never touches any
-     * {@link StrategyVersion}. Both fields are required (D-31: PATCH is a
-     * full metadata replacement, not a partial update).
-     */
     @Transactional
     public StrategySummary updateStrategyMetadata(UserId owner, long strategyId, String name, String description) {
         Objects.requireNonNull(owner, "owner must not be null");
@@ -114,18 +79,10 @@ public class StrategyService {
         return StrategySummary.of(saved);
     }
 
-    /**
-     * Allocates {@code latest + 1} under the owner-scoped row lock and
-     * inserts the new immutable version (D-31 §4). If anything in the
-     * callback throws, the whole transaction — including the parent's
-     * {@code latest_version_number} increment — rolls back, so a failed
-     * creation never consumes a version number.
-     */
     public StrategyVersionDetail createVersion(UserId owner, long strategyId, StrategyDefinition definition) {
         Objects.requireNonNull(owner, "owner must not be null");
         Objects.requireNonNull(definition, "definition must not be null");
 
-        // D-30 canonicalization/hashing happens before any transaction opens.
         CanonicalStrategyDefinition canonical = codec.encode(definition);
 
         StrategyVersion version = transactionTemplate.execute(status -> {
@@ -143,9 +100,6 @@ public class StrategyService {
     @Transactional(readOnly = true)
     public List<StrategyVersionSummary> listVersions(UserId owner, long strategyId) {
         Objects.requireNonNull(owner, "owner must not be null");
-        // Strategy existence/ownership is checked first, so a nonexistent or
-        // cross-owner strategy id 404s rather than silently returning an
-        // empty list.
         loadOwned(owner, strategyId);
         return versionRepository.findAllOwned(strategyId, owner.value()).stream()
                 .map(StrategyVersionSummary::of)
@@ -157,14 +111,10 @@ public class StrategyService {
         Objects.requireNonNull(owner, "owner must not be null");
         StrategyVersion version = versionRepository.findOwned(strategyId, owner.value(), versionNumber)
                 .orElseThrow(() -> new StrategyVersionNotFoundException(strategyId, versionNumber));
-        // D-30: never trust the stored jsonb text directly — decode re-parses,
-        // re-maps, re-encodes canonically, and re-hashes before trusting it.
         StrategyDefinition definition = codec.decode(version.definitionSchemaVersion(), version.definitionJson(),
                 version.definitionHash());
         return new StrategyVersionDetail(StrategyVersionSummary.of(version), definition);
     }
-
-    // --- internal helpers ----------------------------------------------------
 
     private Strategy loadOwned(UserId owner, long strategyId) {
         return strategyRepository.findByIdAndOwnerId(strategyId, owner.value())
@@ -193,13 +143,6 @@ public class StrategyService {
         }
     }
 
-    /**
-     * Matches a failed write against a specific database constraint name,
-     * never against SQL state or message text alone where a constraint name
-     * is available. Any other constraint violation propagates unchanged and
-     * becomes a generic 500 (D-31 §11) — this method only ever narrows the
-     * two conflicts D-31 defines, never widens what counts as a duplicate.
-     */
     private static boolean isConstraint(DataIntegrityViolationException e, String constraintName) {
         Throwable cause = e.getCause();
         if (cause instanceof ConstraintViolationException cve && cve.getConstraintName() != null) {

@@ -2,17 +2,6 @@ import { ConditionEditor } from './ConditionEditor.jsx';
 import { DefinitionPreview } from './DefinitionPreview.jsx';
 import { PositionSizingEditor } from './PositionSizingEditor.jsx';
 
-/**
- * The visual Strategy Builder (D-31 §6/§20): a structured editor for the
- * exact supported grammar (Compare/All/Any conditions over
- * Indicator/Close/Constant operands, Cash-fraction position sizing) with a
- * live human-readable preview alongside it. No JSON is ever shown as the
- * primary editing surface.
- *
- * @param {object} props
- * @param {{entryCondition: object, exitCondition: object, positionSizing: object}} props.state
- * @param {(next: object) => void} props.onChange
- */
 export function StrategyBuilder({ state, onChange }) {
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">

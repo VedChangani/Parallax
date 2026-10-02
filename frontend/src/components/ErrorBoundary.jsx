@@ -1,13 +1,6 @@
 import { Component } from 'react';
 import { Button } from './Button.jsx';
 
-/**
- * Catches unexpected React rendering errors anywhere below it in the tree
- * and shows a generic, recoverable error screen - never the raw exception
- * message or a stack trace. This is strictly for rendering failures; API
- * errors are surfaced through ApiError/useApiResource, never through this
- * boundary.
- */
 export class ErrorBoundary extends Component {
   state = { hasError: false };
 
@@ -16,7 +9,6 @@ export class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // Logged for developer diagnosis only - never rendered to the user.
     console.error('Unhandled rendering error', error, info);
   }
 

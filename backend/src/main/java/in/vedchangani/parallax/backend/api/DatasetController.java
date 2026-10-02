@@ -27,20 +27,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * The D-32 Dataset REST API. Every JSON request body is read exactly once
- * by the D-30 {@link StrategyDefinitionCodec}'s own strict {@code
- * JsonMapper} — never Spring's global JSON binding (mirroring D-31 §8) —
- * and version creation is read directly off a {@link
- * MultipartHttpServletRequest} rather than Spring's {@code @RequestParam}
- * binding, so the exact-shape multipart contract (exactly one {@code file}
- * part, exactly one {@code adjustmentBasis} field, nothing else) can be
- * enforced explicitly instead of silently ignoring extra parts.
- *
- * <p>The owner is always {@link CurrentUser#id()} — never accepted from a
- * request. No PATCH/PUT/DELETE endpoint exists (D-32 has no dataset
- * metadata update in this batch).
- */
 @RestController
 @RequestMapping("/api/datasets")
 public class DatasetController {
@@ -100,19 +86,6 @@ public class DatasetController {
         return ResponseEntity.created(location).body(DatasetVersionResponse.of(summary));
     }
 
-    /**
-     * D-33 Batch 4: creates a new {@code DatasetVersion} from Alpha
-     * Vantage's daily bars, using the exact same strict-JSON envelope
-     * pattern as {@link #createDataset}. This method only parses/validates
-     * the request and delegates to {@link
-     * DatasetService#createVersionFromAlphaVantage} — it never calls a
-     * {@code MarketDataProvider} itself, performs no ownership check of its
-     * own (the service is authoritative, exactly like every other
-     * endpoint here), and contains no persistence or canonicalization/hash
-     * logic. The response reuses {@link DatasetVersionResponse} unchanged —
-     * an Alpha Vantage-created version is not a different resource shape
-     * than a CSV-uploaded one.
-     */
     @PostMapping(value = "/{id}/versions/alpha-vantage", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<DatasetVersionResponse> createVersionFromAlphaVantage(@PathVariable long id,
                                                                                  @RequestBody String body) {
@@ -143,8 +116,6 @@ public class DatasetController {
         VerifiedDatasetVersion verified = datasetService.getVerifiedSeries(currentUser.id(), id, version);
         return DatasetBarsResponse.of(verified);
     }
-
-    // --- multipart contract enforcement --------------------------------------
 
     private static MultipartFile requireExactlyOneFile(MultipartHttpServletRequest request) {
         Map<String, List<MultipartFile>> fileMap = request.getMultiFileMap();
@@ -192,12 +163,6 @@ public class DatasetController {
         }
     }
 
-    /**
-     * Explicit Bean Validation of an envelope record already produced by
-     * the strict D-30 reader (mirroring {@code StrategyController}).
-     * {@code @Valid} cannot be applied to a raw {@code String} request-body
-     * parameter, so this substitutes for it.
-     */
     private <T> void validate(T request) {
         Set<ConstraintViolation<T>> violations = validator.validate(request);
         if (!violations.isEmpty()) {

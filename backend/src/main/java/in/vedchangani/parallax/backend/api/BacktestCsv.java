@@ -5,23 +5,6 @@ import in.vedchangani.parallax.backend.backtest.BacktestRunDetail;
 import java.math.BigDecimal;
 import java.util.List;
 
-/**
- * CSV renderings of an already-verified {@link BacktestRunDetail} (V1.1
- * Batch 4, D-42). Pure formatting over the exact same response records the
- * JSON endpoints return ({@link BacktestEquityPointResponse}, {@link
- * BacktestTradeResponse}): no value is recomputed, re-rounded or reparsed
- * here, so a CSV cell is character-for-character the JSON API's string.
- *
- * <p>Format (RFC 4180): UTF-8 without BOM, comma separator, {@code CRLF}
- * after every record including the last, one header row, a field quoted
- * only when it contains a comma, double quote, CR or LF (embedded quotes
- * doubled). Dates are ISO-8601. Money is the backend's exact decimal
- * string. A value that does not apply (an open trade's exit, say) is an
- * empty field, never a placeholder. {@code drawdown} is a plain decimal
- * fraction {@code >= 0} (no exponent or trailing zeros), e.g. {@code 0.25} for
- * 25% below the running peak. Output depends only on the run, so it is
- * byte-for-byte deterministic.
- */
 final class BacktestCsv {
 
     static final String EQUITY_CURVE_HEADER = "date,equity,cash,quantity,close,market_value,cost_basis,"
@@ -67,15 +50,10 @@ final class BacktestCsv {
         return csv.toString();
     }
 
-    /**
-     * The shortest decimal that round-trips the double, written without an
-     * exponent or trailing zeros (so {@code 0.0} is {@code 0}).
-     */
     static String plainDecimal(double value) {
         return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
     }
 
-    /** One RFC 4180 field; {@code null} is an empty field. */
     static String escape(String field) {
         if (field == null) {
             return "";

@@ -13,16 +13,6 @@ import { AlphaVantageImportForm } from './AlphaVantageImportForm.jsx';
 import { CsvUploadForm } from './CsvUploadForm.jsx';
 import { DatasetVersionHistory } from './DatasetVersionHistory.jsx';
 
-/**
- * The Market workspace - the user-facing presentation of the backend's
- * Dataset (D-32) plus its DatasetVersion history, which this frontend
- * calls a "data snapshot". `dataset`/`versions` are both mutable resources
- * (never immutable-cached) and are refetched after every successful
- * CSV/Alpha Vantage import.
- *
- * @param {object} props
- * @param {number} props.datasetId
- */
 export function DatasetDetailPage({ datasetId }) {
   const location = useLocation();
   const importError = location.state?.importError;

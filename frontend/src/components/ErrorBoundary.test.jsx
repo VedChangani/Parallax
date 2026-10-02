@@ -8,8 +8,6 @@ function Bomb() {
 
 describe('ErrorBoundary', () => {
   beforeEach(() => {
-    // React logs the caught error to console.error during render; this is
-    // expected noise for this test, not a real failure.
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 

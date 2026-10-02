@@ -14,32 +14,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
-/**
- * The D-32 V1 CSV parser: plain Java, no CSV library, no Spring dependency,
- * independently unit-testable. Converts an uploaded file's raw bytes into
- * an ordered {@link List} of validated, canonicalized engine {@link Bar}
- * objects.
- *
- * <p>The parser owns syntax only — byte encoding, line structure, header
- * shape, field count, and per-field numeric grammar. {@link Bar} remains
- * the sole semantic authority (positive prices, consistent high/low,
- * non-negative volume); its {@link IllegalArgumentException} is caught and
- * rewrapped as {@link InvalidCsvDataException} carrying the offending
- * line, never duplicated here. The one deliberate exception is strict
- * date ordering: the parser tracks the previous row's date itself, purely
- * so a duplicate or out-of-order date can be reported with its exact line
- * — {@link in.vedchangani.parallax.engine.data.BarSeries} still
- * re-validates the complete sequence as the final authority once every
- * bar is built.
- *
- * <p>Encoding contract: a single leading UTF-8 BOM is accepted and
- * stripped; every remaining byte must be 7-bit ASCII. Lines may be
- * LF-terminated, CRLF-terminated, or a mix of both; the final line
- * terminator is optional; any other blank line is rejected. The header
- * must be exactly {@code date,open,high,low,close,volume} (case-sensitive,
- * fixed order); each data row must have exactly six unquoted,
- * unwhitespaced fields.
- */
 public final class CsvBarParser {
 
     private static final String HEADER = "date,open,high,low,close,volume";
@@ -59,20 +33,6 @@ public final class CsvBarParser {
     private CsvBarParser() {
     }
 
-    /**
-     * Parses {@code csv} into an ordered list of validated bars. Never
-     * sorts, deduplicates, or repairs; every row that does not conform is
-     * reported with its physical line number.
-     *
-     * @throws MalformedCsvException  for any syntax failure (encoding,
-     *                                 line structure, header, field count,
-     *                                 numeric grammar/overflow, impossible
-     *                                 date)
-     * @throws InvalidCsvDataException for a syntactically valid row that
-     *                                 fails {@code Bar}'s semantics, an
-     *                                 out-of-order/duplicate date, or an
-     *                                 empty dataset (header with no rows)
-     */
     public static List<Bar> parse(byte[] csv) {
         Objects.requireNonNull(csv, "csv must not be null");
         byte[] content = stripBom(csv);
@@ -155,20 +115,6 @@ public final class CsvBarParser {
         return csv;
     }
 
-    /**
-     * Splits {@code raw} (decoded 1:1 from bytes via ISO-8859-1, so every
-     * char is one input byte) into physical lines on {@code '\n'},
-     * stripping one trailing {@code '\r'} per line that is actually
-     * terminated by that {@code '\n'} (i.e. a CRLF ending). The optional
-     * final line terminator produces no extra trailing empty line; any
-     * other empty line (including two consecutive terminators) is
-     * preserved as a real, later-rejected blank line. A final,
-     * unterminated line's own trailing {@code '\r'} (no following
-     * {@code '\n'}) is never stripped — it is not a line terminator, so it
-     * remains in the data and fails field grammar downstream. Any byte
-     * outside the 7-bit ASCII range fails immediately with its line
-     * number.
-     */
     private static List<String> splitLinesAndCheckAscii(String raw) {
         List<String> lines = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -188,9 +134,6 @@ public final class CsvBarParser {
             }
         }
         if (current.length() > 0) {
-            // The final, unterminated line: a trailing '\r' here is NOT a CRLF line
-            // terminator (there is no following '\n'), so it must remain in the data
-            // and fail grammar downstream — never silently stripped as if it were one.
             lines.add(current.toString());
         }
         return lines;

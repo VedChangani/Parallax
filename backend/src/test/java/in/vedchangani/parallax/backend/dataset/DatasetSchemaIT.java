@@ -15,15 +15,6 @@ import java.math.BigDecimal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * D-32 schema-level proof, against real PostgreSQL (Testcontainers): the
- * database-layer immutability triggers on {@code dataset_version}/{@code
- * dataset_bar}, every CHECK constraint, the composite foreign key tying a
- * version's symbol snapshot to its parent, exact {@code numeric} scale
- * round-tripping, and that tampered/corrupted stored data is detected on
- * read rather than silently accepted. Mirrors D-31's {@code
- * StrategySchemaIT}.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class DatasetSchemaIT {
@@ -48,8 +39,6 @@ class DatasetSchemaIT {
                 "a.csv");
         return datasetId;
     }
-
-    // --- immutability triggers -----------------------------------------------
 
     @Test
     void updatingADatasetVersionRowIsRejectedByTheDatabase() {
@@ -93,8 +82,6 @@ class DatasetSchemaIT {
         assertThrows(DataAccessException.class, () -> jdbcTemplate.execute("truncate table dataset_bar"));
     }
 
-    // --- CHECK constraints ----------------------------------------------------
-
     @Test
     void hashFormatCheckRejectsANonHexOrWrongLengthHash() {
         long datasetId = createDatasetId(user(), "AAPL");
@@ -118,8 +105,6 @@ class DatasetSchemaIT {
 
     @Test
     void sourceCheckRejectsAnUnknownSource() {
-        // 'ALPHA_VANTAGE' is no longer unknown (D-33 Batch 3) — this uses a value that is
-        // still not one of the two known DatasetSource values.
         long datasetId = createDatasetId(user(), "AAPL");
         assertThrows(DataAccessException.class, () -> jdbcTemplate.update("""
                 insert into dataset_version
@@ -162,15 +147,11 @@ class DatasetSchemaIT {
                 """, datasetId, "0".repeat(64)));
     }
 
-    // --- composite foreign key --------------------------------------------------
-
     @Test
     void compositeForeignKeyRejectsAVersionWhoseSymbolDiffersFromItsDataset() {
         long datasetId = createDatasetId(user(), "AAPL");
         assertThrows(DataAccessException.class, () -> insertVersion(datasetId, 1, "MSFT", "RAW", "0".repeat(64)));
     }
-
-    // --- numeric scale --------------------------------------------------------
 
     @Test
     void numericColumnsRoundTripExactScale() {
@@ -193,8 +174,6 @@ class DatasetSchemaIT {
         assertEquals(5, close.scale());
     }
 
-    // --- integrity detection on read --------------------------------------------
-
     @Test
     void anExtraTamperedBarRowIsDetectedOnRead() {
         UserId owner = user();
@@ -204,7 +183,6 @@ class DatasetSchemaIT {
         long versionId = jdbcTemplate.queryForObject(
                 "select id from dataset_version where dataset_id = ? and version_number = 1", Long.class, datasetId);
 
-        // Tamper directly: insert a third bar the stored barCount/hash metadata does not account for.
         jdbcTemplate.update(
                 "insert into dataset_bar (dataset_version_id, bar_date, open, high, low, close, volume) "
                         + "values (?, '2024-01-04', 108, 115, 107, 112, 900)", versionId);
@@ -229,7 +207,6 @@ class DatasetSchemaIT {
         UserId owner = user();
         long datasetId = createDatasetId(owner, "AAPL");
         long versionId = insertVersion(datasetId, 1, "AAPL", "RAW", "0".repeat(64));
-        // 100.00 (scale 2) is not canonical (canonicalPrice would strip it to 100, scale 0).
         jdbcTemplate.update(
                 "insert into dataset_bar (dataset_version_id, bar_date, open, high, low, close, volume) "
                         + "values (?, '2024-01-02', 100.00, 105, 99, 104, 1000)", versionId);
@@ -237,15 +214,6 @@ class DatasetSchemaIT {
         assertThrows(DatasetIntegrityException.class, () -> datasetService.getVerifiedSeries(owner, datasetId, 1));
     }
 
-    /**
-     * Corrective-pass regression test: {@code DatasetBarRepository}'s row
-     * mapper constructs an engine {@code Bar} per row, so a stored row
-     * with a non-positive price must surface as {@link
-     * DatasetIntegrityException} from {@code getVerifiedSeries} — never
-     * escape as the raw {@code IllegalArgumentException} {@code Bar}
-     * itself throws. Nothing is repaired or resaved: the tampered row is
-     * still readable, unchanged, afterward.
-     */
     @Test
     void aTamperedNonPositivePriceCausesIntegrityExceptionNotARawException() {
         UserId owner = user();
@@ -262,17 +230,11 @@ class DatasetSchemaIT {
         assertEquals(new BigDecimal("0"), stillZero);
     }
 
-    /**
-     * Same regression, for an invalid OHLC relationship rather than a
-     * non-positive price — a different {@code Bar} validation rule
-     * reaching the same {@link DatasetIntegrityException} boundary.
-     */
     @Test
     void aTamperedInvalidOhlcRelationshipCausesIntegrityException() {
         UserId owner = user();
         long datasetId = createDatasetId(owner, "AAPL");
         long versionId = insertVersion(datasetId, 1, "AAPL", "RAW", "0".repeat(64));
-        // high (99) is below max(open, close) = 104 — Bar rejects this.
         jdbcTemplate.update(
                 "insert into dataset_bar (dataset_version_id, bar_date, open, high, low, close, volume) "
                         + "values (?, '2024-01-02', 100, 99, 90, 104, 1000)", versionId);

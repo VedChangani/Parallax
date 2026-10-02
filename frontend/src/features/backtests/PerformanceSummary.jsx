@@ -11,10 +11,6 @@ import {
 
 const TONE_TEXT = { success: 'text-success', danger: 'text-danger' };
 
-/**
- * @param {number | null | undefined} value
- * @returns {'success' | 'danger' | undefined}
- */
 function returnTone(value) {
   if (value === null || value === undefined) return undefined;
   if (value > 0) return 'success';
@@ -22,23 +18,6 @@ function returnTone(value) {
   return undefined;
 }
 
-/**
- * The primary/secondary performance-metric grid (D-34 Batch 5 §7): every
- * value is read directly off the persisted `PerformanceMetricsResponse` -
- * never recomputed, never re-derived from the equity curve or fills.
- * Semantic color is a secondary cue only; the sign/percentage text itself
- * always carries the meaning (CLAUDE.md §17/§24: never color alone).
- *
- * @param {object} props
- * @param {import('../../api/types.js').PerformanceMetricsResponse} props.metrics
- * @param {string} props.totalCommission
- * @param {string} props.totalSlippageCost
- * @param {number} [props.returnCount] - the equity curve's own point count
- *   minus one (I-3, Phase 10 Batch 4) - purely to explain a missing
- *   Sharpe/volatility with the exact observation count when known;
- *   `undefined` while the equity curve is still loading or failed to load
- *   simply omits that one detail, never blocking the rest of the summary.
- */
 export function PerformanceSummary({ metrics, totalCommission, totalSlippageCost, returnCount }) {
   return (
     <div>

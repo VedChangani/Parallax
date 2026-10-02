@@ -5,16 +5,6 @@ const TONES = {
   warning: 'border-warning/30 bg-warning/10 text-warning',
 };
 
-/**
- * A compact label for a technical/categorical value (a source, an
- * adjustment basis, a status) — never used as the sole carrier of meaning
- * (the label text itself always states the value).
- *
- * @param {object} props
- * @param {import('react').ReactNode} props.children
- * @param {'neutral' | 'accent' | 'success' | 'warning'} [props.tone]
- * @param {string} [props.className]
- */
 export function Badge({ children, tone = 'neutral', className = '' }) {
   return (
     <span

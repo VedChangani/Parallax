@@ -12,17 +12,6 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Plain-JDBC access to {@code backtest_rejection} (D-34 Batch 1, mirroring
- * this package's own {@code BacktestFillRepository}). Insert-only, matching
- * the table's own immutability triggers.
- *
- * <p>Several columns are nullable depending on {@link BacktestRejectionRow#reason()}
- * (D-21's {@code ZeroQuantity}/{@code InsufficientCash} split). A plain
- * {@code PreparedStatement.setObject(int, null)} risks a driver falling
- * back to an ambiguous SQL type for a null parameter, so a null value is
- * always bound with its column's exact JDBC type via {@code setNull}.
- */
 @Component
 class BacktestRejectionRepository {
 

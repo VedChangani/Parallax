@@ -8,13 +8,6 @@ const LINKS = [
   { to: '/datasets', label: 'Markets' },
 ];
 
-/**
- * Persistent primary navigation, shared by every page via AppLayout
- * (including the public `/login`/`/register` pages, so the shell never
- * visually diverges between anonymous and authenticated - D-39). The
- * resource links themselves are always shown; an anonymous visitor who
- * clicks one is simply sent to `/login` by `RequireAuth`.
- */
 export function Nav() {
   return (
     <header className="border-b border-border bg-surface">
@@ -48,7 +41,6 @@ export function Nav() {
   );
 }
 
-/** The signed-in username plus a logout button, or a "Log in" link while anonymous. */
 function NavIdentity() {
   const { status, username, logout } = useAuth();
 

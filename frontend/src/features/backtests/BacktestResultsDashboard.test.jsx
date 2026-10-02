@@ -117,15 +117,6 @@ const REJECTIONS = [
   },
 ];
 
-/**
- * @param {object} [overrides]
- * @param {object} [overrides.run]
- * @param {object[]} [overrides.trades]
- * @param {object[]} [overrides.rejections]
- * @param {object[]} [overrides.equity]
- * @param {object} [overrides.datasetVersion]
- * @param {(url: string) => Response | undefined} [overrides.runHandler] - overrides the run-detail response entirely
- */
 function mockFetch({
   run = RUN,
   trades = [CLOSED_TRADE, OPEN_TRADE],
@@ -271,16 +262,15 @@ describe('Backtest results dashboard', () => {
       const heading = await screen.findByText('Performance');
       const section = within(heading.closest('section'));
 
-      expect(section.getByText('+15.32%')).toBeTruthy(); // total return
-      expect(section.getByText('22.00%')).toBeTruthy(); // volatility
-      expect(section.getByText('1.42')).toBeTruthy(); // sharpe ratio
-      expect(section.getByText('8.10%')).toBeTruthy(); // max drawdown
-      expect(section.getByText('50.00%')).toBeTruthy(); // win rate
-      expect(section.getByText('123.46')).toBeTruthy(); // average win
-      expect(section.getByText('-67.89')).toBeTruthy(); // average loss
-      expect(section.getByText('2')).toBeTruthy(); // closed trade count
+      expect(section.getByText('+15.32%')).toBeTruthy();
+      expect(section.getByText('22.00%')).toBeTruthy();
+      expect(section.getByText('1.42')).toBeTruthy();
+      expect(section.getByText('8.10%')).toBeTruthy();
+      expect(section.getByText('50.00%')).toBeTruthy();
+      expect(section.getByText('123.46')).toBeTruthy();
+      expect(section.getByText('-67.89')).toBeTruthy();
+      expect(section.getByText('2')).toBeTruthy();
 
-      // cagr is null in the fixture
       const cagrValue = section.getByText('CAGR').closest('div').querySelector('dd');
       expect(cagrValue.textContent).toBe('—');
     });
@@ -291,8 +281,8 @@ describe('Backtest results dashboard', () => {
       const heading = await screen.findByText('Performance');
       const section = within(heading.closest('section'));
 
-      expect(section.getByText('12.50')).toBeTruthy(); // totalCommission, exact string
-      expect(section.getByText('3.25')).toBeTruthy(); // totalSlippageCost, exact string
+      expect(section.getByText('12.50')).toBeTruthy();
+      expect(section.getByText('3.25')).toBeTruthy();
     });
 
     it('no longer claims the drawdown series is unavailable', async () => {
@@ -348,7 +338,6 @@ describe('Backtest results dashboard', () => {
 
       const value = section.getByText('Profit factor').closest('div').querySelector('dd');
       expect(value.textContent).toBe('1.88');
-      // Sits in the same grid as the existing trade metrics.
       expect(section.getByText('Average loss').closest('dl')).toBe(section.getByText('Profit factor').closest('dl'));
       expect(section.queryByText('Needs at least one losing closed trade.')).toBeNull();
     });
@@ -387,7 +376,6 @@ describe('Backtest results dashboard', () => {
 
       const heading = await screen.findByText('Drawdown');
       const equityHeading = screen.getByText('Equity curve');
-      // Document order: Equity curve section precedes the Drawdown section.
       expect(equityHeading.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
       const summary = within(heading.closest('section')).getByText(/Drawdown from/);
@@ -403,7 +391,7 @@ describe('Backtest results dashboard', () => {
     });
 
     it('shows a safe message when the response carries no drawdown values', async () => {
-      globalThis.fetch = mockFetch(); // EQUITY fixture has no `drawdown`
+      globalThis.fetch = mockFetch();
       renderRun('/backtests/1');
 
       expect(await screen.findByText('No drawdown data was returned for this run.')).toBeTruthy();
@@ -420,7 +408,7 @@ describe('Backtest results dashboard', () => {
 
   describe('missing-metric explanations (I-3)', () => {
     it('explains a missing CAGR as a sub-year span', async () => {
-      globalThis.fetch = mockFetch(); // RUN.metrics.cagr is already null
+      globalThis.fetch = mockFetch();
       renderRun('/backtests/1');
       await screen.findByText('Performance');
 
@@ -430,13 +418,10 @@ describe('Backtest results dashboard', () => {
     it('explains missing volatility/Sharpe by the exact return count when there are fewer than two', async () => {
       globalThis.fetch = mockFetch({
         run: { ...RUN, metrics: { ...RUN.metrics, volatility: null, sharpeRatio: null } },
-        // EQUITY has exactly 2 points -> 1 return observation.
       });
       renderRun('/backtests/1');
       await screen.findByText('Performance');
 
-      // Both Volatility and Sharpe render the identical explanation here, since
-      // both are empty for the same reason (fewer than two returns).
       const matches = await screen.findAllByText(/Fewer than two return observations \(1\) were recorded/);
       expect(matches.length).toBe(2);
     });
@@ -444,7 +429,7 @@ describe('Backtest results dashboard', () => {
     it('explains a missing Sharpe by zero dispersion when volatility is present and exactly zero', async () => {
       globalThis.fetch = mockFetch({
         run: { ...RUN, metrics: { ...RUN.metrics, volatility: 0, sharpeRatio: null } },
-        equity: [...EQUITY, { ...EQUITY[1], date: '2024-03-23' }], // 3 points -> 2 returns, so "too few" doesn't apply
+        equity: [...EQUITY, { ...EQUITY[1], date: '2024-03-23' }],
       });
       renderRun('/backtests/1');
       await screen.findByText('Performance');
@@ -480,9 +465,9 @@ describe('Backtest results dashboard', () => {
       const heading = await screen.findByText('Benchmark');
       const section = within(heading.closest('section'));
 
-      expect(section.getByText('+15.32%')).toBeTruthy(); // strategy (matches the total-return metric above)
-      expect(section.getByText('+6.04%')).toBeTruthy(); // benchmark
-      expect(section.getByText('+9.28%')).toBeTruthy(); // 0.1532 - 0.0604, exact subtraction
+      expect(section.getByText('+15.32%')).toBeTruthy();
+      expect(section.getByText('+6.04%')).toBeTruthy();
+      expect(section.getByText('+9.28%')).toBeTruthy();
     });
   });
 
@@ -549,20 +534,14 @@ describe('Backtest results dashboard', () => {
     });
 
     it('explains a delayed firstEvaluableDate without implying the strategy underperformed (CASE 2)', async () => {
-      globalThis.fetch = mockFetch(); // RUN.firstEvaluableDate '2024-03-08' > RUN.startDate '2024-01-01'
+      globalThis.fetch = mockFetch();
       renderRun('/backtests/1');
 
       expect(await screen.findByText('Warm-up period')).toBeTruthy();
       expect(screen.getByText(/could not be evaluated until/)).toBeTruthy();
-      // Also rendered separately in ResearchInputsPanel's own "First evaluable
-      // date" field - so this must allow more than one match.
       expect(screen.getAllByText(RUN.firstEvaluableDate).length).toBeGreaterThan(0);
-      // EQUITY has 2 points: 2024-01-01 (before firstEvaluableDate) and 2024-03-22 (after) -
-      // derived from the already-fetched equity curve, no new endpoint.
       const notice = await screen.findByRole('status');
       expect(notice.textContent).toMatch(/No signal could be generated on 1 of 2 bars in range/);
-      // Scoped to the notice itself - "Average loss" is a legitimate, unrelated
-      // performance-metric label rendered elsewhere on the same page.
       expect(notice.textContent).not.toMatch(/lost|underperform|loss/i);
     });
 
@@ -581,7 +560,7 @@ describe('Backtest results dashboard', () => {
 
   describe('assumptions (I4)', () => {
     it('discloses the dataset source, adjustment basis, and a RAW warning', async () => {
-      globalThis.fetch = mockFetch(); // DATASET_VERSION.adjustmentBasis is RAW
+      globalThis.fetch = mockFetch();
       renderRun('/backtests/1');
       await screen.findByText('Assumptions');
 
@@ -599,7 +578,7 @@ describe('Backtest results dashboard', () => {
     });
 
     it('discloses that RAW prices never add dividends back into either return', async () => {
-      globalThis.fetch = mockFetch(); // DATASET_VERSION.adjustmentBasis is RAW
+      globalThis.fetch = mockFetch();
       renderRun('/backtests/1');
       await screen.findByText('Assumptions');
 
@@ -655,7 +634,7 @@ describe('Backtest results dashboard', () => {
       expect(await screen.findByRole('link', { name: 'Momentum Cross' })).toBeTruthy();
       expect(screen.getByText('Snapshot v1')).toBeTruthy();
       expect(screen.getByText('Version v2')).toBeTruthy();
-      expect(screen.getByText('0.05%')).toBeTruthy(); // slippageRate "0.0005" -> percent display
+      expect(screen.getByText('0.05%')).toBeTruthy();
       expect(screen.getAllByText(RUN.definitionHash).length).toBeGreaterThan(0);
       expect(screen.getAllByText(RUN.contentHash).length).toBeGreaterThan(0);
     });
@@ -698,8 +677,7 @@ describe('Backtest results dashboard', () => {
 
       const openRow = (await screen.findByText('112.05')).closest('tr');
       expect(within(openRow).getByText('Open')).toBeTruthy();
-      expect(within(openRow).getByText('1475.00')).toBeTruthy(); // unrealized P&L
-      // no exit date/price, no realized P&L - all render as a dash
+      expect(within(openRow).getByText('1475.00')).toBeTruthy();
       const dashes = within(openRow).getAllByText('—');
       expect(dashes.length).toBeGreaterThanOrEqual(3);
     });
@@ -744,7 +722,7 @@ describe('Backtest results dashboard', () => {
       renderRun('/backtests/1/rejections');
       await screen.findByText('Insufficient cash');
 
-      const rows = screen.getAllByRole('row').slice(1); // skip header row
+      const rows = screen.getAllByRole('row').slice(1);
       expect(within(rows[0]).getByText('Insufficient cash')).toBeTruthy();
       expect(within(rows[1]).getByText('Zero quantity')).toBeTruthy();
     });
@@ -756,7 +734,7 @@ describe('Backtest results dashboard', () => {
 
       const zeroQuantityRow = screen.getByText('Zero quantity').closest('tr');
       const dashes = within(zeroQuantityRow).getAllByText('—');
-      expect(dashes.length).toBeGreaterThanOrEqual(4); // executionDate, orderId, quantity, requiredCash, availableCash
+      expect(dashes.length).toBeGreaterThanOrEqual(4);
     });
 
     it('renders full InsufficientCash fields exactly', async () => {

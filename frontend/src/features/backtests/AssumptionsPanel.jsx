@@ -1,23 +1,6 @@
 import { Badge } from '../../components/Badge.jsx';
 import { ADJUSTMENT_BASIS_LABELS, SOURCE_LABELS } from '../../lib/datasetLabels.js';
 
-/**
- * Explicit disclosure of the assumptions behind this result (I4, Phase 9
- * Batch 1; CLAUDE.md - "important assumptions must be explicit in
- * configuration and results"). The dataset source/adjustment badges are the
- * only data-derived facts here, read from the immutable dataset-version
- * snapshot the Overview page already fetches/caches for this purpose -
- * never a new per-row request, and never recomputed. Everything else is
- * fixed, factual prose describing the engine's own documented, unchanged
- * semantics (D-7 next-bar-open execution, D-23 the exit-commission
- * reserve, D-8 no forced liquidation, D-28 the buy-and-hold definition) -
- * no new financial or legal wording invented for this panel.
- *
- * @param {object} props
- * @param {import('../../api/types.js').DatasetVersionResponse | undefined} props.snapshot
- *   - undefined while the immutable snapshot is still loading or failed to
- *   load; the static assumptions below are still shown either way.
- */
 export function AssumptionsPanel({ snapshot }) {
   const isRaw = snapshot?.adjustmentBasis === 'RAW';
 

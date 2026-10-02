@@ -28,42 +28,7 @@ import java.util.OptionalDouble;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/**
- * Phase 9 Batch 2a: a deterministic regression fingerprint over the full
- * engine pipeline ({@link Backtester} + {@link PerformanceMetrics} +
- * {@link BuyAndHoldBenchmark}), asserted with exact bit/text equality, no
- * tolerance.
- *
- * <p>The fixture is a single fixed {@link BarSeries}/{@link
- * StrategyDefinition}/{@link BacktestConfig}, chosen to exercise a
- * meaningful cross-section of engine behavior in one run: an SMA(10)
- * crossover strategy (so this also fingerprints the indicator
- * implementations touched by Batch 2a), several closed trades plus one
- * final open trade, non-zero commission and slippage, indicator warm-up,
- * and a span over 365 days so CAGR/volatility/Sharpe are all defined.
- *
- * <p><strong>If this fingerprint ever changes because backtest semantics
- * intentionally changed, {@code Backtester.SEMANTICS_VERSION} must be
- * bumped.</strong> If it changes unexpectedly, investigate the cause before
- * touching the expected value here — do not update it to make the test
- * pass without first determining whether the change is genuinely semantic.
- *
- * <p>The expected fingerprint text below was captured by running this exact
- * fixture against the engine as it stood immediately before Phase 9 Batch
- * 2a's indicator memory/allocation changes (SMA lazy buffer growth, EMA
- * dead-buffer removal, EMA alpha overflow fix) — i.e. it is real engine
- * output, not a hand-derived value, and this test's purpose is to prove
- * those allocation-only changes left it bit-for-bit unchanged.
- */
 class BacktesterFingerprintTest {
-
-    // --- fixture: ~2 years of weekly bars, oscillating + trending -------------
-    //
-    // Weekly (7-day) spacing rather than daily keeps the bar count small
-    // enough for a readable fingerprint while still spanning > 365 days
-    // (BarSeries/Backtester place no requirement on calendar-day spacing;
-    // only strictly ascending dates, D-4/D-6). Prices are built from exact
-    // integer cents, so every Bar's BigDecimal is exact - no rounding.
 
     private static final int BAR_COUNT = 60;
     private static final LocalDate FIRST_DATE = LocalDate.of(2020, 1, 1);
@@ -72,7 +37,6 @@ class BacktesterFingerprintTest {
         return FIRST_DATE.plusDays(7L * i);
     }
 
-    /** price(i) cents = 10000 + trend(i) + wave(i); trend = i*40, wave = triangle(period 12, amplitude 600). */
     private static BigDecimal priceAt(int i) {
         int trendCents = i * 40;
         int pos = i % 12;
@@ -85,9 +49,6 @@ class BacktesterFingerprintTest {
         List<Bar> bars = new ArrayList<>(BAR_COUNT);
         for (int i = 0; i < BAR_COUNT; i++) {
             BigDecimal close = priceAt(i);
-            // Flat bars (open = high = low = close): the next bar's open still
-            // differs from this bar's close, since the price formula changes
-            // day to day, so slippage/commission still apply to every fill.
             bars.add(new Bar(dateAt(i), close, close, close, close, 1_000));
         }
         return new BarSeries("FINGERPRINT", bars);
@@ -123,8 +84,6 @@ class BacktesterFingerprintTest {
                         + "change, bump Backtester.SEMANTICS_VERSION; otherwise investigate the drift "
                         + "before updating this expected value");
     }
-
-    // --- fingerprint construction: exact, ordered, no tolerance ----------------
 
     private static String fingerprintOf(BacktestResult result, PerformanceMetrics metrics,
                                          BuyAndHoldBenchmark benchmark) {
@@ -223,15 +182,6 @@ class BacktesterFingerprintTest {
         return d.isPresent() ? bits(d.getAsDouble()) : "EMPTY";
     }
 
-    // Captured verbatim from a real run of this exact fixture against the engine
-    // as it stood immediately before Phase 9 Batch 2a: the tracked SMA/EMA
-    // allocation changes were `git stash`-ed (restoring the original eager
-    // double[period] SMA buffer, the dead EMA seedBuffer, and the int
-    // period+1 alpha expression), this test was run, and this text is the
-    // "but was: <...>" content from that run's assertion failure - not a
-    // hand-derived value. The stash was then restored and this test re-run
-    // to confirm the allocation-only changes left it unchanged (see class
-    // Javadoc and the Batch 2a final report).
     private static final String EXPECTED_FINGERPRINT = """
             symbol=FINGERPRINT
             config=10000;1;0.001;2020-01-01;2021-02-17

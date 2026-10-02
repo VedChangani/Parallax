@@ -10,15 +10,6 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Plain-JDBC access to {@code backtest_fill} (D-34 Batch 1, mirroring
- * D-32's {@code DatasetBarRepository}/this package's own {@code
- * BacktestEquityPointRepository}). Insert-only, matching the table's own
- * immutability triggers. {@code signal_indicators} is bound as text cast
- * to {@code jsonb} in the SQL itself ({@code ?::jsonb}) — the same
- * approach D-31's {@code StrategyVersion} uses via Hibernate's {@code
- * @ColumnTransformer}, applied directly here since this is plain JDBC.
- */
 @Component
 class BacktestFillRepository {
 

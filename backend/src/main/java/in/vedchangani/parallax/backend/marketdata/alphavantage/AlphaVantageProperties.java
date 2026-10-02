@@ -8,17 +8,6 @@ import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.Objects;
 
-/**
- * Immutable Alpha Vantage HTTP configuration, bound from {@code
- * parallax.alphavantage.*}. {@code apiKey} is deliberately unvalidated here
- * — a blank key must never fail application startup (D-33 Batch 2); {@link
- * AlphaVantageMarketDataProvider} is the sole place that rejects a blank key,
- * at request time.
- *
- * <p>Every other property is validated eagerly in the compact constructor so
- * a misconfigured deployment fails at startup rather than on the first
- * request.
- */
 @ConfigurationProperties(prefix = "parallax.alphavantage")
 public record AlphaVantageProperties(
         String apiKey,
@@ -60,17 +49,6 @@ public record AlphaVantageProperties(
         }
     }
 
-    /**
-     * Redacts {@link #apiKey} — the record's default, generated {@code
-     * toString()} would otherwise include it verbatim, which risks leaking
-     * it into a log line or an unrelated error/diagnostic message that
-     * happens to print this configuration object (D-33's own contract is
-     * that the key is "never logged, never included in an exception
-     * message" — this closes the one place a record's own defaults would
-     * have quietly broken that). A blank key (the default; D-33 Batch 2)
-     * is shown as blank, not falsely reported as redacted, since there is
-     * nothing there to hide.
-     */
     @Override
     public String toString() {
         String redactedApiKey = apiKey.isEmpty() ? "" : "***REDACTED***";

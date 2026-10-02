@@ -29,7 +29,7 @@ describe('downloadTextFile', () => {
     expect(clicked).toEqual([{ href: 'blob:parallax-test', download: 'backtest-7-equity-curve.csv', attached: true }]);
     const blob = createObjectURL.mock.calls[0][0];
     expect(blob.type).toBe('text/csv;charset=utf-8');
-    expect(await blob.text()).toBe(text); // CRLF and every character preserved, no BOM added
+    expect(await blob.text()).toBe(text);
   });
 
   it('removes the temporary anchor and revokes the object URL', () => {

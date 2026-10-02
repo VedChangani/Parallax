@@ -8,12 +8,7 @@ function Bomb() {
   throw new Error('boom');
 }
 
-/** D-39: Nav renders inside AuthProvider in the real app - AppLayout alone would throw without it. */
 function renderLayoutAt(path) {
-  // No route here goes through RequireAuth, so Nav's identity display
-  // (which only ever shows "Log in" until GET /api/auth/me resolves) is
-  // the only thing that needs AuthProvider - the routed pages below render
-  // immediately regardless of auth state.
   globalThis.fetch ??= vi.fn(() => Promise.resolve(new Response(null, { status: 401 })));
 
   return render(

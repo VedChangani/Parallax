@@ -21,15 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * Pure unit tests for {@link BacktestRangeValidator} (D-34 Batch 2): strict
- * raw dataset coverage containment, deliberately independent of indicator
- * warm-up.
- */
 class BacktestRangeValidatorTest {
 
-    // A daily series with a deliberate weekend gap: Fri 2024-01-05, then
-    // Mon 2024-01-08 (no Saturday/Sunday bars - an ordinary daily dataset).
     private static BarSeries weekdaySeries() {
         return new BarSeries("AAPL", List.of(
                 bar(LocalDate.of(2024, 1, 2)),
@@ -73,16 +66,12 @@ class BacktestRangeValidatorTest {
 
     @Test
     void aRangeFallingEntirelyInsideTheWeekendGapIsRejected() {
-        // Both within [firstDate, lastDate] but no bar exists on 2024-01-06/07.
         assertThrows(BacktestRangeException.class, () -> BacktestRangeValidator.validate(weekdaySeries(),
                 config(LocalDate.of(2024, 1, 6), LocalDate.of(2024, 1, 7))));
     }
 
     @Test
     void aValidRangeWhereAnIndicatorNeverBecomesReadyIsAcceptedForEngineExecution() {
-        // Range validation must not duplicate indicator warm-up semantics: a strategy
-        // whose SMA(20) never has 20 closes available is still an accepted range here,
-        // and running it through the engine succeeds (with an empty firstEvaluableDate).
         BarSeries series = weekdaySeries();
         BacktestConfig cfg = config(LocalDate.of(2024, 1, 2), LocalDate.of(2024, 1, 9));
 

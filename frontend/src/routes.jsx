@@ -19,14 +19,6 @@ import { StrategiesListPage } from './pages/strategies/StrategiesListPage.jsx';
 import { StrategyVersionDetailPage } from './pages/strategies/StrategyVersionDetailPage.jsx';
 import { StrategyVersionNewPage } from './pages/strategies/StrategyVersionNewPage.jsx';
 
-/**
- * The approved Phase 8 Foundation route structure, in declarative mode,
- * now split by D-39 into public routes (`/login`, `/register`, and the
- * catch-all) and everything else, gated behind {@link RequireAuth}. Every
- * route - public and protected - still renders inside the same
- * {@link AppLayout} shell, so the visual system never diverges by auth
- * state (Nav itself adapts).
- */
 export function AppRoutes() {
   return (
     <Routes>

@@ -106,8 +106,6 @@ class CompareTest {
 
     @Test
     void closeAndConstantWithTheSameDecimalValueAreEqualAsDoubles() {
-        // D-18 boundary: BigDecimal("100.10").doubleValue() and the double
-        // literal 100.1 round to the same double, so neither GT nor LT holds.
         IndicatorSnapshot snapshot = new IndicatorSnapshot(DATE, new BigDecimal("100.10"), Map.of());
         Operand.Constant threshold = new Operand.Constant(100.1);
 

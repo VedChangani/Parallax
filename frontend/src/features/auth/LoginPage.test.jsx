@@ -75,9 +75,6 @@ describe('LoginPage', () => {
     expect(await screen.findByRole('heading', { name: 'Protected page' })).toBeTruthy();
   });
 
-  // M-5: an unvalidated `next` is an open-redirect vector - only a same-origin
-  // in-app path is ever honored.
-
   it('falls back to / when next is an absolute URL', async () => {
     globalThis.fetch = vi.fn((url) => {
       if (String(url).endsWith('/api/auth/login')) return Promise.resolve(jsonResponse({ username: 'alice' }));

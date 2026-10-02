@@ -17,7 +17,6 @@ class RateOfChangeTest {
         return new BigDecimal(value);
     }
 
-    // Needs the current close plus the close `period` bars ago: period + 1 closes.
     @Test
     void isNotReadyUntilPeriodPlusOneCloses() {
         RateOfChange roc = new RateOfChange(3);
@@ -29,10 +28,10 @@ class RateOfChangeTest {
         assertFalse(roc.isReady());
 
         roc.update(price("102"));
-        assertFalse(roc.isReady()); // 3 closes: still nothing 3 bars back
+        assertFalse(roc.isReady());
 
         roc.update(price("103"));
-        assertTrue(roc.isReady()); // 4th close has close[3 bars ago]
+        assertTrue(roc.isReady());
     }
 
     @Test
@@ -56,7 +55,7 @@ class RateOfChangeTest {
         roc.update(price("121"));
         roc.update(price("150"));
 
-        assertEquals(50.0, roc.value(), TOLERANCE); // (150 / 100 - 1) * 100
+        assertEquals(50.0, roc.value(), TOLERANCE);
     }
 
     @Test
@@ -82,7 +81,6 @@ class RateOfChangeTest {
         assertEquals(0.0, roc.value(), TOLERANCE);
     }
 
-    // The reference close slides forward one bar at a time.
     @Test
     void referenceCloseSlidesWithEachNewBar() {
         RateOfChange roc = new RateOfChange(2);
@@ -90,13 +88,13 @@ class RateOfChangeTest {
         roc.update(price("100"));
         roc.update(price("120"));
         roc.update(price("110"));
-        assertEquals(10.0, roc.value(), TOLERANCE); // 110 vs 100
+        assertEquals(10.0, roc.value(), TOLERANCE);
 
         roc.update(price("90"));
-        assertEquals(-25.0, roc.value(), TOLERANCE); // 90 vs 120
+        assertEquals(-25.0, roc.value(), TOLERANCE);
 
         roc.update(price("99"));
-        assertEquals(-10.0, roc.value(), TOLERANCE); // 99 vs 110
+        assertEquals(-10.0, roc.value(), TOLERANCE);
     }
 
     @Test

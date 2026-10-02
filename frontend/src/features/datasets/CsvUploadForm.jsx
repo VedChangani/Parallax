@@ -14,16 +14,6 @@ const selectClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
-/**
- * The advanced/custom-data workflow (backend: `POST /api/datasets/{id}/versions`,
- * multipart, D-32). Visually secondary to Alpha Vantage - rendered without
- * its own outer panel chrome so the caller can nest it inside a collapsed
- * "Advanced data import" disclosure.
- *
- * @param {object} props
- * @param {number} props.datasetId
- * @param {(version: import('../../api/types.js').DatasetVersionResponse) => void} props.onImported
- */
 export function CsvUploadForm({ datasetId, onImported }) {
   const fileInputRef = useRef(null);
   const [adjustmentBasis, setAdjustmentBasis] = useState('');

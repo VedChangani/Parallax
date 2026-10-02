@@ -3,12 +3,6 @@ package in.vedchangani.parallax.backend.dataset;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Test-only CSV and naming fixtures shared by the D-32 dataset test suite
- * (mirroring {@code strategy.StrategyFixtures}/{@code TestUsers}). Public,
- * like {@code TestUsers}, so it can also be used from {@code api}-package
- * integration tests.
- */
 public final class DatasetFixtures {
 
     private static final AtomicLong COUNTER = new AtomicLong();

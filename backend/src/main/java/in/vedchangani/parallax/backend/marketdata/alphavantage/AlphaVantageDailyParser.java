@@ -30,31 +30,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/**
- * Parses an Alpha Vantage {@code TIME_SERIES_DAILY} JSON response into
- * {@link DailyBars}. Plain Java, no Spring dependency, independently
- * unit-testable — this class knows nothing about HTTP, API keys, or the
- * {@code Dataset}/persistence model.
- *
- * <p>Before treating a document as a success body, it is classified against
- * Alpha Vantage's own control-response keys ({@code "Error Message"},
- * {@code "Information"}, {@code "Note"}). Only a document with none of
- * those keys, and exactly the two documented success properties, is parsed
- * as data.
- *
- * <p>The parser owns syntax and shape only. {@link Bar} remains the sole
- * semantic authority (positive prices, consistent high/low, non-negative
- * volume) for each bar; its {@link IllegalArgumentException} is caught and
- * rewrapped as {@link InvalidMarketDataException}, never duplicated here.
- * Strict descending date order is treated the same way: Alpha Vantage
- * documents dates newest-first, and a non-descending (including
- * equal/duplicate) date sequence is a market-data problem, not a shape
- * problem, so it is also reported as {@link InvalidMarketDataException} —
- * distinct from a true duplicate JSON key, which is a syntax failure caught
- * during parsing. Valid input is reversed once into the ascending order
- * {@link DailyBars} exposes — a provider-normalization step, not a general
- * sort.
- */
 public final class AlphaVantageDailyParser {
 
     private static final String META_DATA_FIELD = "Meta Data";
@@ -86,14 +61,6 @@ public final class AlphaVantageDailyParser {
     private static final Pattern PRICE_GRAMMAR = Pattern.compile("-?(0|[1-9][0-9]{0,17})(\\.[0-9]{1,18})?");
     private static final Pattern VOLUME_GRAMMAR = Pattern.compile("0|-?[1-9][0-9]{0,18}");
 
-    /**
-     * The approved D-33 signal for a FULL-history capability-limit {@code
-     * "Information"} message: a case-insensitive substring match on
-     * "premium", checked only when {@code FULL} was requested. A rate-limit
-     * {@code "Information"} that happens to also pitch a premium plan is
-     * therefore classified as a capability limitation too — an accepted,
-     * approved trade-off, not a defect.
-     */
     private static final String PREMIUM_MARKER = "premium";
 
     private static final JsonMapper JSON_MAPPER = JsonMapper.builder()
@@ -104,37 +71,6 @@ public final class AlphaVantageDailyParser {
     private AlphaVantageDailyParser() {
     }
 
-    /**
-     * Parses {@code json} for a request that asked for {@code
-     * requestedSymbol} at {@code requestedDepth}. Never sorts, repairs, or
-     * silently skips a malformed document or row.
-     *
-     * @throws MarketDataRequestRejectedException the provider's {@code
-     *                                              "Error Message"} response
-     * @throws MarketDataCapabilityException      {@code requestedDepth ==
-     *                                              FULL} but the response
-     *                                              proves the account is
-     *                                              limited to compact
-     *                                              history
-     * @throws MarketDataUnavailableException     a rate-limit/temporary
-     *                                              {@code "Note"}/{@code
-     *                                              "Information"} response
-     * @throws InvalidMarketDataException         an empty time series, a
-     *                                              non-descending (including
-     *                                              equal/duplicate) provider
-     *                                              date sequence, or a
-     *                                              syntactically valid row
-     *                                              that fails {@code Bar}'s
-     *                                              semantics
-     * @throws MarketDataResponseException        any other shape/format
-     *                                              failure: malformed JSON,
-     *                                              an unrecognized or
-     *                                              incomplete document
-     *                                              shape, or a meta mismatch
-     *                                              that does not itself
-     *                                              prove a capability
-     *                                              limitation
-     */
     public static DailyBars parse(String requestedSymbol, HistoryDepth requestedDepth, String json) {
         Objects.requireNonNull(requestedSymbol, "requestedSymbol must not be null");
         Objects.requireNonNull(requestedDepth, "requestedDepth must not be null");
@@ -162,8 +98,6 @@ public final class AlphaVantageDailyParser {
                 : "TIME_SERIES_DAILY;outputsize=full";
     }
 
-    // --- top-level parse / classification ---------------------------------
-
     private static JsonNode parseJson(String json) {
         try {
             return JSON_MAPPER.readValue(json, JsonNode.class);
@@ -190,14 +124,6 @@ public final class AlphaVantageDailyParser {
         return new MarketDataResponseException("malformed JSON");
     }
 
-    /**
-     * Recognizes Alpha Vantage's control-response keys before any
-     * success-shape validation runs. A {@code "Information"} message that
-     * mentions a premium plan while {@code FULL} was requested proves the
-     * D-33 capability limitation; every other {@code "Information"}/{@code
-     * "Note"} is treated as rate-limit/temporary. The provider's own
-     * message text is never included in the thrown exception.
-     */
     private static void classifyControlResponse(JsonNode root, HistoryDepth requestedDepth) {
         if (root.has("Error Message")) {
             throw new MarketDataRequestRejectedException("alpha vantage rejected the request");
@@ -240,17 +166,6 @@ public final class AlphaVantageDailyParser {
         }
     }
 
-    // --- Meta Data ----------------------------------------------------------
-
-    /**
-     * Validates {@code Meta Data} against the exact documented Alpha
-     * Vantage shape — the same five properties every {@code
-     * TIME_SERIES_DAILY} response carries, no more and no fewer — in the
-     * same spirit as the top-level and per-bar strictness above. Only
-     * {@code "2. Symbol"} and {@code "4. Output Size"} are semantically
-     * checked; the other three are required to be present and textual, but
-     * their content is not otherwise validated.
-     */
     private static void validateMeta(JsonNode meta, String requestedSymbol, HistoryDepth requestedDepth) {
         for (String field : meta.propertyNames()) {
             if (!META_FIELDS.contains(field)) {
@@ -289,9 +204,6 @@ public final class AlphaVantageDailyParser {
         return value.asString();
     }
 
-    // --- Time Series (Daily) -------------------------------------------------
-
-    /** Returns bars in the same (newest-first) order the source document used. */
     private static List<Bar> parseTimeSeries(JsonNode timeSeries) {
         List<Map.Entry<String, JsonNode>> entries = new ArrayList<>(timeSeries.properties());
         if (entries.isEmpty()) {

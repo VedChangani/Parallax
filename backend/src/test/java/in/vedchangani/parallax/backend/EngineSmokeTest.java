@@ -22,11 +22,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-29 proof that the backend can actually reach the {@code engine} Maven
- * dependency and its Spring-managed {@link Backtester} bean: a tiny,
- * deterministic, in-memory run with no persistence and no HTTP involved.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class EngineSmokeTest {

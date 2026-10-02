@@ -24,26 +24,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
-/**
- * The D-30 JSON boundary for {@link StrategyDefinition}: a strict request
- * reader, a deterministic canonical encoder with its SHA-256 hash, and a
- * verified decoder for stored data. Stateless except for its own private,
- * explicitly configured Jackson {@link JsonMapper} — never Spring's global
- * mapper, whose defaults are lenient.
- *
- * <p>The canonical text is never produced by Jackson serialization. It is
- * written by a hand-written recursive emitter over the sealed DTO tree
- * (exhaustive {@code switch}, no {@code default}), always starting from
- * {@link StrategyDefinitionMapper#toDto} of an already-validated engine
- * object — never from a raw client request — so canonical output never
- * depends on Jackson's field ordering, and two requests that describe the
- * same definition with different formatting produce byte-identical
- * canonical text and the same hash.
- */
 @Component
 public final class StrategyDefinitionCodec {
 
-    /** The only schema version D-30 understands. Embedded as the document's own leading property (D-30 §6). */
     public static final int SCHEMA_VERSION = 1;
 
     private static final Pattern HASH_HEX = Pattern.compile("[0-9a-f]{64}");
@@ -63,13 +46,10 @@ public final class StrategyDefinitionCodec {
                 .enable(DeserializationFeature.FAIL_ON_NULL_CREATOR_PROPERTIES)
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                 .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
-                // Reject number/boolean -> String coercion (e.g. Constant.value / CashFraction.fraction
-                // must be JSON strings, never JSON numbers).
                 .withCoercionConfig(LogicalType.Textual, cfg -> cfg
                         .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
                         .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
                         .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail))
-                // Reject String/float -> int coercion (e.g. IndicatorRef.period must be a JSON integer).
                 .withCoercionConfig(LogicalType.Integer, cfg -> cfg
                         .setCoercion(CoercionInputShape.String, CoercionAction.Fail)
                         .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
@@ -77,40 +57,10 @@ public final class StrategyDefinitionCodec {
                 .build();
     }
 
-    // --- client request parsing ------------------------------------------------
-
-    /**
-     * Strictly parses a transport (request) document into a {@link
-     * StrategyDefinitionDto}. Unknown/duplicate/missing/null properties,
-     * trailing tokens, unknown type ids, wrong JSON types, and any
-     * coercion all fail. A transport document must not carry {@code
-     * schemaVersion} — since {@link StrategyDefinitionDto} has no such
-     * property, {@code FAIL_ON_UNKNOWN_PROPERTIES} rejects it like any
-     * other unknown field.
-     *
-     * @throws MalformedStrategyDefinitionException if {@code json} does not
-     *                                                strictly match the DTO shape
-     */
     public StrategyDefinitionDto parseRequest(String json) {
         return parseRequest(json, StrategyDefinitionDto.class);
     }
 
-    /**
-     * The D-31 REST envelope boundary (D-31 §8): the same strict reader and
-     * the same {@link MalformedStrategyDefinitionException} path/reason
-     * mapping as {@link #parseRequest(String)}, generalized to any request
-     * record — so an envelope such as {@code CreateStrategyRequest}
-     * (ordinary metadata fields alongside a nested {@link
-     * StrategyDefinitionDto}) is read by exactly one strict parser, never
-     * Spring's lenient global mapper. This is the only generalization: the
-     * strictness configuration, canonical encoding, hashing, and
-     * decode/integrity behavior are unchanged, and {@link
-     * #parseRequest(String)} now delegates here with {@code
-     * StrategyDefinitionDto.class}.
-     *
-     * @throws MalformedStrategyDefinitionException if {@code json} does not
-     *                                                strictly match {@code requestType}'s shape
-     */
     public <T extends Record> T parseRequest(String json, Class<T> requestType) {
         Objects.requireNonNull(json, "json must not be null");
         Objects.requireNonNull(requestType, "requestType must not be null");
@@ -121,22 +71,11 @@ public final class StrategyDefinitionCodec {
             throw new MalformedStrategyDefinitionException(pathOf(e), reasonOf(e));
         }
         if (value == null) {
-            // The JSON literal `null` deserializes to a Java null without Jackson
-            // throwing — reject it explicitly rather than let it surface as an NPE.
             throw new MalformedStrategyDefinitionException("", "wrong JSON type");
         }
         return value;
     }
 
-    // --- canonical encode --------------------------------------------------
-
-    /**
-     * Produces the canonical encoding of {@code definition} — always
-     * generated from the validated engine object via {@link
-     * StrategyDefinitionMapper#toDto}, never by reserializing a client
-     * request. Deterministic: equal definitions always produce
-     * byte-identical text and the same hash.
-     */
     public CanonicalStrategyDefinition encode(StrategyDefinition definition) {
         Objects.requireNonNull(definition, "definition must not be null");
         StrategyDefinitionDto dto = mapper.toDto(definition);
@@ -145,35 +84,6 @@ public final class StrategyDefinitionCodec {
         return new CanonicalStrategyDefinition(SCHEMA_VERSION, json, hash);
     }
 
-    // --- stored-data decode / integrity --------------------------------------
-
-    /**
-     * Decodes and verifies a stored strategy document (D-30 §8): the
-     * schema version must be {@value #SCHEMA_VERSION} and must match the
-     * document's own {@code schemaVersion}; the document must strictly
-     * parse and semantically map to an engine {@link StrategyDefinition};
-     * and re-encoding that definition canonically must hash to exactly
-     * {@code expectedSha256}. The comparison is against the
-     * <em>re-encoded</em> canonical text's hash, never against {@code
-     * documentJson} byte-for-byte — a database's {@code jsonb} rendering
-     * may legitimately reformat whitespace/property order without
-     * affecting integrity.
-     *
-     * @throws StrategyDefinitionIntegrityException on any failure — an
-     *                                                unsupported schema
-     *                                                version, a malformed
-     *                                                or semantically
-     *                                                invalid stored
-     *                                                document, a malformed
-     *                                                expected hash, or a
-     *                                                hash mismatch. Never a
-     *                                                client-facing
-     *                                                exception; this
-     *                                                always means stored
-     *                                                data corruption or a
-     *                                                bug, not a request
-     *                                                error.
-     */
     public StrategyDefinition decode(int schemaVersion, String documentJson, String expectedSha256) {
         Objects.requireNonNull(documentJson, "documentJson must not be null");
         Objects.requireNonNull(expectedSha256, "expectedSha256 must not be null");
@@ -190,8 +100,6 @@ public final class StrategyDefinitionCodec {
             throw new StrategyDefinitionIntegrityException("malformed stored strategy document", e);
         }
         if (stored == null) {
-            // The JSON literal `null` deserializes to a Java null without Jackson
-            // throwing — reject it explicitly rather than let it surface as an NPE.
             throw new StrategyDefinitionIntegrityException("malformed stored strategy document: JSON null");
         }
 
@@ -222,8 +130,6 @@ public final class StrategyDefinitionCodec {
 
         return definition;
     }
-
-    // --- canonical JSON emitter -----------------------------------------------
 
     private String writeCanonicalDocument(StrategyDefinitionDto dto) {
         StringBuilder sb = new StringBuilder(256);
@@ -298,13 +204,6 @@ public final class StrategyDefinitionCodec {
         }
     }
 
-    /**
-     * Appends a {@code Double.toString}/{@code BigDecimal.toPlainString}
-     * token verbatim. Every character such a token can ever contain
-     * ({@code -}, digits, {@code .}, {@code E}, {@code +}) requires no
-     * JSON escaping; this asserts that invariant rather than silently
-     * emitting an un-escaped character that did need escaping.
-     */
     private static void appendCanonicalToken(StringBuilder sb, String token) {
         for (int i = 0; i < token.length(); i++) {
             char c = token.charAt(i);
@@ -317,20 +216,15 @@ public final class StrategyDefinitionCodec {
         sb.append(token);
     }
 
-    // --- hashing -----------------------------------------------------------
-
     private static String sha256Hex(String canonicalJson) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(canonicalJson.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException e) {
-            // SHA-256 is a mandatory JDK algorithm (JLS platform guarantee); unreachable.
             throw new IllegalStateException("SHA-256 is not available", e);
         }
     }
-
-    // --- Jackson exception -> path/reason -------------------------------------
 
     private static String pathOf(JacksonException e) {
         List<JacksonException.Reference> path = e.getPath();
@@ -351,13 +245,6 @@ public final class StrategyDefinitionCodec {
         return sb.toString();
     }
 
-    /**
-     * Maps a Jackson parse failure to one of a fixed set of codec-owned,
-     * stable reason categories — never {@code e.getOriginalMessage()} or
-     * the exception's class name, either of which could expose Jackson's
-     * own wording or parser-internal diagnostics (including the target
-     * DTO class names Jackson's messages embed) directly to a client.
-     */
     private static String reasonOf(JacksonException e) {
         if (e instanceof UnrecognizedPropertyException) {
             return "unknown property";

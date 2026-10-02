@@ -10,10 +10,6 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-19 shape: {@code StrategyDefinition}'s components, and that
- * {@code PositionSizing} is closed to exactly {@code CashFraction}.
- */
 class StrategyDefinitionStructureTest {
 
     @Test

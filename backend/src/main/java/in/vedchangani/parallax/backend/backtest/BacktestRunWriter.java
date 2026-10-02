@@ -9,21 +9,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * The single transaction-scoped write operation for a completed backtest
- * run (D-34 Batch 2 §6, §15): inserts the immutable {@link BacktestRun}
- * parent, then every equity/fill/rejection child row, all in one short
- * {@code @Transactional} method. If any insert fails, the whole transaction
- * — parent included — rolls back: no partial run is ever left behind.
- *
- * <p>A separate, package-private {@code @Component} rather than a private
- * method on {@link BacktestRunService}: Spring's {@code @Transactional}
- * proxy cannot intercept a self-invoked method on the same bean, so the
- * transactional boundary is only real if it lives on a distinct bean that
- * {@link BacktestRunService} calls through (D-34 Batch 2 §15). No network
- * or provider I/O of any kind happens here — every argument is already an
- * in-memory, already-computed value.
- */
 @Component
 class BacktestRunWriter {
 
@@ -60,11 +45,6 @@ class BacktestRunWriter {
         return saved;
     }
 
-    /**
-     * Preserves the engine's own list order exactly when assigning each
-     * rejection's {@code seq} (1-based, matching append order) — never
-     * sorted or otherwise reordered first.
-     */
     private static List<BacktestRejectionRow> toRejectionRows(List<OrderRejection> rejections) {
         List<BacktestRejectionRow> rows = new ArrayList<>(rejections.size());
         for (int i = 0; i < rejections.size(); i++) {

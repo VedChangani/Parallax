@@ -21,33 +21,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalDouble;
 
-/**
- * JPA entity for {@code backtest_run} (D-34 Batch 1): the immutable,
- * insert-once parent row of one completed backtest. There is no run
- * status column — a row is only ever written once a run has already
- * finished (CLAUDE.md: runs are synchronous) — and, like D-31's {@code
- * StrategyVersion}/D-32's {@code DatasetVersion}, immutability is
- * backstopped at four layers: the database's own row/statement triggers,
- * {@link Immutable} plus {@code updatable=false} here, no setters, and no
- * repository update/delete path.
- *
- * <p>Strategy and dataset identity are each plain foreign-key columns, not
- * JPA associations, tied to their immutable version by a composite foreign
- * key at the database level — {@code (strategy_id, strategy_version_number,
- * strategy_definition_hash) -> strategy_version(...)}, and likewise for the
- * dataset — so a persisted run can never reference a version whose hash
- * disagrees with what is actually stored. Owner composite foreign keys onto
- * {@code strategy}/{@code dataset} additionally guarantee the referenced
- * strategy/dataset belong to the same owner as the run.
- *
- * <p>Built directly from already-computed, already-validated engine values
- * — {@link BacktestResult}, {@link PerformanceMetrics}, {@link
- * BuyAndHoldBenchmark} — never by invoking {@code Backtester} itself, which
- * is later batches' orchestration concern. Every monetary/ledger value
- * stays the exact {@link BigDecimal} the engine produced; every metric
- * stays a {@code double}/{@code OptionalDouble}, never routed through a
- * lossy conversion.
- */
 @Entity
 @Table(name = "backtest_run")
 @Immutable
@@ -149,18 +122,8 @@ public class BacktestRun {
     private Instant createdAt;
 
     protected BacktestRun() {
-        // JPA
     }
 
-    /**
-     * The only constructor: every result/metrics/benchmark-derived column
-     * is read directly from already-computed engine objects, so the stored
-     * row can never drift from what those objects actually hold. {@code
-     * strategyId}/{@code strategyVersionNumber}/{@code strategyDefinitionHash}
-     * and the equivalent dataset triple are supplied by the caller (a later
-     * batch's orchestration), since {@code BacktestResult} carries neither
-     * a strategy/dataset id nor a version number.
-     */
     BacktestRun(long ownerId, long strategyId, int strategyVersionNumber, String strategyDefinitionHash,
                 long datasetId, int datasetVersionNumber, String datasetContentHash, int engineSemanticsVersion,
                 BacktestResult result, PerformanceMetrics metrics, BuyAndHoldBenchmark benchmark) {

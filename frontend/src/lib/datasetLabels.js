@@ -1,9 +1,3 @@
-/**
- * Shared user-facing labels for backend dataset-version enums
- * (DatasetVersionResponse#source / #adjustmentBasis), so every page
- * presents the same terminology instead of each defining its own copy.
- */
-
 export const SOURCE_LABELS = {
   CSV_UPLOAD: 'CSV upload',
   ALPHA_VANTAGE: 'Alpha Vantage',

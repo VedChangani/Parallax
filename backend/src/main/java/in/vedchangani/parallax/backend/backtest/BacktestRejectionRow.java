@@ -7,18 +7,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * The immutable row shape for one {@code backtest_rejection} record (D-34
- * Batch 1). There is deliberately no {@code signalType} field: both
- * {@link OrderRejection} cases require an {@code ENTER} signal (D-21), so
- * the column would always be constant.
- *
- * <p>{@code orderId}/{@code executionDate}/{@code quantity}/{@code
- * requiredCash}/{@code availableCash} are {@code null} for {@link
- * OrderRejection.ZeroQuantity} (no {@code Order} was ever created) and
- * all non-null for {@link OrderRejection.InsufficientCash} — matching the
- * database's own {@code ck_backtest_rejection_shape} CHECK exactly.
- */
 record BacktestRejectionRow(int seq, String reason, Integer orderId, LocalDate executionDate, Long quantity,
                              BigDecimal requiredCash, BigDecimal availableCash, LocalDate signalDate,
                              BigDecimal signalClose, String signalIndicatorsJson) {

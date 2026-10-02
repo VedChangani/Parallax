@@ -1,9 +1,3 @@
-/**
- * @param {object} props
- * @param {string} props.title
- * @param {string} [props.description]
- * @param {import('react').ReactNode} [props.actions]
- */
 export function PageHeader({ title, description, actions }) {
   return (
     <div className="mb-8 flex items-start justify-between gap-4 border-b border-border pb-6">

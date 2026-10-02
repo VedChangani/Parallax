@@ -9,20 +9,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Objects;
 
-/**
- * D-38 self-registration: the only write path for creating a new {@link
- * AppUser}. Reuses {@link PasswordPolicy} unchanged from the D-37 claim
- * flow, and mirrors {@code StrategyService.createStrategy}'s exact
- * duplicate-detection idiom — a {@code saveAndFlush} inside a try block,
- * matched against the actual {@code uq_app_user_username} constraint name,
- * never a racy {@code exists()} pre-check, which cannot see a concurrent
- * writer between the check and the insert.
- *
- * <p>Never logs the caller in: {@code AuthController} calls this and
- * returns {@code 201}, and the frontend performs a separate {@code POST
- * /api/auth/login} afterward, so session creation has exactly one code
- * path (D-37's {@code formLogin}).
- */
 @Service
 public class UserRegistrationService {
 
@@ -38,15 +24,6 @@ public class UserRegistrationService {
         this.registrationEnabled = registrationEnabled;
     }
 
-    /**
-     * @throws RegistrationDisabledException if {@code
-     *     parallax.auth.registration-enabled} is {@code false} (403)
-     * @throws WeakPasswordException if {@code password} fails {@link
-     *     PasswordPolicy} (400)
-     * @throws DuplicateUsernameException if {@code username} is already
-     *     taken (409) — decided by the database constraint, not a
-     *     pre-check
-     */
     @Transactional
     public void register(String username, String password) {
         Objects.requireNonNull(username, "username must not be null");
@@ -72,11 +49,6 @@ public class UserRegistrationService {
         }
     }
 
-    /**
-     * Matches a failed write against a specific database constraint name,
-     * never SQL state or message text alone where a constraint name is
-     * available (mirrors {@code StrategyService}'s own helper exactly).
-     */
     private static boolean isConstraint(DataIntegrityViolationException e, String constraintName) {
         Throwable cause = e.getCause();
         if (cause instanceof ConstraintViolationException cve && cve.getConstraintName() != null) {

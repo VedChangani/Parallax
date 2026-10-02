@@ -1,39 +1,12 @@
 import { isValidDecimalString } from '../../lib/decimal.js';
 
-/**
- * The pure mapping layer between the Strategy Builder's editable UI state
- * (a "builder node" tree) and the backend's transport
- * {@link import('../../api/types.js').StrategyDefinitionDto} tree (D-30/D-31).
- *
- * A builder node is *exactly* the corresponding DTO shape (same `type`
- * discriminator values: `'compare' | 'all' | 'any'`, `'indicator' | 'close' |
- * 'constant'`, `'cashFraction'`, same field names) plus one addition: a
- * stable `id` used only for React keys/editing, stripped by every `*ToDto`
- * function and never sent to the backend. This is deliberate — it is not a
- * second, incompatible strategy model, just the DTO tree with an editing
- * handle attached.
- *
- * The one structural difference is `Operand.Indicator.period`: the DTO
- * carries it as a JSON integer, but the builder keeps it as the exact text
- * the user typed (a string) so a partially-edited value (e.g. an empty
- * field, or "07") never gets silently coerced mid-edit. It is parsed with
- * `Number.parseInt` only at `operandToDto` time.
- */
-
 let nextIdValue = 0;
 
-/** @param {string} prefix */
 function nextId(prefix) {
   nextIdValue += 1;
   return `${prefix}-${nextIdValue}`;
 }
 
-// --- node factories --------------------------------------------------------
-
-/**
- * @param {import('../../api/types.js').IndicatorTypeDto} [indicator]
- * @param {string} [period]
- */
 export function newIndicatorOperand(indicator = 'SMA', period = '20') {
   return { id: nextId('operand'), type: 'indicator', indicator, period };
 }
@@ -42,7 +15,6 @@ export function newCloseOperand() {
   return { id: nextId('operand'), type: 'close' };
 }
 
-/** @param {string} [value] */
 export function newConstantOperand(value = '') {
   return { id: nextId('operand'), type: 'constant', value };
 }
@@ -57,17 +29,14 @@ export function newCompareCondition() {
   };
 }
 
-/** @param {'all' | 'any'} type */
 export function newGroupCondition(type) {
   return { id: nextId('condition'), type, conditions: [newCompareCondition()] };
 }
 
-/** @param {string} [fraction] */
 export function newCashFractionPositionSizing(fraction = '1') {
   return { id: nextId('sizing'), type: 'cashFraction', fraction };
 }
 
-/** A fresh, fully-editable starting definition for "New strategy". */
 export function newDefinitionState() {
   return {
     entryCondition: newCompareCondition(),
@@ -76,9 +45,6 @@ export function newDefinitionState() {
   };
 }
 
-// --- builder node -> DTO -----------------------------------------------------
-
-/** @param {object} node @returns {import('../../api/types.js').OperandDto} */
 export function operandToDto(node) {
   switch (node.type) {
     case 'indicator':
@@ -92,7 +58,6 @@ export function operandToDto(node) {
   }
 }
 
-/** @param {object} node @returns {import('../../api/types.js').ConditionDto} */
 export function conditionToDto(node) {
   switch (node.type) {
     case 'compare':
@@ -106,7 +71,6 @@ export function conditionToDto(node) {
   }
 }
 
-/** @param {object} node @returns {import('../../api/types.js').PositionSizingDto} */
 export function positionSizingToDto(node) {
   switch (node.type) {
     case 'cashFraction':
@@ -116,10 +80,6 @@ export function positionSizingToDto(node) {
   }
 }
 
-/**
- * @param {{entryCondition: object, exitCondition: object, positionSizing: object}} state
- * @returns {import('../../api/types.js').StrategyDefinitionDto}
- */
 export function definitionToDto(state) {
   return {
     entryCondition: conditionToDto(state.entryCondition),
@@ -128,9 +88,6 @@ export function definitionToDto(state) {
   };
 }
 
-// --- DTO -> builder node -----------------------------------------------------
-
-/** @param {import('../../api/types.js').OperandDto} dto */
 export function dtoToOperand(dto) {
   switch (dto.type) {
     case 'indicator':
@@ -144,7 +101,6 @@ export function dtoToOperand(dto) {
   }
 }
 
-/** @param {import('../../api/types.js').ConditionDto} dto */
 export function dtoToCondition(dto) {
   switch (dto.type) {
     case 'compare':
@@ -164,7 +120,6 @@ export function dtoToCondition(dto) {
   }
 }
 
-/** @param {import('../../api/types.js').PositionSizingDto} dto */
 export function dtoToPositionSizing(dto) {
   switch (dto.type) {
     case 'cashFraction':
@@ -174,7 +129,6 @@ export function dtoToPositionSizing(dto) {
   }
 }
 
-/** @param {import('../../api/types.js').StrategyDefinitionDto} dto */
 export function dtoToDefinitionState(dto) {
   return {
     entryCondition: dtoToCondition(dto.entryCondition),
@@ -183,15 +137,6 @@ export function dtoToDefinitionState(dto) {
   };
 }
 
-// --- client-side validation --------------------------------------------------
-//
-// Deliberately minimal (D-31/D-34's own convention): only checks the engine
-// has no vocabulary for elsewhere (decimal syntax) and the one bound that is
-// safe to mirror client-side (indicator period). Every other semantic rule
-// (CashFraction > 0 and <= 1, Constant underflow, non-empty groups already
-// enforced structurally by the editor UI) is left to the backend.
-
-/** @param {object} operand @returns {string | undefined} */
 export function operandError(operand) {
   if (operand.type === 'indicator') {
     const text = String(operand.period ?? '').trim();
@@ -208,7 +153,6 @@ export function operandError(operand) {
   return undefined;
 }
 
-/** @param {object} sizing @returns {string | undefined} */
 export function positionSizingError(sizing) {
   if (sizing.type === 'cashFraction') {
     if (!isValidDecimalString(sizing.fraction)) return 'Enter a valid percentage.';
@@ -217,7 +161,6 @@ export function positionSizingError(sizing) {
   return undefined;
 }
 
-/** @param {object} condition @returns {boolean} whether any operand beneath `condition` fails {@link operandError} */
 export function conditionHasErrors(condition) {
   if (condition.type === 'compare') {
     return Boolean(operandError(condition.left)) || Boolean(operandError(condition.right));
@@ -225,10 +168,6 @@ export function conditionHasErrors(condition) {
   return condition.conditions.some(conditionHasErrors);
 }
 
-/**
- * @param {{entryCondition: object, exitCondition: object, positionSizing: object}} state
- * @returns {boolean}
- */
 export function definitionHasErrors(state) {
   return (
     conditionHasErrors(state.entryCondition) ||
@@ -237,26 +176,8 @@ export function definitionHasErrors(state) {
   );
 }
 
-// --- cash fraction <-> percent display --------------------------------------
-//
-// The builder's position-sizing field is edited as a percentage, but the
-// underlying node state always stores the exact transport fraction string
-// (D-30 §12/§24) - the percent shown is derived from it for display, and a
-// keystroke converts back to a fraction immediately, so the node tree stays
-// exactly DTO-shaped at every instant, not just at submission time.
-
 const PLAIN_DECIMAL = /^-?\d+(\.\d+)?$/;
 
-/**
- * Shifts a plain (non-exponent) decimal string's point `places` positions to
- * the right (negative `places` shifts left), as exact string/digit
- * manipulation - never a floating-point multiply/divide, so "1" -> "100"
- * and "100" -> "1" round-trip exactly rather than via `1 * 100` /
- * `100 / 100` floating-point arithmetic.
- *
- * @param {string} text
- * @param {number} places
- */
 function moveDecimalPoint(text, places) {
   const negative = text.startsWith('-');
   const unsigned = negative ? text.slice(1) : text;
@@ -280,11 +201,6 @@ function moveDecimalPoint(text, places) {
   return negative && result !== '0' ? `-${result}` : result;
 }
 
-/**
- * @param {string} text
- * @param {number} places
- * @param {(value: number) => number} floatFallback
- */
 function shiftDecimalText(text, places, floatFallback) {
   if (typeof text !== 'string' || text.trim() === '') return '';
   const trimmed = text.trim();
@@ -293,29 +209,17 @@ function shiftDecimalText(text, places, floatFallback) {
   return Number.isFinite(num) ? String(num) : '';
 }
 
-/** @param {string} fraction - the exact transport fraction string @returns {string} a percent string for display */
 export function fractionToPercentText(fraction) {
   return shiftDecimalText(fraction, 2, (n) => n * 100);
 }
 
-/** @param {string} percentText - the percent text the user typed @returns {string} the equivalent transport fraction string */
 export function percentTextToFraction(percentText) {
   return shiftDecimalText(percentText, -2, (n) => n / 100);
 }
 
-// --- indicator warm-up lookback (Phase 10 Batch 4, I-3) ---------------------
-//
-// A presentation-only mirror of the engine's own warm-up rule (D-8;
-// architecture.md §8: SMA(n)/EMA(n)/ATR(n) ready after n bars, RSI(n)/ROC(n) after n+1).
-// Used only to warn the New Backtest form when a strategy's own indicators
-// would have no lookback bars to warm up on - never to compute an actual
-// date, never sent to the backend, and never a substitute for the engine's
-// own firstEvaluableDate.
-
 const EXTRA_WARMUP_CLOSE = 1;
 const EXTRA_WARMUP_INDICATORS = new Set(['RSI', 'ROC']);
 
-/** @param {object} operand - an OperandDto or builder node @returns {number} */
 function operandLookbackBars(operand) {
   if (operand.type !== 'indicator') return 0;
   const period = Number(operand.period);
@@ -323,7 +227,6 @@ function operandLookbackBars(operand) {
   return EXTRA_WARMUP_INDICATORS.has(operand.indicator) ? period + EXTRA_WARMUP_CLOSE : period;
 }
 
-/** @param {object} condition - a ConditionDto or builder node @returns {number} */
 function conditionLookbackBars(condition) {
   if (condition.type === 'compare') {
     return Math.max(operandLookbackBars(condition.left), operandLookbackBars(condition.right));
@@ -331,15 +234,6 @@ function conditionLookbackBars(condition) {
   return condition.conditions.reduce((max, child) => Math.max(max, conditionLookbackBars(child)), 0);
 }
 
-/**
- * The largest number of prior closes any indicator referenced by
- * `definition`'s entry/exit conditions needs before it becomes ready. `0`
- * when the strategy references no indicator at all (e.g. Close-only
- * conditions).
- *
- * @param {import('../../api/types.js').StrategyDefinitionDto} definition
- * @returns {number}
- */
 export function requiredLookbackBars(definition) {
   return Math.max(conditionLookbackBars(definition.entryCondition), conditionLookbackBars(definition.exitCondition));
 }

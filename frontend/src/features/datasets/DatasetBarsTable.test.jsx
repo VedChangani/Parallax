@@ -41,7 +41,7 @@ describe('DatasetBarsTable', () => {
     render(<DatasetBarsTable datasetId={7} versionNumber={2} />);
 
     expect(screen.getByText('Loading bars…')).toBeTruthy();
-    expect(await screen.findAllByRole('row')).toHaveLength(4); // header + 3 data rows
+    expect(await screen.findAllByRole('row')).toHaveLength(4);
   });
 
   it('preserves exact OHLC strings, never reformatting/re-parsing them', async () => {
@@ -56,7 +56,7 @@ describe('DatasetBarsTable', () => {
     render(<DatasetBarsTable datasetId={7} versionNumber={2} />);
 
     const firstPageRows = await screen.findAllByRole('row');
-    expect(firstPageRows).toHaveLength(101); // header + 100 data rows
+    expect(firstPageRows).toHaveLength(101);
     expect(screen.getByText('Page 1 of 3 · 250 bars')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
@@ -65,7 +65,7 @@ describe('DatasetBarsTable', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Last' }));
     expect(await screen.findByText('Page 3 of 3 · 250 bars')).toBeTruthy();
-    expect(screen.getAllByRole('row')).toHaveLength(51); // header + 50 remaining rows
+    expect(screen.getAllByRole('row')).toHaveLength(51);
     expect(screen.getByRole('button', { name: 'Next' }).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'First' }));

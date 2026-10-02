@@ -10,23 +10,6 @@ const inputClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
-/**
- * The "Add market" form (backend: `POST /api/datasets`, D-32). User-facing
- * "Display name"/"Symbol" map directly onto the backend's required
- * `name`/`symbol` fields - no field is added or removed, only relabeled.
- *
- * When "Load from Alpha Vantage now" is selected, a successful market
- * creation is immediately followed by an Alpha Vantage import
- * (`POST /api/datasets/{id}/versions/alpha-vantage`) so the common path
- * (create + acquire data) feels like one action. If that second call
- * fails, the market still exists - `onCreated` is still called, carrying
- * the import failure so the caller can surface it on the market's own
- * page rather than losing it.
- *
- * @param {object} props
- * @param {(dataset: import('../../api/types.js').DatasetResponse, info: {importError?: string}) => void} props.onCreated
- * @param {string} [props.className]
- */
 export function DatasetCreateForm({ onCreated, className = '' }) {
   const [name, setName] = useState('');
   const [symbol, setSymbol] = useState('');

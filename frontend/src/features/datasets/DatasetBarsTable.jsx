@@ -8,19 +8,6 @@ import { useApiResource } from '../../hooks/useApiResource.js';
 
 const PAGE_SIZE = 100;
 
-/**
- * The on-demand bars table for one dataset version (D-32
- * `GET /api/datasets/{id}/versions/{version}/bars`, unpaginated on the
- * backend). Only mounted once the caller's "View bars" action is taken -
- * mounting this component is what triggers the fetch, so a version page
- * that never opens bars never calls this endpoint. Bars are an immutable
- * resource, so the fetch is session-cached; pagination below is entirely
- * client-side over the already-fetched array.
- *
- * @param {object} props
- * @param {number} props.datasetId
- * @param {number} props.versionNumber
- */
 export function DatasetBarsTable({ datasetId, versionNumber }) {
   const [page, setPage] = useState(0);
 

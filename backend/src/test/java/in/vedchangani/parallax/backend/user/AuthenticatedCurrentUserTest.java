@@ -10,13 +10,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/**
- * Plain unit tests for {@link AuthenticatedCurrentUser} (D-37): no Spring
- * context, {@link SecurityContextHolder} manipulated directly, exercising
- * exactly the two defensive branches a properly configured {@code
- * SecurityConfig} should make unreachable in production, plus the normal
- * success path.
- */
 class AuthenticatedCurrentUserTest {
 
     private final AuthenticatedCurrentUser currentUser = new AuthenticatedCurrentUser();

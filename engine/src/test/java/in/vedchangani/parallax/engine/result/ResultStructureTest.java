@@ -19,13 +19,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-24 shapes: {@code BacktestConfig}, {@code Trade} (sealed to
- * exactly {@code Open}/{@code Closed}), and {@code BacktestResult}. None
- * of these types may hold a {@code Portfolio}, {@code Order},
- * {@code BarSeries}, runtime {@code Indicator}, or other mutable runtime
- * state.
- */
 class ResultStructureTest {
 
     private static final Set<Class<?>> FORBIDDEN =

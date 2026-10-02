@@ -45,16 +45,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * D-33 Batch 4 REST-boundary proof (MockMvc, real PostgreSQL via
- * Testcontainers): {@code POST /api/datasets/{id}/versions/alpha-vantage}'s
- * request/response contract, strict-JSON validation, ownership, and the
- * provider error-mapping table. {@link CurrentUser} and {@link
- * MarketDataProvider} are both overridden with {@code @MockitoBean} — the
- * real Alpha Vantage HTTP adapter is never invoked. Mirrors {@code
- * DatasetControllerIT}'s own style; CSV upload behavior itself is
- * unaffected and not retested here.
- */
 @SpringBootTest
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, AuthenticatedMockMvcConfig.class})
@@ -79,8 +69,6 @@ class DatasetAlphaVantageControllerIT {
         owner = TestUsers.create(jdbcTemplate, "avctrl");
         when(currentUser.id()).thenReturn(owner);
     }
-
-    // --- happy path ------------------------------------------------------------
 
     @Test
     void compactImportReturns201WithExpectedMetadataAndPersistedBars() throws Exception {
@@ -107,8 +95,6 @@ class DatasetAlphaVantageControllerIT {
                 .andExpect(jsonPath("$.bars[0].volume").value(1000));
     }
 
-    // --- FULL --------------------------------------------------------------------
-
     @Test
     void fullImportReachesProviderWithFullDepthAndMatchingSourceDetail() throws Exception {
         long id = createDataset();
@@ -122,8 +108,6 @@ class DatasetAlphaVantageControllerIT {
 
         verify(marketDataProvider).fetchDailyBars("AAPL", HistoryDepth.FULL);
     }
-
-    // --- validation ----------------------------------------------------------------
 
     @Test
     void missingHistoryDepthIsRejected() throws Exception {
@@ -169,8 +153,6 @@ class DatasetAlphaVantageControllerIT {
         verifyNoInteractions(marketDataProvider);
     }
 
-    // --- ownership ------------------------------------------------------------------
-
     @Test
     void anotherOwnersDatasetReturns404AndProviderIsNeverCalled() throws Exception {
         long id = createDataset();
@@ -183,8 +165,6 @@ class DatasetAlphaVantageControllerIT {
 
         verify(marketDataProvider, never()).fetchDailyBars(any(), any());
     }
-
-    // --- provider/API failures ------------------------------------------------------
 
     @Test
     void missingApiKeyReturns503AndCreatesNoVersion() throws Exception {
@@ -258,8 +238,6 @@ class DatasetAlphaVantageControllerIT {
         verify(marketDataProvider, never()).fetchDailyBars(any(), eq(HistoryDepth.COMPACT));
     }
 
-    // --- integrity ------------------------------------------------------------------
-
     @Test
     void persistedVersionIsVerifiableThroughBarsEndpoint() throws Exception {
         long id = createDataset();
@@ -275,8 +253,6 @@ class DatasetAlphaVantageControllerIT {
                 .andExpect(jsonPath("$.bars.length()").value(2))
                 .andExpect(jsonPath("$.contentHash").value(matchesPattern("[0-9a-f]{64}")));
     }
-
-    // --- security: no internal/secret details leaked ---------------------------------
 
     @Test
     void errorResponseNeverExposesApiKeyOrInternalDetails() throws Exception {
@@ -296,8 +272,6 @@ class DatasetAlphaVantageControllerIT {
         assertFalse(body.contains("Exception"));
         assertFalse(body.toLowerCase().contains("stacktrace"));
     }
-
-    // --- helpers ----------------------------------------------------------------
 
     private long createDataset() throws Exception {
         MvcResult created = mockMvc.perform(post("/api/datasets")

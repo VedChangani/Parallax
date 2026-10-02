@@ -4,34 +4,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * The immutable configuration for one backtest run: starting capital,
- * per-fill commission, adverse slippage, and the inclusive date range to
- * evaluate.
- *
- * <p>{@code initialCapital} must be strictly positive — a zero-capital
- * run could never trade, and it is the denominator for every future
- * return calculation. This is stricter than {@code Portfolio}, which
- * still allows zero initial cash as a runtime value; that is not
- * weakened, this configuration type is simply stricter about what a
- * meaningful backtest request looks like.
- *
- * <p>{@code commissionPerFill} is a fixed monetary amount charged once
- * per {@code Fill}, the same for BUY and SELL — never a percentage or a
- * per-share charge.
- *
- * <p>{@code slippageRate} is the adverse fraction applied to a bar's
- * open: {@code BUY -> open * (1 + slippageRate)},
- * {@code SELL -> open * (1 - slippageRate)}. It must be strictly less
- * than 1 so that a SELL fill price is always positive for any valid
- * (positive) open.
- *
- * <p>Every {@link BigDecimal} component is canonicalized at construction
- * ({@link BigDecimal#stripTrailingZeros()}, with scale clamped to a
- * minimum of 0) so that equal configurations — for example
- * {@code 10000} and {@code 10000.00} — are equal values. This is exact:
- * no rounding, no {@link java.math.MathContext}.
- */
 public record BacktestConfig(BigDecimal initialCapital, BigDecimal commissionPerFill,
                               BigDecimal slippageRate, LocalDate startDate, LocalDate endDate) {
 

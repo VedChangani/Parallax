@@ -15,11 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * D-32 ownership proof (D-32 §15), against real PostgreSQL: every dataset
- * operation is owner-scoped, using two independent {@code app_user} rows.
- * Mirrors D-31's {@code StrategyOwnershipIT}.
- */
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
 class DatasetOwnershipIT {

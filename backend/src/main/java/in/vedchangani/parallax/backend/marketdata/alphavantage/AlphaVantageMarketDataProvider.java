@@ -18,19 +18,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
-/**
- * Blocking JDK {@link HttpClient} adapter fetching Alpha Vantage {@code
- * TIME_SERIES_DAILY} data. This class owns HTTP transport and response
- * classification only — {@link AlphaVantageDailyParser} remains the sole
- * authority for parsing/validating provider JSON (D-33 Batch 1); its
- * exceptions propagate unchanged, never wrapped.
- *
- * <p>No retries, no throttling, no async behavior — a single blocking
- * request/response cycle per call, matching the D-33 Batch 2 contract.
- * Redirects are never followed: an Alpha Vantage redirect is not a
- * documented success path, and following one silently would risk sending
- * the API key to an unintended host.
- */
 public final class AlphaVantageMarketDataProvider implements MarketDataProvider {
 
     private static final String FUNCTION = "TIME_SERIES_DAILY";
@@ -48,7 +35,6 @@ public final class AlphaVantageMarketDataProvider implements MarketDataProvider 
                 .build());
     }
 
-    /** Test seam: injects a caller-built {@link HttpClient} (e.g. shorter timeouts). */
     AlphaVantageMarketDataProvider(AlphaVantageProperties properties, HttpClient httpClient) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient must not be null");
@@ -94,14 +80,6 @@ public final class AlphaVantageMarketDataProvider implements MarketDataProvider 
         }
     }
 
-    /**
-     * Builds the request URI by concatenating the already percent-encoded
-     * query onto {@code baseUrl} directly, rather than via the multi-argument
-     * {@link URI} constructor: that constructor treats its {@code query}
-     * argument as unencoded text and quotes it again, which would corrupt an
-     * already-encoded {@code %XX} sequence (e.g. turning a symbol's encoded
-     * {@code &} into a literal one).
-     */
     private URI buildUri(String symbol, HistoryDepth depth, String apiKey) {
         String outputSize = depth == HistoryDepth.COMPACT ? OUTPUT_SIZE_COMPACT : OUTPUT_SIZE_FULL;
         String query = "function=" + FUNCTION
@@ -131,10 +109,6 @@ public final class AlphaVantageMarketDataProvider implements MarketDataProvider 
         }
     }
 
-    /**
-     * Reads at most {@code maxBytes + 1} bytes so an oversized response is
-     * rejected deterministically without buffering an unbounded body.
-     */
     private static String readBounded(InputStream in, long maxBytes) throws IOException {
         long limit = maxBytes + 1;
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();

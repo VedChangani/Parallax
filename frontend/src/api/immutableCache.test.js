@@ -47,7 +47,7 @@ describe('immutableCache', () => {
 
     it('drops a write captured from a since-superseded epoch (a stale response after a login/logout/401)', () => {
       const staleEpoch = immutableCache.currentEpoch();
-      immutableCache.bumpEpoch(); // simulates a login/logout/401 that happened while the fetch was in flight
+      immutableCache.bumpEpoch();
 
       immutableCache.set('/api/strategies/1/versions/1', { versionNumber: 1 }, staleEpoch);
 

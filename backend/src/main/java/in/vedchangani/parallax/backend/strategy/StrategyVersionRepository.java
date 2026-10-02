@@ -7,13 +7,6 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Owner-scoped repository access for {@link StrategyVersion} (D-31). There
- * is no {@code owner_id} column on {@code strategy_version} — ownership is
- * inherited through a join to {@link Strategy}, enforced here rather than by
- * loading a version and checking ownership afterward. No update or delete
- * method exists (D-31 §12: immutability).
- */
 public interface StrategyVersionRepository extends Repository<StrategyVersion, Long> {
 
     <S extends StrategyVersion> S saveAndFlush(S version);

@@ -7,12 +7,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * The immutable row shape for one {@code backtest_fill} record (D-34
- * Batch 1). Deliberately does not carry {@code side} or {@code
- * slippageCost}: both are derived from the engine {@link Fill} (D-21),
- * exactly as {@code Fill} itself never stores them.
- */
 record BacktestFillRow(int orderId, LocalDate fillDate, long quantity, BigDecimal referenceOpen,
                         BigDecimal fillPrice, BigDecimal commission, String signalType, LocalDate signalDate,
                         BigDecimal signalClose, String signalIndicatorsJson) {

@@ -4,9 +4,6 @@
   --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, 'SFMono-Regular', Consolas, monospace;
 
-  /* Cool-neutral surfaces: the page reads as a distinct layer below
-     white/elevated surfaces (nav, tables, panels), giving depth without
-     relying on heavy shadows. */
   --color-page: #f3f4f7;
   --color-surface: #ffffff;
   --color-surface-hover: #ebedf1;
@@ -16,11 +13,9 @@
   --color-ink-secondary: #4b5060;
   --color-ink-muted: #868c9c;
 
-  /* One restrained accent - guides interaction, never dominates. */
   --color-accent: #1d4ed8;
   --color-accent-hover: #1740b0;
 
-  /* Restrained semantic colors, used sparingly. */
   --color-success: #15803d;
   --color-warning: #b45309;
   --color-danger: #b91c1c;
@@ -33,8 +28,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Equity chart (uPlot) - restrained integration with the Parallax type
-   system; uPlot itself owns the canvas rendering and default class names. */
 .parallax-equity-chart .u-legend,
 .parallax-drawdown-chart .u-legend {
   font-family: var(--font-sans);

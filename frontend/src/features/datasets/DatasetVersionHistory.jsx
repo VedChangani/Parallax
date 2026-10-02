@@ -5,15 +5,6 @@ import { DataTable } from '../../components/DataTable.jsx';
 import { SOURCE_LABELS } from '../../lib/datasetLabels.js';
 import { formatInstantDate } from '../../lib/format.js';
 
-/**
- * "Data snapshots" - the user-facing name for the backend's DatasetVersion
- * history (D-32). Every value shown comes directly from the actual
- * DatasetVersionResponse fields; nothing is recomputed.
- *
- * @param {object} props
- * @param {number} props.datasetId
- * @param {import('../../api/types.js').DatasetVersionResponse[]} props.versions
- */
 export function DatasetVersionHistory({ datasetId, versions }) {
   const sorted = [...versions].sort((a, b) => b.versionNumber - a.versionNumber);
 

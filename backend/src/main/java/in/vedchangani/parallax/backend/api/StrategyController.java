@@ -25,20 +25,6 @@ import java.net.URI;
 import java.util.List;
 import java.util.Set;
 
-/**
- * The D-31 Strategy REST API. Every strategy-definition-bearing request body
- * is read exactly once, by the D-30 {@link StrategyDefinitionCodec}'s own
- * strict {@code JsonMapper} — never Spring's global JSON binding (D-31 §8).
- * Handlers therefore declare {@code @RequestBody String body} rather than a
- * typed DTO parameter, and parse it themselves via {@link
- * StrategyDefinitionCodec#parseRequest(String, Class)}. Bean Validation on
- * the plain envelope fields ({@code name}/{@code description}) is invoked
- * explicitly, since {@code @Valid} cannot apply to a raw {@code String}
- * parameter.
- *
- * <p>The owner is always {@link CurrentUser#id()} — never accepted from a
- * request. No DELETE or PUT endpoint exists (D-31 §7).
- */
 @RestController
 @RequestMapping("/api/strategies")
 public class StrategyController {
@@ -118,11 +104,6 @@ public class StrategyController {
         return StrategyVersionResponse.of(detail, mapper);
     }
 
-    /**
-     * Explicit Bean Validation of an envelope record already produced by the
-     * strict D-30 reader. {@code @Valid} cannot be applied to a raw {@code
-     * String} request-body parameter, so this substitutes for it.
-     */
     private <T> void validate(T request) {
         Set<ConstraintViolation<T>> violations = validator.validate(request);
         if (!violations.isEmpty()) {

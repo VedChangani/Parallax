@@ -10,17 +10,6 @@ const inputClasses =
   'mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-ink ' +
   'focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30';
 
-/**
- * Edits only a strategy's mutable metadata (`PATCH /api/strategies/{id}`,
- * D-31 §18) - name and description. Never touches any version: the
- * strategy id, latestVersionNumber, and every version's definition/hash
- * are not exposed here as editable fields.
- *
- * @param {object} props
- * @param {import('../../api/types.js').StrategyResponse} props.strategy
- * @param {(updated: import('../../api/types.js').StrategyResponse) => void} props.onSaved
- * @param {() => void} props.onCancel
- */
 export function StrategyMetadataEditForm({ strategy, onSaved, onCancel }) {
   const [name, setName] = useState(strategy.name);
   const [description, setDescription] = useState(strategy.description);

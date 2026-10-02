@@ -1,14 +1,6 @@
 import { ConditionView } from './ConditionView.jsx';
 import { describePositionSizing } from './definitionText.js';
 
-/**
- * The live, read-only human-readable rendering of a definition tree (D-31
- * §21) - Entry / Exit / Position sizing, generated straight from builder
- * state. Presentation only; never evaluates the strategy.
- *
- * @param {object} props
- * @param {{entryCondition: object, exitCondition: object, positionSizing: object}} props.definition
- */
 export function DefinitionPreview({ definition }) {
   return (
     <div className="space-y-5">

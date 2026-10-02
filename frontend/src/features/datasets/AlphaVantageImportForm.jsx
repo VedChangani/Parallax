@@ -4,16 +4,6 @@ import { importAlphaVantage } from '../../api/datasets.js';
 import { Badge } from '../../components/Badge.jsx';
 import { Button } from '../../components/Button.jsx';
 
-/**
- * The primary "Historical data" acquisition panel on a market's page
- * (backend: `POST /api/datasets/{id}/versions/alpha-vantage`, D-33). The
- * API key is backend configuration only - no key field exists here, and
- * none is ever sent in the request body.
- *
- * @param {object} props
- * @param {number} props.datasetId
- * @param {(version: import('../../api/types.js').DatasetVersionResponse) => void} props.onImported
- */
 export function AlphaVantageImportForm({ datasetId, onImported }) {
   const [historyDepth, setHistoryDepth] = useState('COMPACT');
   const [error, setError] = useState('');

@@ -15,24 +15,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Objects;
 
-/**
- * JPA entity for {@code dataset_version} (D-32): immutable once created —
- * no update, no delete, backstopped at four layers (mirroring D-31's
- * {@code StrategyVersion}): the database's own row/statement triggers,
- * {@link Immutable} plus {@code updatable=false} here, no setters on this
- * entity, and no repository or REST update/delete path. {@code datasetId}
- * and {@code symbol} are plain columns, not associations — {@code symbol}
- * is a snapshot of the parent {@link Dataset}'s symbol at creation time,
- * verified at the database level by a composite foreign key {@code
- * (dataset_id, symbol) -> dataset(id, symbol)}, so it can never disagree
- * with its parent.
- *
- * <p>The only constructor takes a {@link DatasetContent}, so the stored
- * {@code barCount}/{@code firstDate}/{@code lastDate}/{@code contentHash}
- * quadruple can never drift from what {@link DatasetContent#of} actually
- * computed — the same precedent as D-31's {@code StrategyVersion} being
- * built only from D-30's {@code CanonicalStrategyDefinition}.
- */
 @Entity
 @Table(name = "dataset_version")
 @Immutable
@@ -79,7 +61,6 @@ public class DatasetVersion {
     private Instant createdAt;
 
     protected DatasetVersion() {
-        // JPA
     }
 
     DatasetVersion(long datasetId, int versionNumber, String symbol, DatasetSource source, String sourceDetail,

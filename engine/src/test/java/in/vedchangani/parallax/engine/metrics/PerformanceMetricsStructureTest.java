@@ -19,13 +19,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-26 shape of {@link PerformanceMetrics}: a plain immutable
- * record with exactly the ten approved components (the nine D-26 originals
- * plus {@code profitFactor}, D-41), no reference to
- * {@link BacktestResult} or any other mutable runtime object, and exactly
- * the two approved public constants.
- */
 class PerformanceMetricsStructureTest {
 
     private static final Set<Class<?>> FORBIDDEN =

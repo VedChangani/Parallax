@@ -1,14 +1,5 @@
 import { formatSignedPercent } from '../../lib/format.js';
 
-/**
- * Strategy vs. buy-and-hold total return (D-34 Batch 5 §8). `excessReturn`
- * is presentation-only arithmetic on the two already-persisted total-return
- * values - never a new backend metric, never derived from raw fills/equity.
- *
- * @param {object} props
- * @param {number} props.strategyReturn
- * @param {number} props.benchmarkReturn
- */
 export function BenchmarkComparison({ strategyReturn, benchmarkReturn }) {
   const excessReturn = strategyReturn - benchmarkReturn;
 

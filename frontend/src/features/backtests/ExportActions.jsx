@@ -3,16 +3,6 @@ import { getBacktestEquityCsv, getBacktestTradesCsv } from '../../api/backtests.
 import { Button } from '../../components/Button.jsx';
 import { downloadTextFile } from '../../lib/download.js';
 
-/**
- * Two low-emphasis download actions for a completed run (D-42): the equity
- * curve (with drawdown) and the trades, each its own CSV. The file content
- * is fetched from the backend's verified result at click time - never
- * re-derived here and never a backtest re-run - and saved unchanged.
- * A failure shows inline and leaves the rest of the page untouched.
- *
- * @param {object} props
- * @param {number} props.runId
- */
 export function ExportActions({ runId }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);

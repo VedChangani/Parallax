@@ -6,18 +6,6 @@ const HEIGHT = 320;
 const STRATEGY_COLOR = '#1d4ed8';
 const BENCHMARK_COLOR = '#868c9c';
 
-/**
- * Plots the run's own persisted equity curve (D-34 Batch 5 §10): strategy
- * equity vs. the buy-and-hold benchmark equity, taken directly from
- * `GET /api/backtest-runs/{id}/equity-curve` - never recomputed from
- * cash/quantity/marketValue. Converting each point's exact decimal string
- * to a number happens ONLY here, purely so uPlot's canvas renderer has a
- * numeric coordinate to plot; nothing else in the app ever sees that
- * number, and the accessible summary below states the original strings.
- *
- * @param {object} props
- * @param {import('../../../api/types.js').BacktestEquityPointResponse[]} props.points
- */
 export function EquityCurve({ points }) {
   const containerRef = useRef(null);
 
@@ -33,7 +21,6 @@ export function EquityCurve({ points }) {
         width: containerRef.current.clientWidth,
         height: HEIGHT,
         scales: { x: { time: true } },
-        // No drag-to-zoom, no animation - a static, read-only historical chart.
         cursor: { drag: { x: false, y: false } },
         legend: { live: true },
         series: [

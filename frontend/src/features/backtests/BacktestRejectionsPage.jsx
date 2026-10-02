@@ -6,11 +6,6 @@ import { Skeleton } from '../../components/Skeleton.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
 import { RejectionsTable } from './RejectionsTable.jsx';
 
-/**
- * The run Rejections tab (D-34 Batch 5 §14): loads `GET
- * /api/backtest-runs/{id}/rejections` only once this tab is opened, then
- * caches it (a completed run's rejections never change).
- */
 export function BacktestRejectionsPage() {
   const { runId } = useOutletContext();
 

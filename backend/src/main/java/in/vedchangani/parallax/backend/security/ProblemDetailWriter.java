@@ -8,16 +8,6 @@ import org.springframework.http.ProblemDetail;
 
 import java.io.IOException;
 
-/**
- * Writes a {@link ProblemDetail} body directly to a servlet response
- * (D-37) — shared by the three filter-level handlers below, which run
- * outside Spring MVC's dispatcher and so cannot rely on {@code
- * @RestControllerAdvice}/{@code HttpMessageConverter}s the way {@code
- * ApiExceptionHandler} does. Every handler produces the exact same
- * {@code application/problem+json} shape that class uses, so a client
- * cannot tell whether a given error response came from Spring Security or
- * from Spring MVC.
- */
 final class ProblemDetailWriter {
 
     private ProblemDetailWriter() {

@@ -71,8 +71,6 @@ describe('percentTextToFractionText', () => {
   });
 
   it('produces no floating-point drift for values that are lossy in binary floating point', () => {
-    // 0.1 * 0.01 in native floating-point arithmetic is 0.0010000000000000002,
-    // not "0.001" - this must never happen here.
     expect(percentTextToFractionText('0.1')).toBe('0.001');
   });
 

@@ -1,18 +1,3 @@
-/**
- * The compact "Research inputs" / run-identity panel (D-34 Batch 4 §22):
- * makes it unambiguous exactly what is about to be tested before the user
- * commits to running it. Hashes are reproducibility inputs, not decoration -
- * shown only inside a collapsed technical-detail disclosure, never
- * prominently, per the spec.
- *
- * @param {object} props
- * @param {import('../../api/types.js').DatasetResponse | undefined} props.market
- * @param {number | undefined} props.snapshotVersion
- * @param {import('../../api/types.js').DatasetVersionResponse | undefined} props.snapshotDetail
- * @param {import('../../api/types.js').StrategyResponse | undefined} props.strategy
- * @param {number | undefined} props.strategyVersion
- * @param {import('../../api/types.js').StrategyVersionResponse | undefined} props.strategyVersionDetail
- */
 export function RunIdentitySummary({ market, snapshotVersion, snapshotDetail, strategy, strategyVersion, strategyVersionDetail }) {
   return (
     <div className="rounded-md border border-border bg-surface p-5 shadow-[2px_2px_0_0_var(--color-border)]">

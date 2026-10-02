@@ -10,12 +10,6 @@ import { useApiResource } from '../../hooks/useApiResource.js';
 import { formatInstantDate } from '../../lib/format.js';
 import { DatasetCreateForm } from './DatasetCreateForm.jsx';
 
-/**
- * The Markets workspace - the frontend's user-facing name for the backend's
- * `Dataset` resource (D-32). Lists every market, supports a client-side
- * search over the already-fetched list (the backend has no search
- * endpoint), and creates new markets inline via "Add market".
- */
 export function DatasetListPage() {
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState('');

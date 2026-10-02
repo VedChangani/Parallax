@@ -9,13 +9,6 @@ import { Skeleton } from '../../components/Skeleton.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
 import { formatInstantDate } from '../../lib/format.js';
 
-/**
- * The Strategies research workspace: a compact, searchable list of every
- * strategy (D-31). `strategies` is a mutable resource - it is never
- * immutable-cached (a strategy's `latestVersionNumber` changes as new
- * versions are created) and there is no backend search endpoint, so the
- * search box filters the already-fetched list client-side.
- */
 export function StrategyListPage() {
   const [query, setQuery] = useState('');
 

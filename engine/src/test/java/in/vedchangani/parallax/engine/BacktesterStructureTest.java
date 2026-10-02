@@ -15,12 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-25 shape: {@code Backtester} is stateless, and no mutable
- * runtime object (a {@code Portfolio}, a pending {@code Order}, a runtime
- * {@code Indicator}, or the supplied {@code BarSeries}) can be reached
- * from a {@code BacktestResult}.
- */
 class BacktesterStructureTest {
 
     @Test

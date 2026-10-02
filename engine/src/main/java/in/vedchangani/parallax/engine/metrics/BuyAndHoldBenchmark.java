@@ -12,23 +12,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * The V1 passive buy-and-hold benchmark (D-28): "what would the same
- * starting capital have produced by passively holding the asset over the
- * requested backtest period?" This is an independent post-run
- * calculation, not a simulation — it never calls {@link
- * in.vedchangani.parallax.engine.Backtester#run}, never evaluates a
- * {@code StrategyDefinition} or signal, and never uses {@code Portfolio},
- * {@code Order}, {@code Fill}, or the D-23 strategy sizing/reserve
- * machinery. It buys once, at the open of the first in-range bar, and
- * never sells.
- *
- * <p>{@code initialCapital} is carried as its own component because,
- * unlike a strategy's equity curve, this benchmark's first point is
- * already marked to that bar's close — it generally does not equal
- * {@code initialCapital} — so the return base cannot be read off the
- * curve.
- */
 public record BuyAndHoldBenchmark(BigDecimal initialCapital, List<EquityPoint> equityCurve) {
 
     public BuyAndHoldBenchmark {
@@ -82,38 +65,6 @@ public record BuyAndHoldBenchmark(BigDecimal initialCapital, List<EquityPoint> e
         }
     }
 
-    /**
-     * Builds the benchmark from {@code series}'s bar opens and
-     * {@code result}'s config and in-range dates/closes.
-     *
-     * <p>Entry: one BUY at the open of the first in-range bar,
-     * {@code fillPrice = open × (1 + slippageRate)}, whole shares sized by
-     * {@code q = floor((initialCapital - commission) / fillPrice)}
-     * (exact via {@link BigDecimal#divideToIntegralValue}), paying one
-     * commission. There is no rejection path: the BUY is always
-     * affordable by construction. If {@code initialCapital - commission
-     * <= 0} or the fill price leaves {@code q == 0}, no trade occurs and
-     * no commission is charged. The benchmark never sells: no exit
-     * transaction, no exit commission or slippage, no D-23 reserve, and
-     * residual cash earns nothing. Slippage is represented only through
-     * the changed fill price, never as a separate cash flow.
-     *
-     * <p>Only {@code result.symbol()}, {@code result.config()} and
-     * {@code result.equityCurve()} are read — never {@code strategy()},
-     * {@code fills()}, {@code rejections()}, {@code trades()}, or
-     * {@code firstEvaluableDate()} — so two different strategies over the
-     * same series and config produce identical benchmarks.
-     *
-     * @throws NullPointerException     if {@code series} or {@code result} is null
-     * @throws IllegalArgumentException if {@code series.symbol()} does not
-     *                                   equal {@code result.symbol()}, or
-     *                                   if {@code series}'s in-range bars
-     *                                   (by {@code result.config()}'s
-     *                                   date range) do not have exactly
-     *                                   the same dates and closes, in
-     *                                   order, as {@code
-     *                                   result.equityCurve()}
-     */
     public static BuyAndHoldBenchmark of(BarSeries series, BacktestResult result) {
         Objects.requireNonNull(series, "series must not be null");
         Objects.requireNonNull(result, "result must not be null");
@@ -188,12 +139,6 @@ public record BuyAndHoldBenchmark(BigDecimal initialCapital, List<EquityPoint> e
         return new BuyAndHoldBenchmark(capital, curve);
     }
 
-    /**
-     * {@code (finalEquity - initialCapital) / initialCapital}, the same
-     * D-26 total-return convention: an exact {@code BigDecimal}
-     * subtraction, converted to {@code double} only at this statistical
-     * boundary.
-     */
     public double totalReturn() {
         BigDecimal finalEquity = equityCurve.get(equityCurve.size() - 1).equity();
         return finalEquity.subtract(initialCapital).doubleValue() / initialCapital.doubleValue();

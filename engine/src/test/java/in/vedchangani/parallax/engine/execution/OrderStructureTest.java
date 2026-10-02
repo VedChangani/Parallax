@@ -10,12 +10,6 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-/**
- * Pins the D-20 shape: {@code Order}'s components are exactly
- * {@code (int, long, SignalEvent)} — no separately stored side, date,
- * price, or status. {@code side()} is confirmed to be a derived method,
- * not a record component.
- */
 class OrderStructureTest {
 
     @Test

@@ -7,14 +7,6 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-// IDs are deliberately NOT already in "newest run has the highest id, next
-// call site returns them pre-sorted" order, so a passing "sorted
-// newest-first by id" test proves the page itself sorts descending by id -
-// it does not just pass through whatever array order the backend sent.
-// createdAt is likewise deliberately non-monotonic with id, so a test that
-// still gets id-descending order proves sorting uses id, not a createdAt
-// string comparison (N1: id is exact and format-independent; a timestamp
-// string comparison is not).
 const RUN_A = {
   id: 101, strategyId: 501, strategyVersion: 2, definitionHash: 'a'.repeat(64),
   datasetId: 701, datasetVersion: 3, contentHash: 'b'.repeat(64), engineSemanticsVersion: 1,
@@ -37,13 +29,6 @@ const RUN_C = {
 const MARKET_701 = { id: 701, name: 'Reliance Industries', symbol: 'RELIANCE', latestVersionNumber: 4, createdAt: '2024-01-01T00:00:00Z' };
 const STRATEGY_501 = { id: 501, name: 'Momentum Cross', description: '', latestVersionNumber: 3, createdAt: '2024-01-01T00:00:00Z' };
 
-/**
- * @param {object} [overrides]
- * @param {object[]} [overrides.runs]
- * @param {object[]} [overrides.datasets] - defaults to an empty list, so a
- *   test that doesn't care about names sees only the honest `#id` fallback.
- * @param {object[]} [overrides.strategies]
- */
 function mockFetch({ runs = [RUN_A, RUN_B, RUN_C], datasets = [], strategies = [] } = {}) {
   return vi.fn((url) => {
     if (url === '/api/backtest-runs') return Promise.resolve(jsonResponse(runs));
@@ -81,10 +66,10 @@ describe('BacktestHistoryPage', () => {
     renderPage();
 
     const rows = await screen.findAllByRole('row');
-    const dataRows = rows.slice(1); // skip the header row
-    expect(within(dataRows[0]).getByText('#103')).toBeTruthy(); // highest id
+    const dataRows = rows.slice(1);
+    expect(within(dataRows[0]).getByText('#103')).toBeTruthy();
     expect(within(dataRows[1]).getByText('#102')).toBeTruthy();
-    expect(within(dataRows[2]).getByText('#101')).toBeTruthy(); // lowest id
+    expect(within(dataRows[2]).getByText('#101')).toBeTruthy();
   });
 
   it('makes one request per resource type - no per-row detail fetch (no N+1)', async () => {
@@ -92,8 +77,6 @@ describe('BacktestHistoryPage', () => {
     renderPage();
     await screen.findByText('#101');
 
-    // Three runs rendered, but exactly one call each for runs/datasets/strategies -
-    // proving the request count scales with resource *types*, not row count.
     expect(globalThis.fetch).toHaveBeenCalledTimes(3);
     const urls = globalThis.fetch.mock.calls.map(([url]) => url).sort();
     expect(urls).toEqual(['/api/backtest-runs', '/api/datasets', '/api/strategies']);
@@ -111,7 +94,7 @@ describe('BacktestHistoryPage', () => {
   });
 
   it('falls back to the honest id reference when a market/strategy is not (yet) known - never a fabricated name', async () => {
-    globalThis.fetch = mockFetch({ runs: [RUN_A] }); // no datasets/strategies list entries
+    globalThis.fetch = mockFetch({ runs: [RUN_A] });
     renderPage();
 
     const row = (await screen.findByText('#101')).closest('tr');
@@ -130,8 +113,8 @@ describe('BacktestHistoryPage', () => {
 
     const row = (await screen.findByText('#101')).closest('tr');
     expect(within(row).getByText('2024-01-01 → 2024-06-01')).toBeTruthy();
-    expect(within(row).getByText('+15.32%')).toBeTruthy(); // strategy totalReturn
-    expect(within(row).getByText(/B&H \+6\.04%/)).toBeTruthy(); // benchmarkTotalReturn
+    expect(within(row).getByText('+15.32%')).toBeTruthy();
+    expect(within(row).getByText(/B&H \+6\.04%/)).toBeTruthy();
   });
 
   it('never shows a metric absent from the list response, such as CAGR or Sharpe', async () => {

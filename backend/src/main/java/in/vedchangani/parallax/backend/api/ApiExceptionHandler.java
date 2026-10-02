@@ -46,21 +46,11 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 import java.util.List;
 import java.util.Map;
 
-/**
- * The D-31/D-32 REST error boundary (D-31 §11, D-32 §20). Every domain
- * exception maps to a fixed {@link ProblemDetail} — never an engine/Jackson
- * exception class name, stack trace, SQL, or database constraint name.
- * Spring MVC's own framework-level failures (unreadable/missing body,
- * path-variable type mismatch, unsupported media type, method not allowed)
- * are left to the inherited {@link ResponseEntityExceptionHandler}
- * defaults; nothing here duplicates them.
- */
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
-    /** Malformed strategy-definition JSON (D-30 layer 1/2 shape failure) → 400. */
     @ExceptionHandler(MalformedStrategyDefinitionException.class)
     public ProblemDetail handleMalformed(MalformedStrategyDefinitionException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -69,7 +59,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Malformed BacktestConfig request field (D-34 Batch 2/3: bad JSON shape or D-30 decimal grammar) → 400. */
     @ExceptionHandler(MalformedBacktestConfigException.class)
     public ProblemDetail handleMalformedBacktestConfig(MalformedBacktestConfigException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -78,7 +67,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Malformed CSV syntax (D-32 §3/§4: encoding, header, field grammar, overflow) → 400. */
     @ExceptionHandler(MalformedCsvException.class)
     public ProblemDetail handleMalformedCsv(MalformedCsvException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -87,7 +75,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Malformed dataset-version upload request (missing/extra multipart part, bad filename) → 400. */
     @ExceptionHandler(MalformedDatasetUploadException.class)
     public ProblemDetail handleMalformedDatasetUpload(MalformedDatasetUploadException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -96,7 +83,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Envelope Bean Validation failure (blank/over-long name or description) → 400. */
     @ExceptionHandler(ConstraintViolationException.class)
     public ProblemDetail handleConstraintViolation(ConstraintViolationException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "request failed validation");
@@ -112,7 +98,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return Map.of("field", violation.getPropertyPath().toString(), "message", violation.getMessage());
     }
 
-    /** Registration password fails {@link in.vedchangani.parallax.backend.user.PasswordPolicy} (D-38) → 400. */
     @ExceptionHandler(WeakPasswordException.class)
     public ProblemDetail handleWeakPassword(WeakPasswordException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, e.getMessage());
@@ -121,7 +106,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Wrong current password on a password change (D-40) → 401, the same generic body a failed login gets. */
     @ExceptionHandler(InvalidCurrentPasswordException.class)
     public ProblemDetail handleInvalidCurrentPassword(InvalidCurrentPasswordException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, e.getMessage());
@@ -129,7 +113,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Semantically invalid strategy definition (D-30 layer 3, engine semantics) → 422. */
     @ExceptionHandler(InvalidStrategyDefinitionException.class)
     public ProblemDetail handleInvalid(InvalidStrategyDefinitionException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -138,7 +121,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Semantically invalid BacktestConfig (D-34 Batch 2/3, engine semantics) → 422. */
     @ExceptionHandler(InvalidBacktestConfigException.class)
     public ProblemDetail handleInvalidBacktestConfig(InvalidBacktestConfigException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -147,12 +129,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * The requested {@code [startDate, endDate]} range fails strict raw
-     * dataset coverage containment (D-34 Batch 2 §2) → 422: a semantically
-     * invalid request against a specific, otherwise-valid dataset, not a
-     * shape problem.
-     */
     @ExceptionHandler(BacktestRangeException.class)
     public ProblemDetail handleBacktestRange(BacktestRangeException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -164,7 +140,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Syntactically valid CSV row violating market-data semantics (D-32 §5/§6) → 422. */
     @ExceptionHandler(InvalidCsvDataException.class)
     public ProblemDetail handleInvalidCsvData(InvalidCsvDataException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -173,12 +148,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * Alpha Vantage explicitly rejected the request itself (D-33 Batch 4) →
-     * 422. Distinct from {@link #handleMarketDataCapability}: this is the
-     * provider refusing the request outright (e.g. an invalid symbol), not
-     * a standing account/plan limitation.
-     */
     @ExceptionHandler(MarketDataRequestRejectedException.class)
     public ProblemDetail handleMarketDataRequestRejected(MarketDataRequestRejectedException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -186,11 +155,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * {@code HistoryDepth.FULL} requested against an Alpha Vantage account
-     * limited to compact history (D-33 Batch 4) → 422. No fallback to
-     * {@code COMPACT} is ever performed.
-     */
     @ExceptionHandler(MarketDataCapabilityException.class)
     public ProblemDetail handleMarketDataCapability(MarketDataCapabilityException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -198,12 +162,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * The provider's response was correctly shaped, but the market data
-     * itself is semantically invalid (D-33 Batch 4) → 422, mirroring how
-     * {@link #handleInvalidCsvData} treats the same kind of failure for a
-     * CSV upload.
-     */
     @ExceptionHandler(InvalidMarketDataException.class)
     public ProblemDetail handleInvalidMarketData(InvalidMarketDataException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
@@ -212,12 +170,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * Alpha Vantage is temporarily unable to serve the request — a rate
-     * limit, a temporary control response, or a missing/blank API key
-     * (D-33 Batch 4) → 503. A missing key is a runtime condition here,
-     * never a startup failure.
-     */
     @ExceptionHandler(MarketDataUnavailableException.class)
     public ProblemDetail handleMarketDataUnavailable(MarketDataUnavailableException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
@@ -225,13 +177,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * The provider's response could not be understood as a valid response
-     * at all — malformed body, unrecognized shape, or a transport/protocol
-     * failure (D-33 Batch 4) → 502 (a bad response from an upstream
-     * server), distinct from {@link #handleMarketDataUnavailable}'s 503
-     * (a recognized, temporary provider condition).
-     */
     @ExceptionHandler(MarketDataResponseException.class)
     public ProblemDetail handleMarketDataResponse(MarketDataResponseException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY, e.getMessage());
@@ -239,7 +184,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Missing resource, or another owner's resource (D-31 §10/D-32 §15/D-34 Batch 2 §11: identical either way) → 404. */
     @ExceptionHandler({StrategyNotFoundException.class, StrategyVersionNotFoundException.class,
             DatasetNotFoundException.class, DatasetVersionNotFoundException.class,
             BacktestRunNotFoundException.class})
@@ -249,7 +193,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Duplicate name, a version-allocation conflict (strategy or dataset), or a duplicate username (D-38) → 409. */
     @ExceptionHandler({DuplicateStrategyNameException.class, StrategyVersionConflictException.class,
             DuplicateDatasetNameException.class, DatasetVersionConflictException.class,
             DuplicateUsernameException.class})
@@ -259,7 +202,6 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /** Self-registration is currently switched off (D-38) → 403. */
     @ExceptionHandler(RegistrationDisabledException.class)
     public ProblemDetail handleRegistrationDisabled(RegistrationDisabledException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, e.getMessage());
@@ -267,62 +209,30 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
-    /**
-     * Stored strategy-definition integrity failure — corrupted or tampered
-     * data, or a codec/engine disagreement. Never client-facing detail: the
-     * cause is logged, and the response carries only a generic message
-     * (D-30's own contract for {@link StrategyDefinitionIntegrityException}).
-     */
     @ExceptionHandler(StrategyDefinitionIntegrityException.class)
     public ProblemDetail handleIntegrityFailure(StrategyDefinitionIntegrityException e) {
         log.error("stored strategy-definition integrity failure", e);
         return genericServerError();
     }
 
-    /**
-     * Stored dataset-version integrity failure — corrupted or tampered
-     * bar data, or a codec/engine disagreement (D-32 §16). Never
-     * client-facing detail: the cause is logged, and the response carries
-     * only a generic message (mirroring {@link StrategyDefinitionIntegrityException}'s
-     * own contract).
-     */
     @ExceptionHandler(DatasetIntegrityException.class)
     public ProblemDetail handleDatasetIntegrityFailure(DatasetIntegrityException e) {
         log.error("stored dataset integrity failure", e);
         return genericServerError();
     }
 
-    /**
-     * Stored backtest-run structural or cross-field integrity failure —
-     * corrupted or tampered equity/fill/rejection data, an unsupported
-     * engine semantics version, or a stored total that disagrees with its
-     * recomputation from the reconstructed fills (D-34 Batch 2 §8-9). Never
-     * client-facing detail: the cause is logged, and the response carries
-     * only a generic message (mirroring {@link StrategyDefinitionIntegrityException}'s
-     * own contract) — never a stack trace, SQL detail, or the wrapped
-     * exception's own text.
-     */
     @ExceptionHandler(BacktestResultIntegrityException.class)
     public ProblemDetail handleBacktestResultIntegrityFailure(BacktestResultIntegrityException e) {
         log.error("stored backtest run failed integrity verification", e);
         return genericServerError();
     }
 
-    /** Catch-all: any other unexpected failure → 500, logged, never detailed to the client. */
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleUnexpected(Exception e) {
         log.error("unexpected error handling request", e);
         return genericServerError();
     }
 
-    /**
-     * Upload larger than the configured multipart limit (D-32 §3) → 413.
-     * {@link ResponseEntityExceptionHandler} already maps this exception
-     * internally, so it is overridden here — rather than given its own
-     * {@code @ExceptionHandler} method, which would conflict with the
-     * inherited one — purely to guarantee the same fixed {@link
-     * ProblemDetail} shape as every other handler in this class.
-     */
     @Override
     protected ResponseEntity<Object> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e,
                                                                             HttpHeaders headers,

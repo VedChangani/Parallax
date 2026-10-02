@@ -3,17 +3,6 @@ import { inputClasses, selectClasses } from './formStyles.js';
 
 const INDICATORS = ['SMA', 'EMA', 'RSI', 'ATR', 'ROC'];
 
-/**
- * A reusable editor for one {@link import('./definitionMapping.js').operandToDto}
- * operand node - Indicator (type + period), Close (no fields), or Constant
- * (a decimal-string text field, preserved exactly - never `Number()`'d).
- *
- * @param {object} props
- * @param {object} props.operand
- * @param {(next: object) => void} props.onChange
- * @param {string} props.label - accessible name prefix, e.g. "Left operand"
- * @param {string} props.idPrefix - unique DOM id prefix for this operand's controls
- */
 export function OperandEditor({ operand, onChange, label, idPrefix }) {
   const error = operandError(operand);
   const errorId = `${idPrefix}-error`;

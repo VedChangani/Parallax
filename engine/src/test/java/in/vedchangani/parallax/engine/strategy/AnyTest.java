@@ -16,14 +16,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * {@code Condition} is sealed to {@code Compare}, {@code All} and
- * {@code Any}, so test doubles cannot implement it directly. These tests
- * instead build always-true/always-false {@code Compare} conditions from
- * constant-vs-constant comparisons, and observe short-circuiting through a
- * "poison" condition that throws if it is ever evaluated (an
- * {@code IndicatorRef} to a spec absent from the fixture snapshot).
- */
 class AnyTest {
 
     private static final IndicatorSnapshot SNAPSHOT =
@@ -96,8 +88,6 @@ class AnyTest {
 
     @Test
     void poisonFailsWhenItIsEvaluated() {
-        // Guards the short-circuit test below: POISON must genuinely throw
-        // when reached, and Any must continue past a false child to reach it.
         assertThrows(IllegalArgumentException.class, () -> POISON.evaluate(SNAPSHOT));
         assertThrows(IllegalArgumentException.class,
                 () -> new Condition.Any(List.of(FALSE, POISON)).evaluate(SNAPSHOT));

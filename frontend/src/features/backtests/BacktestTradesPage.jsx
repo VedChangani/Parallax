@@ -6,11 +6,6 @@ import { Skeleton } from '../../components/Skeleton.jsx';
 import { useApiResource } from '../../hooks/useApiResource.js';
 import { TradesTable } from './TradesTable.jsx';
 
-/**
- * The run Trades tab (D-34 Batch 5 §12): loads `GET
- * /api/backtest-runs/{id}/trades` only once this tab is opened, then caches
- * it (a completed run's trades never change).
- */
 export function BacktestTradesPage() {
   const { runId } = useOutletContext();
 

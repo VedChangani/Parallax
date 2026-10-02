@@ -15,13 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the D-21 shape: {@code OrderRejection} is sealed to exactly
- * {@code ZeroQuantity} and {@code InsufficientCash}, with the approved
- * component shapes and no leakage of {@code Order}, {@code Portfolio},
- * runtime {@code Indicator}, {@code Bar}/{@code BarSeries}, or mutable
- * collections.
- */
 class OrderRejectionStructureTest {
 
     @Test

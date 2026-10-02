@@ -13,18 +13,6 @@ import { DefinitionPreview } from './DefinitionPreview.jsx';
 import { StrategyMetadataEditForm } from './StrategyMetadataEditForm.jsx';
 import { StrategyVersionHistory } from './StrategyVersionHistory.jsx';
 
-/**
- * The Strategy workspace - metadata plus its immutable version history
- * (D-31). `strategy`/`versions` are both mutable resources (never
- * immutable-cached: `latestVersionNumber` changes as new versions are
- * created) and are refetched after every metadata edit. The latest
- * version's own definition *is* immutable once created, so it is fetched
- * through the session immutable cache to show "what this strategy does"
- * without re-fetching it on every visit.
- *
- * @param {object} props
- * @param {number} props.strategyId
- */
 export function StrategyDetailPage({ strategyId }) {
   const [editing, setEditing] = useState(false);
   const navigate = useNavigate();

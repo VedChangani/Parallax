@@ -34,8 +34,6 @@ class StrategyDefinitionTest {
     private static final Condition EXIT = new Condition.Compare(REF_RSI_14, Operator.LT, CONSTANT_70);
     private static final PositionSizing SIZING = new PositionSizing.CashFraction(new BigDecimal("0.5"));
 
-    // --- construction ---------------------------------------------------
-
     @Test
     void validConstructionExposesComponents() {
         StrategyDefinition definition = new StrategyDefinition(ENTRY, EXIT, SIZING);
@@ -59,8 +57,6 @@ class StrategyDefinitionTest {
     void nullPositionSizingRejected() {
         assertThrows(NullPointerException.class, () -> new StrategyDefinition(ENTRY, EXIT, null));
     }
-
-    // --- equality ---------------------------------------------------------
 
     @Test
     void equalDefinitionsAreEqual() {
@@ -101,8 +97,6 @@ class StrategyDefinitionTest {
 
         assertNotEquals(a, b);
     }
-
-    // --- requiredIndicatorSpecs(): basic discovery -----------------------
 
     @Test
     void oneIndicatorInEntryOnly() {
@@ -217,7 +211,6 @@ class StrategyDefinitionTest {
 
     @Test
     void mixedIndicatorTypesComeBackInCanonicalOrder() {
-        // Authored in a deliberately non-canonical order: RSI, EMA, SMA(50), SMA(20).
         Condition entry = new Condition.All(List.of(
                 new Condition.Compare(REF_RSI_14, Operator.GT, CONSTANT_70),
                 new Condition.Compare(REF_EMA_10, Operator.GT, CONSTANT_70)));

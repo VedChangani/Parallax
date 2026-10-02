@@ -116,7 +116,6 @@ describe('StrategyVersionNewPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /create version/i }));
 
     expect(await screen.findByText('version 3 already exists for strategy 42')).toBeTruthy();
-    // the edit survives the failed submission
     expect(screen.getAllByLabelText('Left operand period')[0]).toHaveProperty('value', '99');
   });
 });

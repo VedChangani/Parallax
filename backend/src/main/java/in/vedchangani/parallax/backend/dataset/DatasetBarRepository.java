@@ -12,36 +12,6 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Plain-JDBC access to {@code dataset_bar} (D-32). Deliberately not a JPA
- * entity/repository: an assigned composite key (no surrogate id) would make
- * Spring Data's {@code save} issue a {@code merge} (one SELECT per row),
- * and thousands of managed entities per read add nothing for rows that are
- * never individually edited or loaded. {@link JdbcTemplate} batch insert
- * and a single ordered {@code SELECT} are simpler and faster.
- *
- * <p>Package-private: only {@link DatasetService} may reach this class, so
- * a {@link in.vedchangani.parallax.engine.data.BarSeries} can only ever
- * leave the {@code dataset} package through {@code
- * DatasetService#getVerifiedSeries}, never through a raw bar read.
- *
- * <p>Insert-only: there is no update or delete method, matching {@code
- * dataset_bar}'s database-level immutability triggers.
- *
- * <p>Deliberately {@link Component}, not {@code @Repository}: the
- * {@code @Repository} stereotype installs Spring's
- * {@code PersistenceExceptionTranslationInterceptor}, which translates
- * <em>every</em> exception this bean's methods throw — including the
- * {@link Bar} constructor's own {@link IllegalArgumentException} on a
- * semantically invalid stored row — into a
- * {@code DataAccessException} subtype before {@code
- * DatasetService#getVerifiedSeries} ever sees it, masking the exact
- * integrity failure that method exists to catch. {@link JdbcTemplate}
- * already translates genuine {@code SQLException}s into
- * {@code DataAccessException} on its own, independent of this
- * stereotype, so no exception-translation behavior is lost by using
- * {@code @Component} instead.
- */
 @Component
 class DatasetBarRepository {
 
@@ -67,12 +37,6 @@ class DatasetBarRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * Batch-inserts every bar for {@code versionId}, in {@code bars}'
-     * given order, using the caller's current transaction/connection (no
-     * network I/O of its own — the caller has already parsed and
-     * validated {@code bars} before this is invoked).
-     */
     void insertAll(long versionId, List<Bar> bars) {
         Objects.requireNonNull(bars, "bars must not be null");
         if (bars.isEmpty()) {
@@ -90,13 +54,6 @@ class DatasetBarRepository {
                 });
     }
 
-    /**
-     * Owner-scoped, date-ordered read of every bar for {@code versionId}.
-     * Ownership is re-checked here (a join through {@code dataset_version}
-     * to {@code dataset.owner_id}) even though the caller has typically
-     * already resolved an owned {@link DatasetVersion} — defense in depth,
-     * since this class has no other access control of its own.
-     */
     List<Bar> findOwned(long versionId, long ownerId) {
         return jdbcTemplate.query(SELECT_OWNED_SQL, DatasetBarRepository::mapBar, versionId, ownerId);
     }

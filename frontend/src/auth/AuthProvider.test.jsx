@@ -9,7 +9,6 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-/** A minimal consumer exposing AuthContext's state and actions to the test DOM. */
 function Consumer() {
   const { status, username, login, logout } = useAuth();
   return (
@@ -83,10 +82,6 @@ describe('AuthProvider', () => {
   });
 
   it('logout clears the immutable cache, sets anonymous, and re-bootstraps a fresh CSRF cookie', async () => {
-    // D-39: logout's own CsrfLogoutHandler expires the XSRF-TOKEN cookie,
-    // so AuthProvider re-bootstraps it via a second GET /api/auth/me right
-    // after logging out - which, for an already-logged-out session, itself
-    // resolves 401 (the third branch here).
     let loggedOut = false;
     globalThis.fetch = vi.fn((url) => {
       if (String(url).endsWith('/api/auth/logout')) {
@@ -147,8 +142,6 @@ describe('AuthProvider', () => {
 
     immutableCache.set('/api/strategies/1/versions/1', { some: 'data' });
 
-    // Simulates another browser tab announcing that its identity changed
-    // (that tab's own AuthProvider already logged out server-side).
     globalThis.fetch.mockResolvedValue(jsonResponse({ title: 'Unauthorized', status: 401 }, 401));
     const otherTabChannel = new BroadcastChannel(AUTH_CHANNEL_NAME);
 

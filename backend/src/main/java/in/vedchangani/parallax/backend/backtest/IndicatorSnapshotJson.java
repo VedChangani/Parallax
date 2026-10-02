@@ -13,38 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * The smallest JSON mapping for a persisted {@link IndicatorSnapshot}
- * (D-34 Batch 1): a self-describing array of {@code {"type","period",
- * "value"}} entries, in the snapshot's own canonical order (D-17 —
- * {@code IndicatorSnapshot.values()} already iterates in that order).
- * Unlike D-30's strategy-definition codec, this JSON is never hashed and
- * carries no schema version: reading a stored fill/rejection later needs
- * no strategy decoding at all, since each entry already names its own
- * indicator type and period.
- *
- * <p>{@code value} is stored as a JSON string produced by {@link
- * Double#toString(double)} — the same exactness precedent as D-30's
- * {@code Constant}/{@code CashFraction} — so it round-trips exactly for
- * every finite {@code double}, including subnormal values.
- *
- * <p>The writer is a small hand-written emitter, following D-30's own
- * {@code StrategyDefinitionCodec} precedent, rather than generic Jackson
- * serialization: deterministic field and array order is guaranteed by
- * construction here, never left to a mapper's own defaults. {@link #read}
- * (D-34 Batch 2) is the read-side counterpart used by result-integrity
- * reconstruction; it uses a small private Jackson reader, since parsing
- * (unlike writing) gains nothing from a hand-rolled implementation.
- */
 final class IndicatorSnapshotJson {
 
-    /**
-     * Strict, private, explicitly configured reader for the small
-     * self-describing array {@link #write} produces — never Spring's
-     * global mapper, following D-30's own precedent. Records deserialize
-     * natively (Jackson 3 reads a canonical constructor's parameter
-     * names), so no annotations are needed on {@link Entry}.
-     */
     private static final JsonMapper JSON_MAPPER = JsonMapper.builder()
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .enable(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES)
@@ -75,12 +45,6 @@ final class IndicatorSnapshotJson {
         return sb.toString();
     }
 
-    /**
-     * Appends a {@code Double.toString} token verbatim. Every character
-     * such a token can ever contain ({@code -}, digits, {@code .}, {@code
-     * E}) requires no JSON escaping; this asserts that invariant rather
-     * than silently emitting a character that did need escaping.
-     */
     private static void appendCanonicalToken(StringBuilder sb, String token) {
         for (int i = 0; i < token.length(); i++) {
             char c = token.charAt(i);
@@ -93,21 +57,6 @@ final class IndicatorSnapshotJson {
         sb.append(token);
     }
 
-    /**
-     * Parses a stored {@link #write}-shaped array back into an
-     * {@link IndicatorSnapshot} (D-34 Batch 2's read-side reconstruction):
-     * {@code date}/{@code close} come from the fill/rejection row that owns
-     * this JSON, not from the array itself, since {@link #write} never
-     * stores them. Every failure — malformed JSON, an unrecognized
-     * indicator type, or a value that does not parse as a {@code double} —
-     * is an {@link IllegalArgumentException} ({@link NumberFormatException}
-     * included, since it is a subtype), so a caller doing read-time
-     * integrity verification can catch one exception type for every
-     * reconstruction step.
-     *
-     * @throws IllegalArgumentException if {@code json} does not parse into
-     *                                    a valid {@link IndicatorSnapshot}
-     */
     static IndicatorSnapshot read(String json, LocalDate date, BigDecimal close) {
         Objects.requireNonNull(json, "json must not be null");
         Objects.requireNonNull(date, "date must not be null");
@@ -135,11 +84,6 @@ final class IndicatorSnapshotJson {
                 throw new IllegalArgumentException("malformed indicator value: " + entry.value(), e);
             }
             IndicatorSpec spec = new IndicatorSpec(type, entry.period());
-            // Phase 10 Batch 1: a duplicate stored spec must fail loudly, never be
-            // silently collapsed into one entry by this map's own put() semantics -
-            // that would hide a corrupted/tampered snapshot from every downstream
-            // check that compares this snapshot's specs against
-            // strategy.requiredIndicatorSpecs() (which is itself always distinct).
             if (values.containsKey(spec)) {
                 throw new IllegalArgumentException("duplicate indicator spec in stored snapshot: " + spec);
             }

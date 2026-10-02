@@ -12,12 +12,6 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-/**
- * Pins the D-21 shape: {@code Fill}'s components are exactly
- * {@code (int, LocalDate, long, BigDecimal, BigDecimal, BigDecimal,
- * SignalEvent)} — no separately stored side or slippage cost, and no
- * {@code Order}.
- */
 class FillStructureTest {
 
     @Test

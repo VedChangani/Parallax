@@ -13,13 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Pins the closed V1 strategy grammar (D-18). Adding an operand, condition
- * or operator, or giving any grammar record a component of a type outside
- * the approved set (for example a runtime {@code Indicator}, a {@code Bar},
- * or any future portfolio/execution type), must fail here and force an
- * intentional test update.
- */
 class StrategyGrammarStructureTest {
 
     private static final Set<Class<?>> ALLOWED_COMPONENT_TYPES =

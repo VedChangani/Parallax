@@ -73,7 +73,6 @@ describe('StrategyDetailPage', () => {
       if (init?.method === 'PATCH') return Promise.resolve(jsonResponse(strategyRenamed));
       if (/\/versions\/1$/.test(url)) return Promise.resolve(jsonResponse(versionDetail));
       if (/\/versions$/.test(url)) return Promise.resolve(jsonResponse(versionSummaries));
-      // First GET returns the original, every later GET returns the renamed strategy (as the backend would after a PATCH).
       return Promise.resolve(jsonResponse(globalThis.__patched ? strategyRenamed : strategyV1));
     });
 

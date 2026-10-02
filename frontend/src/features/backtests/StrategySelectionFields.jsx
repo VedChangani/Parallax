@@ -5,24 +5,6 @@ import { LoadingState } from '../../components/LoadingState.jsx';
 import { DefinitionPreview } from '../strategies/DefinitionPreview.jsx';
 import { selectClasses } from '../strategies/formStyles.js';
 
-/**
- * The "Strategy" section of the New Backtest form (D-34 Batch 4): choose an
- * existing strategy, then choose one of its immutable versions. Never edits
- * a strategy - the "Edit strategy" link navigates to the Strategy workflow
- * instead of embedding the builder here. `versionDetail` is a cached,
- * immutable single-version fetch (see BacktestNewPage.jsx) used purely to
- * render a read-only preview via the same `DefinitionPreview` the Strategy
- * Builder itself uses.
- *
- * @param {object} props
- * @param {{data?: import('../../api/types.js').StrategyResponse[], loading: boolean, error?: import('../../api/apiError.js').ApiError, reload: () => void}} props.strategies
- * @param {number | undefined} props.strategyId
- * @param {(id: number) => void} props.onStrategyChange
- * @param {{data?: import('../../api/types.js').StrategyVersionSummaryResponse[], loading: boolean, error?: import('../../api/apiError.js').ApiError}} props.versions
- * @param {number | undefined} props.strategyVersion
- * @param {(version: number) => void} props.onVersionChange
- * @param {{data?: import('../../api/types.js').StrategyVersionResponse, loading: boolean, error?: import('../../api/apiError.js').ApiError}} props.versionDetail
- */
 export function StrategySelectionFields({
   strategies,
   strategyId,
