@@ -130,15 +130,7 @@ Available exports include:
 
 ## Architecture
 
-```text
-React Frontend
-      ↓
-Spring Boot Backend
-      ↓
-Java Backtesting Engine
-      ↓
-PostgreSQL
-```
+![Parallax System Architecture](docs/Parallax.png)
 
 The backtesting engine is framework-independent and does not depend on Spring, JPA, or PostgreSQL.
 
